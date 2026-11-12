@@ -730,6 +730,14 @@ struct Values {
     SwitchableSetting<bool> mkw_dynamic_fps{linkage, false, "mkw_dynamic_fps",
                                             Category::RendererAdvanced};
 
+    // Hyrule Warriors: Age of Imprisonment: 30 FPS at normal game speed while 60 can't be held,
+    // or always (core/hle/service/nx2_frame_interval.h).
+    SwitchableSetting<bool> hyrule_dynamic_fps{linkage, false, "hyrule_dynamic_fps",
+                                               Category::RendererAdvanced, Specialization::Default,
+                                               true, true};
+    SwitchableSetting<bool> hyrule_30fps{linkage, false, "hyrule_30fps", Category::RendererAdvanced,
+                                         Specialization::Default, true, true};
+
     SwitchableSetting<bool> use_reactive_flushing{linkage,
 #ifdef __ANDROID__
                                                   false,
