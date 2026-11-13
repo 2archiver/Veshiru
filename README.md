@@ -6,10 +6,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
-<h2 align="center">⚠️ Veshiru has no official website ⚠️</h2>
-
-> [!CAUTION]
-> **Veshiru has no official website.** Download Veshiru **only** from this repository's [releases page](https://github.com/2archiver/Veshiru/releases). Any other "Veshiru" website or download is not built by this project and may be unsafe.
+<h2 align=" Download Veshiru **only** from this repository's [releases page](https://github.com/2archiver/Veshiru/releases).
 
 <p align="center">
 
