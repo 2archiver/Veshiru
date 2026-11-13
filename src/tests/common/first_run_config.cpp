@@ -190,7 +190,7 @@ TEST_CASE("Absent global config receives the first-run profile and persists it",
                             "gpu_accuracy", "vram_usage_mode", "accelerate_astc",
                             "astc_recompression", "nvdec_emulation", "use_disk_shader_cache",
                             "use_vulkan_driver_pipeline_cache", "async_presentation",
-                            "use_asynchronous_shaders", "renderer_force_max_clock"}) {
+                            "use_asynchronous_shaders", "force_max_clock"}) {
         CHECK_FALSE(saved.GetBoolValue("Renderer", (std::string{key} + "\\default").c_str(), true));
     }
     const auto filename = config->GetConfigFilePath();

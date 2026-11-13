@@ -8,7 +8,10 @@
 
 #include <chrono>
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 #include <fmt/ranges.h>
@@ -163,5 +166,60 @@ struct RingLine {
 void SetRingCapacity(std::size_t capacity);
 /// The kept lines numbered above `after`, oldest first.
 [[nodiscard]] std::vector<RingLine> ReadRing(u64 after);
+
+/// Broad subsystem groups used by the live console. They are a display grouping over the
+/// existing log classes, not a second logging hierarchy.
+enum class Subsystem : u8 {
+    CPU,
+    GPU,
+    HLE,
+    FS,
+    Audio,
+    Networking,
+    Performance,
+    Compatibility,
+    Other,
+    Count,
+};
+
+[[nodiscard]] std::string_view GetSubsystemName(Subsystem subsystem);
+[[nodiscard]] Subsystem GetSubsystem(Class log_class);
+[[nodiscard]] std::string_view GetLogClassName(Class log_class);
+[[nodiscard]] std::string_view GetLogLevelName(Level log_level);
+
+/// One entry kept by the asynchronous live-console backend. Messages are sanitized before they
+/// are published to the frontend; source is the trimmed compile-time source location.
+struct ConsoleEntry {
+    u64 sequence{};
+    u64 timestamp_us{};
+    Class log_class{};
+    Level log_level{};
+    Subsystem subsystem{};
+    std::string message;
+    std::string source;
+};
+
+struct ConsoleStats {
+    u64 dropped_queue{};
+    u64 dropped_buffer{};
+    u64 rate_limited{};
+    std::size_t buffered{};
+};
+
+/// Enables/disables the live-console backend. While disabled it does no work on logging threads.
+/// Enabling starts a small worker thread; disabling drains and stops it. The worker never writes
+/// to the network and never blocks emulation on the UI.
+void SetLiveConsoleEnabled(bool enabled);
+[[nodiscard]] bool IsLiveConsoleEnabled();
+/// Bounded in-memory console buffer. The oldest entries are dropped when the limit is reached.
+void SetLiveConsoleCapacity(std::size_t capacity);
+/// Entries numbered above `after`, oldest first, at most `max_entries`.
+[[nodiscard]] std::vector<ConsoleEntry> ReadLiveConsole(u64 after, std::size_t max_entries);
+void ClearLiveConsole();
+[[nodiscard]] ConsoleStats GetLiveConsoleStats();
+
+/// Redacts usernames, home directories, absolute file paths and credential-like values. Used by
+/// the live console and by diagnostic exports; it does not mutate the original log message.
+[[nodiscard]] std::string SanitizeLogMessage(std::string_view message);
 
 } // namespace Common::Log

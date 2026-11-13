@@ -5,13 +5,16 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <atomic>
+#include <functional>
 #include <chrono>
 #include <climits>
 #include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <regex>
+#include <stop_token>
 #include <thread>
+#include <unordered_map>
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -59,7 +62,7 @@ namespace {
 /// @brief Returns the name of the passed log class as a C-string. Subclasses are separated by periods
 /// instead of underscores as in the enumeration.
 /// @note GetClassName is a macro defined by Windows.h, grrr...
-const char* GetLogClassName(Class log_class) {
+const char* GetLogClassNameImpl(Class log_class) {
     switch (log_class) {
 #define CLS(x) case Class::x: return #x;
 #define SUB(x, y) case Class::x##_##y: return #x "." #y;
@@ -71,7 +74,7 @@ const char* GetLogClassName(Class log_class) {
 }
 
 /// @brief Returns the name of the passed log level as a C-string.
-const char* GetLevelName(Level log_level) {
+const char* GetLevelNameImpl(Level log_level) {
     switch (log_level) {
 #define LVL(x) case Level::x: return #x;
     LVL(Trace)
@@ -90,15 +93,15 @@ std::string FormatLogMessage(const Entry& entry) noexcept {
     if (!entry.filename) return "";
     auto const time_seconds = uint32_t(entry.timestamp.count() / 1000000);
     auto const time_fractional = uint32_t(entry.timestamp.count() % 1000000);
-    auto const class_name = GetLogClassName(entry.log_class);
-    auto const level_name = GetLevelName(entry.log_level);
+    auto const class_name = GetLogClassNameImpl(entry.log_class);
+    auto const level_name = GetLevelNameImpl(entry.log_level);
     return fmt::format("[{:4d}.{:06d}] {} <{}> {}:{}:{}: {}\n", time_seconds, time_fractional, class_name, level_name, entry.filename, entry.line_num, entry.function, entry.message);
 }
 
 template <typename It>
 Level GetLevelByName(const It begin, const It end) {
     for (u32 i = 0; i < u32(Level::Count); ++i) {
-        const char* level_name = GetLevelName(Level(i));
+        const char* level_name = GetLevelNameImpl(Level(i));
         if (Common::ComparePartialString(begin, end, level_name))
             return Level(i);
     }
@@ -108,7 +111,7 @@ Level GetLevelByName(const It begin, const It end) {
 template <typename It>
 Class GetClassByName(const It begin, const It end) {
     for (u32 i = 0; i < u32(Class::Count); ++i) {
-        const char* level_name = GetLogClassName(Class(i));
+        const char* level_name = GetLogClassNameImpl(Class(i));
         if (Common::ComparePartialString(begin, end, level_name))
             return Class(i);
     }
@@ -150,6 +153,169 @@ constexpr const char* TrimSourcePath(std::string_view source) noexcept {
     return source.data() + idx;
 }
 
+Subsystem GetSubsystemImpl(Class log_class) noexcept {
+    switch (log_class) {
+    case Class::Core:
+    case Class::Core_ARM:
+    case Class::Kernel:
+    case Class::Kernel_SVC:
+    case Class::Debug_Emulated:
+    case Class::Debug_Breakpoint:
+    case Class::Debug_GDBStub:
+        return Subsystem::CPU;
+    case Class::HW_GPU:
+    case Class::Render:
+    case Class::Render_Software:
+    case Class::Render_OpenGL:
+    case Class::Render_Vulkan:
+    case Class::Shader:
+    case Class::Shader_SPIRV:
+    case Class::Shader_GLASM:
+    case Class::Shader_GLSL:
+    case Class::Debug_GPU:
+    case Class::Service_NVDRV:
+    case Class::Service_Nvnflinger:
+    case Class::Service_VI:
+        return Subsystem::GPU;
+    case Class::Service:
+    case Class::Service_ACC:
+    case Class::Service_AM:
+    case Class::Service_AOC:
+    case Class::Service_APM:
+    case Class::Service_ARP:
+    case Class::Service_BCAT:
+    case Class::Service_BPC:
+    case Class::Service_BGTC:
+    case Class::Service_BTDRV:
+    case Class::Service_BTM:
+    case Class::Service_Capture:
+    case Class::Service_ERPT:
+    case Class::Service_ETicket:
+    case Class::Service_EUPLD:
+    case Class::Service_Fatal:
+    case Class::Service_FGM:
+    case Class::Service_Friend:
+    case Class::Service_GRC:
+    case Class::Service_HID:
+    case Class::Service_IRS:
+    case Class::Service_JIT:
+    case Class::Service_LBL:
+    case Class::Service_LDR:
+    case Class::Service_LM:
+    case Class::Service_Migration:
+    case Class::Service_Mii:
+    case Class::Service_MM:
+    case Class::Service_MNPP:
+    case Class::Service_NCM:
+    case Class::Service_NFC:
+    case Class::Service_NFP:
+    case Class::Service_NGC:
+    case Class::Service_NIM:
+    case Class::Service_NOTIF:
+    case Class::Service_NPNS:
+    case Class::Service_NS:
+    case Class::Service_OLSC:
+    case Class::Service_PCIE:
+    case Class::Service_PCTL:
+    case Class::Service_PCV:
+    case Class::Service_PM:
+    case Class::Service_PREPO:
+    case Class::Service_PSC:
+    case Class::Service_PTM:
+    case Class::Service_SET:
+    case Class::Service_SM:
+    case Class::Service_SPL:
+    case Class::Service_TCAP:
+    case Class::Service_Time:
+    case Class::Service_USB:
+    case Class::IPC:
+        return Subsystem::HLE;
+    case Class::Common_Filesystem:
+    case Class::Service_FS:
+    case Class::Loader:
+        return Subsystem::FS;
+    case Class::Audio:
+    case Class::Audio_DSP:
+    case Class::Audio_Sink:
+    case Class::Service_Audio:
+        return Subsystem::Audio;
+    case Class::Network:
+    case Class::Service_LDN:
+    case Class::Service_NIFM:
+    case Class::Service_SSL:
+    case Class::Service_WLAN:
+    case Class::WebService:
+        return Subsystem::Networking;
+    case Class::Core_Timing:
+    case Class::Performance:
+    case Class::HW_Memory:
+    case Class::Common_Memory:
+        return Subsystem::Performance;
+    case Class::Compatibility:
+        return Subsystem::Compatibility;
+    default:
+        return Subsystem::Other;
+    }
+}
+
+std::string SanitizeLogMessageImpl(std::string_view message) {
+    std::string text{message};
+#ifndef __ANDROID__
+    if (Settings::values.censor_username.GetValue()) {
+        static const std::string username = []() -> std::string {
+            for (const auto* var : {"LOGNAME", "USERNAME", "USER"}) {
+                if (const auto* value = std::getenv(var); value != nullptr && *value != '\0') {
+                    return std::string{value};
+                }
+            }
+            return {};
+        }();
+        if (!username.empty()) {
+            boost::replace_all(text, username, "<user>");
+        }
+    }
+#endif
+    static const std::string home = []() -> std::string {
+#ifdef _WIN32
+        if (const auto* value = std::getenv("USERPROFILE"); value != nullptr) {
+            return std::string{value};
+        }
+        return {};
+#else
+        return FS::PathToUTF8String(FS::GetHomeDirectory());
+#endif
+    }();
+    static const std::string appdata = []() -> std::string {
+#ifdef _WIN32
+        return FS::PathToUTF8String(FS::GetAppDataRoamingDirectory());
+#else
+        return {};
+#endif
+    }();
+    if (!home.empty()) {
+        boost::replace_all(text, home, "<home>");
+    }
+    if (!appdata.empty()) {
+        boost::replace_all(text, appdata, "<appdata>");
+    }
+
+    // Absolute paths can name personal files. Keep relative source paths and title IDs, but
+    // replace host file locations with a stable placeholder.
+    static const std::regex windows_path{R"(\b[A-Za-z]:[\\/][^\s"'<>]*)"};
+    static const std::regex unc_path{R"(\\\\[^\s"'<>]*)"};
+    static const std::regex posix_path{
+        R"((^|[\s"'(=])(/(?:home|Users|tmp|var|mnt|media|run|srv|opt|root)/[^\s"'<>]*))"};
+    static const std::regex credential{
+        R"((?i)(authorization\s*:\s*bearer\s+|token\s*[:=]\s*|api[_-]?key\s*[:=]\s*|password\s*[:=]\s*|secret\s*[:=]\s*)([^\s,;]+))"};
+    static const std::regex url_userinfo{R"((https?://)[^\s/@:]+:[^\s/@]+@)"};
+    text = std::regex_replace(text, windows_path, "<path>");
+    text = std::regex_replace(text, unc_path, "<path>");
+    text = std::regex_replace(text, posix_path, "$1<path>");
+    text = std::regex_replace(text, credential, "$1<redacted>");
+    text = std::regex_replace(text, url_userinfo, "$1<redacted>@");
+    return text;
+}
+
 /// @brief Interface for logging backends.
 struct Backend {
     virtual ~Backend() noexcept = default;
@@ -166,8 +332,8 @@ struct DirectFormatArgs {
 };
 [[nodiscard]] inline DirectFormatArgs GetDirectFormatArgs(Entry const& entry) noexcept {
     return {
-        .class_name = GetLogClassName(entry.log_class),
-        .level_name = GetLevelName(entry.log_level),
+        .class_name = GetLogClassNameImpl(entry.log_class),
+        .level_name = GetLevelNameImpl(entry.log_level),
         .time_seconds = uint32_t(entry.timestamp.count() / 1000000),
         .time_fractional = uint32_t(entry.timestamp.count() % 1000000),
     };
@@ -355,6 +521,175 @@ struct RingBackend final : public Backend {
     std::deque<RingLine> lines;
     u64 next_sequence = 1;
 };
+/// @brief Asynchronous, bounded backend for the Qt live console. Logging threads only copy the
+/// already-formatted message into a bounded MPSC queue; sanitising, rate limiting and buffering
+/// happen on a worker that is started only while the console is open.
+struct LiveConsoleBackend final : public Backend {
+    struct Pending {
+        std::string message;
+        const char* filename{};
+        const char* function{};
+        u32 line_num{};
+        u64 timestamp_us{};
+        Class log_class{};
+        Level log_level{};
+    };
+
+    void Write(const Entry& entry) noexcept override {
+        if (!enabled.load(std::memory_order_relaxed)) {
+            return;
+        }
+        try {
+            Pending pending{
+                .message = std::string(entry.message, entry.message_len),
+                .filename = entry.filename,
+                .function = entry.function,
+                .line_num = entry.line_num,
+                .timestamp_us = static_cast<u64>(entry.timestamp.count()),
+                .log_class = entry.log_class,
+                .log_level = entry.log_level,
+            };
+            if (!queue.TryEmplace(std::move(pending))) {
+                dropped_queue.fetch_add(1, std::memory_order_relaxed);
+            }
+        } catch (...) {
+            dropped_queue.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    void Flush() noexcept override {}
+
+    void Enable() {
+        bool expected = false;
+        if (!enabled.compare_exchange_strong(expected, true)) {
+            return;
+        }
+        if (!worker.joinable()) {
+            worker = std::jthread([this](std::stop_token stop_token) { Loop(stop_token); });
+        }
+    }
+
+    void Disable() {
+        enabled.store(false, std::memory_order_relaxed);
+        if (worker.joinable()) {
+            worker.request_stop();
+            worker.join();
+        }
+    }
+
+    void Loop(std::stop_token stop_token) noexcept {
+        Pending pending;
+        while (queue.PopWait(pending, stop_token)) {
+            Process(pending);
+            while (queue.TryPop(pending)) {
+                Process(pending);
+            }
+        }
+        // Drain what was already queued when the console closed so the bounded buffer and the
+        // dropped counters stay consistent.
+        while (queue.TryPop(pending)) {
+            Process(pending);
+        }
+    }
+
+    void Process(const Pending& pending) noexcept {
+        try {
+            constexpr u64 window_us = 1'000'000;
+            constexpr u32 max_per_window = 32;
+            const std::size_t key = std::hash<std::string>{}(pending.message) ^
+                                    (static_cast<std::size_t>(pending.log_class) << 8) ^
+                                    (static_cast<std::size_t>(pending.log_level) << 16);
+            auto& state = rate_limits[key];
+            if (pending.timestamp_us - state.window_start_us >= window_us) {
+                state.window_start_us = pending.timestamp_us;
+                state.count = 0;
+            }
+            if (++state.count > max_per_window) {
+                rate_limited.fetch_add(1, std::memory_order_relaxed);
+                if (rate_limits.size() > 4096) {
+                    rate_limits.clear();
+                }
+                return;
+            }
+            if (rate_limits.size() > 4096) {
+                rate_limits.clear();
+            }
+
+            ConsoleEntry entry{
+                .sequence = next_sequence++,
+                .timestamp_us = pending.timestamp_us,
+                .log_class = pending.log_class,
+                .log_level = pending.log_level,
+                .subsystem = GetSubsystemImpl(pending.log_class),
+                .message = SanitizeLogMessageImpl(pending.message),
+                .source = fmt::format("{}:{}:{}", pending.filename ? pending.filename : "?",
+                                      pending.line_num,
+                                      pending.function ? pending.function : "?"),
+            };
+            std::scoped_lock lock{mutex};
+            entries.push_back(std::move(entry));
+            const std::size_t limit = capacity.load(std::memory_order_relaxed);
+            while (entries.size() > limit) {
+                entries.pop_front();
+                dropped_buffer.fetch_add(1, std::memory_order_relaxed);
+            }
+        } catch (...) {
+            dropped_buffer.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    std::vector<ConsoleEntry> Read(u64 after, std::size_t max_entries) {
+        std::vector<ConsoleEntry> result;
+        if (max_entries == 0) {
+            return result;
+        }
+        std::scoped_lock lock{mutex};
+        result.reserve((std::min)(max_entries, entries.size()));
+        for (const auto& entry : entries) {
+            if (entry.sequence > after) {
+                result.push_back(entry);
+                if (result.size() >= max_entries) {
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
+    void Clear() {
+        std::scoped_lock lock{mutex};
+        entries.clear();
+    }
+
+    ConsoleStats Stats() {
+        ConsoleStats stats{
+            .dropped_queue = dropped_queue.load(std::memory_order_relaxed),
+            .dropped_buffer = dropped_buffer.load(std::memory_order_relaxed),
+            .rate_limited = rate_limited.load(std::memory_order_relaxed),
+        };
+        std::scoped_lock lock{mutex};
+        stats.buffered = entries.size();
+        return stats;
+    }
+
+    struct RateState {
+        u64 window_start_us{};
+        u32 count{};
+    };
+
+    std::atomic_bool enabled{false};
+    std::atomic<std::size_t> capacity{10000};
+    Common::MPSCQueue<Pending, 4096> queue;
+    std::jthread worker;
+    std::mutex mutex;
+    std::deque<ConsoleEntry> entries;
+    std::unordered_map<std::size_t, RateState> rate_limits;
+    u64 next_sequence{1};
+    std::atomic<u64> dropped_queue{0};
+    std::atomic<u64> dropped_buffer{0};
+    std::atomic<u64> rate_limited{0};
+};
+
 #ifdef _WIN32
 /// @brief Backend that writes to Visual Studio's output window
 struct DebuggerBackend final : public Backend {
@@ -399,6 +734,7 @@ struct Impl {
     void ForEachBackend(F&& lambda) noexcept {
         lambda(static_cast<Backend&>(color_console_backend));
         lambda(static_cast<Backend&>(ring_backend));
+        lambda(static_cast<Backend&>(live_console_backend));
 #ifndef __OPENORBIS__
         if (file_backend)
             lambda(static_cast<Backend&>(*file_backend));
@@ -414,6 +750,7 @@ struct Impl {
     Filter filter;
     ColorConsoleBackend color_console_backend{};
     RingBackend ring_backend{};
+    LiveConsoleBackend live_console_backend{};
 #ifndef __OPENORBIS__
     std::optional<FileBackend> file_backend;
 #endif
@@ -466,8 +803,10 @@ void Start() {
 }
 
 void Stop() {
-    if (logging_instance)
+    if (logging_instance) {
         logging_instance->ForEachBackend([](Backend& backend) { backend.Flush(); });
+        logging_instance->live_console_backend.Disable();
+    }
 }
 
 void FmtCrashMessageImpl(const char* filename, unsigned int line_num, const char* function, fmt::string_view format, const fmt::format_args& args) noexcept {
@@ -566,4 +905,83 @@ void FmtLogMessageImpl(Class log_class, Level log_level, const char* filename, u
         }
     }
 }
+std::string_view GetSubsystemName(Subsystem subsystem) {
+    switch (subsystem) {
+    case Subsystem::CPU: return "CPU";
+    case Subsystem::GPU: return "GPU";
+    case Subsystem::HLE: return "HLE";
+    case Subsystem::FS: return "FS";
+    case Subsystem::Audio: return "Audio";
+    case Subsystem::Networking: return "Networking";
+    case Subsystem::Performance: return "Performance";
+    case Subsystem::Compatibility: return "Compatibility";
+    case Subsystem::Other: return "Other";
+    default: return "?";
+    }
+}
+
+Subsystem GetSubsystem(Class log_class) {
+    return GetSubsystemImpl(log_class);
+}
+
+std::string_view GetLogClassName(Class log_class) {
+    return GetLogClassNameImpl(log_class);
+}
+
+std::string_view GetLogLevelName(Level log_level) {
+    return GetLevelNameImpl(log_level);
+}
+
+void SetLiveConsoleEnabled(bool enabled) {
+    if (!logging_instance) {
+        return;
+    }
+    if (enabled) {
+        logging_instance->live_console_backend.Enable();
+    } else {
+        logging_instance->live_console_backend.Disable();
+    }
+}
+
+bool IsLiveConsoleEnabled() {
+    return logging_instance && logging_instance->live_console_backend.enabled.load(std::memory_order_relaxed);
+}
+
+void SetLiveConsoleCapacity(std::size_t capacity) {
+    if (!logging_instance) {
+        return;
+    }
+    auto& backend = logging_instance->live_console_backend;
+    backend.capacity.store(capacity, std::memory_order_relaxed);
+    std::scoped_lock lock{backend.mutex};
+    while (backend.entries.size() > capacity) {
+        backend.entries.pop_front();
+        backend.dropped_buffer.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+std::vector<ConsoleEntry> ReadLiveConsole(u64 after, std::size_t max_entries) {
+    if (!logging_instance) {
+        return {};
+    }
+    return logging_instance->live_console_backend.Read(after, max_entries);
+}
+
+void ClearLiveConsole() {
+    if (logging_instance) {
+        logging_instance->live_console_backend.Clear();
+    }
+}
+
+ConsoleStats GetLiveConsoleStats() {
+    if (!logging_instance) {
+        return {};
+    }
+    return logging_instance->live_console_backend.Stats();
+}
+
+std::string SanitizeLogMessage(std::string_view message) {
+    return SanitizeLogMessageImpl(message);
+}
+
 } // namespace Common::Log

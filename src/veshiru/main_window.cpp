@@ -33,6 +33,7 @@
 #include "debugger/controller.h"
 
 #include "about_dialog.h"
+#include "console_window.h"
 #include "data_dialog.h"
 #include "deps_dialog.h"
 #include "install_dialog.h"
@@ -1727,6 +1728,7 @@ void MainWindow::ConnectMenuEvents() {
 
     connect_menu(ui->action_Desktop, &MainWindow::OnCreateHomeMenuDesktopShortcut);
     connect_menu(ui->action_Application_Menu, &MainWindow::OnCreateHomeMenuApplicationMenuShortcut);
+    connect_menu(ui->action_Console, [] { ConsoleWindow::Show(); });
     connect_menu(ui->action_Capture_Screenshot, &MainWindow::OnCaptureScreenshot);
 
     // TAS
@@ -2439,7 +2441,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     title_name = tr("%1 %2", "%1 is the title name. %2 indicates if the title is 64-bit or 32-bit")
                      .arg(QString::fromStdString(title_name), instruction_set_suffix)
                      .toStdString();
-    LOG_INFO(Frontend, "Booting game: {:016X} | {} | {}", title_id, title_name, title_version);
+    LOG_INFO(Compatibility, "Booting game: {:016X} | {} | {}", title_id, title_name, title_version);
     const auto gpu_vendor = QtCommon::system->GPU().Renderer().GetDeviceVendor();
     UpdateWindowTitle(title_name, title_version, gpu_vendor);
 
@@ -2663,7 +2665,7 @@ void MainWindow::OnEmulationStopped() {
     Settings::RestoreGlobalState(QtCommon::system->IsPoweredOn());
     QtCommon::system->HIDCore().ReloadInputDevices();
     UpdateStatusButtons();
-    LOG_INFO(Frontend, "Emulation cleanup completed");
+    LOG_INFO(Performance, "Emulation cleanup completed");
     if (close_pending) {
         QTimer::singleShot(0, this, &QWidget::close);
     } else if (!boot_in_progress) {
@@ -5183,7 +5185,7 @@ void MainWindow::OnApplicationChanged(u64 program_id) {
                 .toStdString();
     }
 
-    LOG_INFO(Frontend, "Now running: {:016X} | {} | {}", program_id, title_name, title_version);
+    LOG_INFO(Performance, "Now running: {:016X} | {} | {}", program_id, title_name, title_version);
 
     UpdateWindowTitle(title_name, title_version,
                       QtCommon::system->GPU().Renderer().GetDeviceVendor());

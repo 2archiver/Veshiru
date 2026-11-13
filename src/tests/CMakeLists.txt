@@ -162,6 +162,7 @@ add_executable(tests
     common/container_hash.cpp
     common/core_pinning.cpp
     common/data_directories.cpp
+    common/live_console.cpp
     common/event.cpp
     common/fibers.cpp
     common/fs_iterate.cpp

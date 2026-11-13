@@ -220,6 +220,7 @@
     <addaction name="menuInstall_Firmware"/>
     <addaction name="action_Verify_installed_contents"/>
     <addaction name="action_Data_Manager"/>
+    <addaction name="action_Console"/>
     <addaction name="separator"/>
     <addaction name="menu_cabinet_applet"/>
     <addaction name="menu_Applets"/>
@@ -580,6 +581,17 @@
   <action name="action_Data_Manager">
    <property name="text">
     <string>&amp;Data Manager</string>
+   </property>
+  </action>
+  <action name="action_Console">
+   <property name="text">
+    <string>&amp;Console…</string>
+   </property>
+   <property name="toolTip">
+    <string>Open the live emulator log console</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+C</string>
    </property>
   </action>
   <action name="action_Tree_View">
