@@ -12,8 +12,6 @@
 > **Veshiru has no official website.** Download Veshiru **only** from this repository's [releases page](https://github.com/2archiver/Veshiru/releases). Any other "Veshiru" website or download is not built by this project and may be unsafe.
 
 <p align="center">
-  <img src="dist/branding/veshiru_icon_with_logo.png" alt="Veshiru" width="600">
-</p>
 
 # Veshiru
 
