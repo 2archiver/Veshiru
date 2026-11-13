@@ -116,6 +116,21 @@ TEST_CASE("Copy verifies and stages every root before preparing or publishing",
     RunImport(plan, [&](const auto&) { FAIL("Completed import ran twice"); });
 }
 
+TEST_CASE("Eglantine build 17 saves are copied byte-for-byte and the source is kept",
+          "[profile_migration]") {
+    Fixture f;
+    const std::string save_bytes = {'\x00', '\x01', '\x7f', '\x00', 's', 'a', 'v', 'e', '\x00'};
+    Write(f.source / "nand/user/save/0000000000000001/0000000000000000", save_bytes);
+    Write(f.source / "config/qt-config.ini", "[Data%20Storage]\nnand_directory=eden/nand\n");
+    RunImport(f.MakePlan(Strategy::Copy));
+    CHECK(GetState(f.state) == State::Complete);
+    CHECK(Read(f.destination / "nand/user/save/0000000000000001/0000000000000000") == save_bytes);
+    CHECK(Read(f.source / "nand/user/save/0000000000000001/0000000000000000") == save_bytes);
+    CHECK(Read(f.source / "config/qt-config.ini") ==
+          "[Data%20Storage]\nnand_directory=eden/nand\n");
+    CHECK(fs::exists(f.destination / "config/qt-config.ini"));
+}
+
 TEST_CASE("Import keeps the entire old destination in a sibling backup", "[profile_migration]") {
     Fixture f;
     Write(f.source / "save", "legacy save");

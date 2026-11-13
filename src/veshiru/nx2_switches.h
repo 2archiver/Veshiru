@@ -99,6 +99,14 @@ static void LoadNx2Switches(const char* argv0) {
     if (config_base.is_absolute()) {
         ParseSwitchFile(config_base / EDEN_DIR / "nx2_switches.txt", entries);
     }
+    // A portable install keeps its switches in user/ next to the executable (or in the working
+    // directory on Unix), not in the global config directory. Let that copy win as well.
+    if (Common::FS::IsPortableMode()) {
+        const auto portable = Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir);
+        if (!portable.empty()) {
+            ParseSwitchFile(portable / "nx2_switches.txt", entries);
+        }
+    }
     for (const auto& [name, value] : entries) {
         if (std::getenv(name.c_str()) != nullptr) {
             continue;

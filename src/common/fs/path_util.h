@@ -43,6 +43,18 @@ enum EmuPath {
     LegacyEdenConfigDir,
     LegacyEdenCacheDir,
 
+    EglantineDir,
+    EglantineConfigDir,
+    EglantineCacheDir,
+
+    LichiiDir,
+    LichiiConfigDir,
+    LichiiCacheDir,
+
+    NemyuDir,
+    NemyuConfigDir,
+    NemyuCacheDir,
+
     CitronDir,
     CitronConfigDir,
     CitronCacheDir,

@@ -15,4 +15,10 @@ TEST_CASE("Veshiru keeps its data apart from Eden's", "[fs]") {
     CHECK(data.filename() == "veshiru");
     CHECK(GetLegacyPath(LegacyEdenDir).filename() == "eden");
     CHECK(GetLegacyPath(LegacyEdenDir).parent_path() == data.parent_path());
+    CHECK(GetLegacyPath(EglantineDir).filename() == "eglantine");
+    CHECK(GetLegacyPath(EglantineDir).parent_path() == data.parent_path());
+    CHECK(GetLegacyPath(LichiiDir).filename() == "lichii");
+    CHECK(GetLegacyPath(LichiiDir).parent_path() == data.parent_path());
+    CHECK(GetLegacyPath(NemyuDir).filename() == "nemyu");
+    CHECK(GetLegacyPath(NemyuDir).parent_path() == data.parent_path());
 }

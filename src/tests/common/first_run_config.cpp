@@ -90,7 +90,16 @@ public:
 
 void CheckFreshProfile() {
     const auto& values = Settings::values;
-    CHECK(values.scaling_filter.GetValue() == Settings::ScalingFilter::Fsr3);
+    CHECK(values.scaling_filter.GetValue() == Settings::ScalingFilter::Bilinear);
+    CHECK(values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan);
+    CHECK(values.resolution_setup.GetValue() == Settings::ResolutionSetup::Res1X);
+    CHECK(values.anti_aliasing.GetValue() == Settings::AntiAliasing::None);
+    CHECK(values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Conservative);
+    CHECK(values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu);
+    CHECK(values.astc_recompression.GetValue() == Settings::AstcRecompression::Bc3);
+    CHECK(values.use_disk_shader_cache.GetValue());
+    CHECK(values.use_vulkan_driver_pipeline_cache.GetValue());
+    CHECK_FALSE(values.renderer_force_max_clock.GetValue());
     CHECK(values.gpu_accuracy.GetValue() == Settings::GpuAccuracy::Low);
     CHECK(values.nvdec_emulation.GetValue() == Settings::NvdecEmulation::Gpu);
     CHECK(values.async_presentation.GetValue());
@@ -177,8 +186,11 @@ TEST_CASE("Absent global config receives the first-run profile and persists it",
                                std::istreambuf_iterator<char>{}};
     REQUIRE(saved.LoadData(contents) >= 0);
     file.close();
-    for (const char* key : {"scaling_filter", "gpu_accuracy", "nvdec_emulation",
-                            "async_presentation", "use_asynchronous_shaders"}) {
+    for (const char* key : {"backend", "resolution_setup", "scaling_filter", "anti_aliasing",
+                            "gpu_accuracy", "vram_usage_mode", "accelerate_astc",
+                            "astc_recompression", "nvdec_emulation", "use_disk_shader_cache",
+                            "use_vulkan_driver_pipeline_cache", "async_presentation",
+                            "use_asynchronous_shaders", "renderer_force_max_clock"}) {
         CHECK_FALSE(saved.GetBoolValue("Renderer", (std::string{key} + "\\default").c_str(), true));
     }
     const auto filename = config->GetConfigFilePath();

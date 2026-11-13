@@ -128,6 +128,20 @@ TEST_CASE("CLI-first configuration is blocked and portable user stays untouched"
     CHECK(NeedsLegacyProfileImport());
     CHECK_THROWS(CheckLegacyProfileBeforeConfig());
     CHECK(fs::is_empty(fixture.root / "config/veshiru"));
+
+    // Later Switch 2 forks used their own directory names; each must still offer an import.
+    fs::remove_all(fixture.root / "data/eden");
+    for (const auto* name : {"eglantine", "lichii", "nemyu"}) {
+        const auto legacy = fixture.root / "data" / name;
+        fs::create_directories(legacy);
+        Common::FS::SetAppDirectory("");
+        CHECK(NeedsLegacyProfileImport());
+        fs::remove_all(legacy);
+    }
+    CHECK_FALSE(NeedsLegacyProfileImport());
+    fs::create_directories(fixture.root / "data/eden");
+    Common::FS::SetAppDirectory("");
+    CHECK(NeedsLegacyProfileImport());
     Migration::MarkFresh(ProfileImportStateDirectory());
     CHECK_FALSE(NeedsLegacyProfileImport());
     CHECK_NOTHROW(CheckLegacyProfileBeforeConfig());

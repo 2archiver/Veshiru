@@ -101,8 +101,12 @@ void UserDataMigrator::ShowMigrationPrompt(QMainWindow* main_window) {
     }
     migration_prompt.addBox(source);
     const auto update_cache_default = [&] {
-        clear_shaders->setChecked(found.at(source->currentIndex()).e_user_dir !=
-                                  Common::FS::LegacyEdenDir);
+        const auto selected = found.at(source->currentIndex()).e_user_dir;
+        const bool same_shader_lineage = selected == Common::FS::LegacyEdenDir ||
+                                         selected == Common::FS::EglantineDir ||
+                                         selected == Common::FS::LichiiDir ||
+                                         selected == Common::FS::NemyuDir;
+        clear_shaders->setChecked(!same_shader_lineage);
         clear_shaders->setEnabled(!link_old->isChecked());
     };
     QObject::connect(source, &QComboBox::currentIndexChanged, &migration_prompt,
@@ -112,13 +116,18 @@ void UserDataMigrator::ShowMigrationPrompt(QMainWindow* main_window) {
     update_cache_default();
     migration_prompt.setText(
         QObject::tr("Import an existing emulator profile into Veshiru?\n"
+                    "Eglantine build 17 stores its saves in the Eden data folder; Veshiru copies "
+                    "them byte-for-byte and verifies the copy before using it.\n"
                     "Copy keeps the original profile unchanged and is recommended.\n"
                     "Move retains a recovery backup and requires space for a full copy.\n"
                     "Link shares settings and saves with the source emulator.\n"
                     "Existing Veshiru data is kept in backup directories, not merged or deleted.\n\n"
                     "Close the source emulator, then choose its profile below.\n"
                     "Close this window to decide on the next launch."));
-    migration_prompt.addButton(QObject::tr("Import"));
+    auto* import_button =
+        static_cast<QPushButton*>(migration_prompt.addButton(QObject::tr("Import")));
+    import_button->setDefault(true);
+    import_button->setAutoDefault(true);
     auto* fresh = migration_prompt.addButton(QObject::tr("Start fresh"), true);
 
     migration_prompt.exec();

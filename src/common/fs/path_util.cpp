@@ -131,6 +131,9 @@ public:
         LEGACY_PATH(Yuzu, YUZU)
         LEGACY_PATH(Suyu, SUYU)
         LEGACY_PATH(LegacyEden, EDEN_LEGACY)
+        LEGACY_PATH(Eglantine, EGLANTINE)
+        LEGACY_PATH(Lichii, LICHII)
+        LEGACY_PATH(Nemyu, NEMYU)
 #undef LEGACY_PATH
 #elif __ANDROID__
         portable = true;
@@ -156,6 +159,9 @@ public:
         LEGACY_PATH(Yuzu, YUZU)
         LEGACY_PATH(Suyu, SUYU)
         LEGACY_PATH(LegacyEden, EDEN_LEGACY)
+        LEGACY_PATH(Eglantine, EGLANTINE)
+        LEGACY_PATH(Lichii, LICHII)
+        LEGACY_PATH(Nemyu, NEMYU)
 #undef LEGACY_PATH
 #endif
         // data

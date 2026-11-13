@@ -137,16 +137,39 @@ void Config::SetUpIni() {
 
 #ifndef __ANDROID__
     if (new_global_config) {
-        BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
+        // Veshiru's first-run profile targets the development machine: i7-10750H, GTX 1650 4 GB,
+        // 32 GB RAM. It is written only for a brand-new global config; imported Eglantine/Eden
+        // settings and every existing per-game override are left untouched.
         const auto seed = [this](const Settings::BasicSetting& setting, const std::string& value) {
             WriteStringSetting(setting.GetLabel(), value);
             WriteBooleanSetting(setting.GetLabel() + "\\default", false);
         };
-        seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Fsr3)));
+        BeginGroup(Settings::TranslateCategory(Settings::Category::Renderer));
+        seed(Settings::values.renderer_backend, ToString(u32(Settings::RendererBackend::Vulkan)));
+        seed(Settings::values.resolution_setup, ToString(u32(Settings::ResolutionSetup::Res1X)));
+        seed(Settings::values.scaling_filter, ToString(u32(Settings::ScalingFilter::Bilinear)));
+        seed(Settings::values.anti_aliasing, ToString(u32(Settings::AntiAliasing::None)));
+        seed(Settings::values.max_anisotropy, ToString(u32(Settings::AnisotropyMode::Automatic)));
         seed(Settings::values.gpu_accuracy, ToString(u32(Settings::GpuAccuracy::Low)));
+        seed(Settings::values.vram_usage_mode, ToString(u32(Settings::VramUsageMode::Conservative)));
+        seed(Settings::values.accelerate_astc, ToString(u32(Settings::AstcDecodeMode::Gpu)));
+        seed(Settings::values.astc_recompression, ToString(u32(Settings::AstcRecompression::Bc3)));
         seed(Settings::values.nvdec_emulation, ToString(u32(Settings::NvdecEmulation::Gpu)));
+        seed(Settings::values.use_disk_shader_cache, ToString(true));
+        seed(Settings::values.use_vulkan_driver_pipeline_cache, ToString(true));
         seed(Settings::values.async_presentation, ToString(true));
         seed(Settings::values.use_asynchronous_shaders, ToString(true));
+        seed(Settings::values.renderer_force_max_clock, ToString(false));
+        EndGroup();
+
+        BeginGroup(Settings::TranslateCategory(Settings::Category::Core));
+        seed(Settings::values.use_multi_core, ToString(true));
+        seed(Settings::values.use_speed_limit, ToString(true));
+        seed(Settings::values.speed_limit, ToString(u16(100)));
+        EndGroup();
+
+        BeginGroup(Settings::TranslateCategory(Settings::Category::Cpu));
+        seed(Settings::values.cpu_accuracy, ToString(u32(Settings::CpuAccuracy::Auto)));
         EndGroup();
     }
 #endif

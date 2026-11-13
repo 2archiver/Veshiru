@@ -39,7 +39,11 @@ bool NeedsLegacyProfileImport() {
     if (state != Migration::State::Unresolved) {
         return false;
     }
-    constexpr std::array sources{LegacyEdenDir, CitronDir, SudachiDir, SuyuDir, YuzuDir};
+    // Eglantine build 17 and the other Eden-derived Switch 2 forks kept their saves under
+    // "eden"; later Eglantine/Lichii/Nemyu builds used their own names. Prefer that lineage
+    // before the older Switch 1 emulators so the first prompt offers the right profile.
+    constexpr std::array sources{LegacyEdenDir, EglantineDir, LichiiDir, NemyuDir,
+                                 CitronDir,     SudachiDir,   SuyuDir,   YuzuDir};
     for (const auto source : sources) {
         if (fs::is_directory(GetLegacyPath(source))) {
             return true;

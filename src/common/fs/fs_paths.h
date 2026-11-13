@@ -9,6 +9,9 @@
 
 #define EDEN_DIR "veshiru"
 #define EDEN_LEGACY_DIR "eden"
+#define EGLANTINE_DIR "eglantine"
+#define LICHII_DIR "lichii"
+#define NEMYU_DIR "nemyu"
 #define PORTABLE_DIR "user"
 
 // Sub-directories contained within a Veshiru data directory
