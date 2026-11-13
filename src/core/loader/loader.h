@@ -178,8 +178,8 @@ ResultStatus GetContainerProgramStatus(FileSys::VirtualFile file, FileType type)
 /// Interface for loading an application
 class AppLoader {
 public:
-    LICHII_NON_COPYABLE(AppLoader);
-    LICHII_NON_MOVEABLE(AppLoader);
+    VESHIRU_NON_COPYABLE(AppLoader);
+    VESHIRU_NON_MOVEABLE(AppLoader);
 
     struct LoadParameters {
         s32 main_thread_priority;

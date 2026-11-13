@@ -15,8 +15,8 @@
 #include "core/memory.h"
 #include "video_core/host1x/host1x.h"
 
-using Core::Memory::LICHII_PAGESIZE;
-constexpr size_t BIG_PAGE_SIZE = LICHII_PAGESIZE * 16;
+using Core::Memory::VESHIRU_PAGESIZE;
+constexpr size_t BIG_PAGE_SIZE = VESHIRU_PAGESIZE * 16;
 
 namespace Service::Nvidia::NvCore {
 NvMap::Handle::Handle(u64 size_, Id id_)
@@ -34,7 +34,7 @@ NvResult NvMap::Handle::Alloc(Flags pFlags, u32 pAlign, u8 pKind, u64 pAddress,
 
     flags = pFlags;
     kind = pKind;
-    align = pAlign < LICHII_PAGESIZE ? LICHII_PAGESIZE : pAlign;
+    align = pAlign < VESHIRU_PAGESIZE ? VESHIRU_PAGESIZE : pAlign;
     session_id = pSessionId;
 
     // This flag is only applicable for handles with an address passed
@@ -45,7 +45,7 @@ NvResult NvMap::Handle::Alloc(Flags pFlags, u32 pAlign, u8 pKind, u64 pAddress,
                      "Mapping nvmap handles without a CPU side address is unimplemented!");
     }
 
-    size = Common::AlignUp(size, LICHII_PAGESIZE);
+    size = Common::AlignUp(size, VESHIRU_PAGESIZE);
     aligned_size = Common::AlignUp(size, align);
     address = pAddress;
     allocated = true;

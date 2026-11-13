@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "lichii/compatibility_report.h"
+#include "veshiru/compatibility_report.h"
 
 #include <algorithm>
 #include <cstring>
@@ -126,7 +126,7 @@ private slots:
 Session DialogTest::Seed() {
     return {.program_id = 0x0400000000000000ULL,
             .title = QStringLiteral("Synthetic Switch 2 game"),
-            .build = QStringLiteral("Lichii prototype (synthetic)"),
+            .build = QStringLiteral("Veshiru prototype (synthetic)"),
             .game_version = QStringLiteral("1.0.0"),
             .cpu = QStringLiteral("Example CPU"),
             .gpu = {},
@@ -512,7 +512,7 @@ void DialogTest::isolatedHttpTransport() {
             headers.insert(line.left(colon).trimmed().toLower(), line.mid(colon + 1).trimmed());
         }
     }
-    QCOMPARE(headers.value("x-lichii-client"), QByteArray("desktop/1"));
+    QCOMPARE(headers.value("x-veshiru-client"), QByteArray("desktop/1"));
     const auto body = request.mid(request.indexOf("\r\n\r\n") + 4);
     QCOMPARE(body, dialog.submitted_payload);
     QVERIFY(!body.contains("must-not-be-sent"));

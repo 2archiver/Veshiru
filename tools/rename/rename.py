@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Rename inherited yuzu naming to Lichii; see docs/nx2/rename.md.
+"""Rename inherited yuzu naming to Veshiru; see docs/nx2/rename.md.
 
 apply  rewrites tracked paths and text with every area under tools/rename/areas.
 check  lists what still says yuzu, by class: attribution, compat, removed or pending.

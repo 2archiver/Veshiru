@@ -13,153 +13,153 @@
         <item name="android:paddingRight">32dp</item>
     </style>
 
-    <style name="LichiiSlider" parent="Widget.Material3.Slider">
+    <style name="VeshiruSlider" parent="Widget.Material3.Slider">
         <item name="tickVisible">false</item>
         <item name="labelBehavior">gone</item>
     </style>
 
     <!-- Blue theme dialog -->
-    <style name="LichiiMaterialDialog.Blue" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="colorPrimary">@color/lichii_primaryContainer_blue</item>
-        <item name="colorSurface">@color/lichii_primaryContainer_blue</item>
-        <item name="colorSecondary">@color/lichii_primary_blue</item>
-        <item name="android:textColorLink">@color/lichii_primary_blue</item>
-        <item name="buttonBarPositiveButtonStyle">@style/LichiiButton.Blue</item>
-        <item name="buttonBarNegativeButtonStyle">@style/LichiiButton.Blue</item>
-        <item name="buttonBarNeutralButtonStyle">@style/LichiiButton.Blue</item>
+    <style name="VeshiruMaterialDialog.Blue" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/veshiru_primaryContainer_blue</item>
+        <item name="colorSurface">@color/veshiru_primaryContainer_blue</item>
+        <item name="colorSecondary">@color/veshiru_primary_blue</item>
+        <item name="android:textColorLink">@color/veshiru_primary_blue</item>
+        <item name="buttonBarPositiveButtonStyle">@style/VeshiruButton.Blue</item>
+        <item name="buttonBarNegativeButtonStyle">@style/VeshiruButton.Blue</item>
+        <item name="buttonBarNeutralButtonStyle">@style/VeshiruButton.Blue</item>
     </style>
 
-    <style name="LichiiButton.Blue" parent="Widget.Material3.Button.TextButton.Dialog">
-        <item name="android:textColor">@color/lichii_primary_blue</item>
-        <item name="rippleColor">@color/lichii_inversePrimary_blue</item>
+    <style name="VeshiruButton.Blue" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/veshiru_primary_blue</item>
+        <item name="rippleColor">@color/veshiru_inversePrimary_blue</item>
     </style>
 
     <!-- Cyan theme dialog -->
-    <style name="LichiiMaterialDialog.Cyan" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="colorPrimary">@color/lichii_primaryContainer_cyan</item>
-        <item name="colorSurface">@color/lichii_primaryContainer_cyan</item>
-        <item name="colorSecondary">@color/lichii_primary_cyan</item>
-        <item name="android:textColorLink">@color/lichii_primary_cyan</item>
-        <item name="buttonBarPositiveButtonStyle">@style/LichiiButton.Cyan</item>
-        <item name="buttonBarNegativeButtonStyle">@style/LichiiButton.Cyan</item>
-        <item name="buttonBarNeutralButtonStyle">@style/LichiiButton.Cyan</item>
+    <style name="VeshiruMaterialDialog.Cyan" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/veshiru_primaryContainer_cyan</item>
+        <item name="colorSurface">@color/veshiru_primaryContainer_cyan</item>
+        <item name="colorSecondary">@color/veshiru_primary_cyan</item>
+        <item name="android:textColorLink">@color/veshiru_primary_cyan</item>
+        <item name="buttonBarPositiveButtonStyle">@style/VeshiruButton.Cyan</item>
+        <item name="buttonBarNegativeButtonStyle">@style/VeshiruButton.Cyan</item>
+        <item name="buttonBarNeutralButtonStyle">@style/VeshiruButton.Cyan</item>
     </style>
 
-    <style name="LichiiButton.Cyan" parent="Widget.Material3.Button.TextButton.Dialog">
-        <item name="android:textColor">@color/lichii_primary_cyan</item>
-        <item name="rippleColor">@color/lichii_inversePrimary_cyan</item>
+    <style name="VeshiruButton.Cyan" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/veshiru_primary_cyan</item>
+        <item name="rippleColor">@color/veshiru_inversePrimary_cyan</item>
     </style>
 
     <!-- Red theme dialog -->
-    <style name="LichiiMaterialDialog.Red" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="colorPrimary">@color/lichii_primaryContainer_red</item>
-        <item name="colorSurface">@color/lichii_primaryContainer_red</item>
-        <item name="colorSecondary">@color/lichii_primary_red</item>
-        <item name="android:textColorLink">@color/lichii_primary_red</item>
-        <item name="buttonBarPositiveButtonStyle">@style/LichiiButton.Red</item>
-        <item name="buttonBarNegativeButtonStyle">@style/LichiiButton.Red</item>
-        <item name="buttonBarNeutralButtonStyle">@style/LichiiButton.Red</item>
+    <style name="VeshiruMaterialDialog.Red" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/veshiru_primaryContainer_red</item>
+        <item name="colorSurface">@color/veshiru_primaryContainer_red</item>
+        <item name="colorSecondary">@color/veshiru_primary_red</item>
+        <item name="android:textColorLink">@color/veshiru_primary_red</item>
+        <item name="buttonBarPositiveButtonStyle">@style/VeshiruButton.Red</item>
+        <item name="buttonBarNegativeButtonStyle">@style/VeshiruButton.Red</item>
+        <item name="buttonBarNeutralButtonStyle">@style/VeshiruButton.Red</item>
     </style>
 
-    <style name="LichiiButton.Red" parent="Widget.Material3.Button.TextButton.Dialog">
-        <item name="android:textColor">@color/lichii_primary_red</item>
-        <item name="rippleColor">@color/lichii_inversePrimary_red</item>
+    <style name="VeshiruButton.Red" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/veshiru_primary_red</item>
+        <item name="rippleColor">@color/veshiru_inversePrimary_red</item>
     </style>
 
     <!-- Green theme dialog -->
-    <style name="LichiiMaterialDialog.Green" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="colorPrimary">@color/lichii_primaryContainer_green</item>
-        <item name="colorSurface">@color/lichii_primaryContainer_green</item>
-        <item name="colorSecondary">@color/lichii_primary_green</item>
-        <item name="android:textColorLink">@color/lichii_primary_green</item>
-        <item name="buttonBarPositiveButtonStyle">@style/LichiiButton.Green</item>
-        <item name="buttonBarNegativeButtonStyle">@style/LichiiButton.Green</item>
-        <item name="buttonBarNeutralButtonStyle">@style/LichiiButton.Green</item>
+    <style name="VeshiruMaterialDialog.Green" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/veshiru_primaryContainer_green</item>
+        <item name="colorSurface">@color/veshiru_primaryContainer_green</item>
+        <item name="colorSecondary">@color/veshiru_primary_green</item>
+        <item name="android:textColorLink">@color/veshiru_primary_green</item>
+        <item name="buttonBarPositiveButtonStyle">@style/VeshiruButton.Green</item>
+        <item name="buttonBarNegativeButtonStyle">@style/VeshiruButton.Green</item>
+        <item name="buttonBarNeutralButtonStyle">@style/VeshiruButton.Green</item>
     </style>
 
-    <style name="LichiiButton.Green" parent="Widget.Material3.Button.TextButton.Dialog">
-        <item name="android:textColor">@color/lichii_primary_green</item>
-        <item name="rippleColor">@color/lichii_inversePrimary_green</item>
+    <style name="VeshiruButton.Green" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/veshiru_primary_green</item>
+        <item name="rippleColor">@color/veshiru_inversePrimary_green</item>
     </style>
 
     <!-- Yellow theme dialog -->
-    <style name="LichiiMaterialDialog.Yellow" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="colorPrimary">@color/lichii_primaryContainer_yellow</item>
-        <item name="colorSurface">@color/lichii_primaryContainer_yellow</item>
-        <item name="colorSecondary">@color/lichii_primary_yellow</item>
-        <item name="android:textColorLink">@color/lichii_primary_yellow</item>
-        <item name="buttonBarPositiveButtonStyle">@style/LichiiButton.Yellow</item>
-        <item name="buttonBarNegativeButtonStyle">@style/LichiiButton.Yellow</item>
-        <item name="buttonBarNeutralButtonStyle">@style/LichiiButton.Yellow</item>
+    <style name="VeshiruMaterialDialog.Yellow" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/veshiru_primaryContainer_yellow</item>
+        <item name="colorSurface">@color/veshiru_primaryContainer_yellow</item>
+        <item name="colorSecondary">@color/veshiru_primary_yellow</item>
+        <item name="android:textColorLink">@color/veshiru_primary_yellow</item>
+        <item name="buttonBarPositiveButtonStyle">@style/VeshiruButton.Yellow</item>
+        <item name="buttonBarNegativeButtonStyle">@style/VeshiruButton.Yellow</item>
+        <item name="buttonBarNeutralButtonStyle">@style/VeshiruButton.Yellow</item>
     </style>
 
-    <style name="LichiiButton.Yellow" parent="Widget.Material3.Button.TextButton.Dialog">
-        <item name="android:textColor">@color/lichii_primary_yellow</item>
-        <item name="rippleColor">@color/lichii_inversePrimary_yellow</item>
+    <style name="VeshiruButton.Yellow" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/veshiru_primary_yellow</item>
+        <item name="rippleColor">@color/veshiru_inversePrimary_yellow</item>
     </style>
 
     <!-- Orange theme dialog -->
-    <style name="LichiiMaterialDialog.Orange" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="colorPrimary">@color/lichii_primaryContainer_orange</item>
-        <item name="colorSurface">@color/lichii_primaryContainer_orange</item>
-        <item name="colorSecondary">@color/lichii_primary_orange</item>
-        <item name="android:textColorLink">@color/lichii_primary_orange</item>
-        <item name="buttonBarPositiveButtonStyle">@style/LichiiButton.Orange</item>
-        <item name="buttonBarNegativeButtonStyle">@style/LichiiButton.Orange</item>
-        <item name="buttonBarNeutralButtonStyle">@style/LichiiButton.Orange</item>
+    <style name="VeshiruMaterialDialog.Orange" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/veshiru_primaryContainer_orange</item>
+        <item name="colorSurface">@color/veshiru_primaryContainer_orange</item>
+        <item name="colorSecondary">@color/veshiru_primary_orange</item>
+        <item name="android:textColorLink">@color/veshiru_primary_orange</item>
+        <item name="buttonBarPositiveButtonStyle">@style/VeshiruButton.Orange</item>
+        <item name="buttonBarNegativeButtonStyle">@style/VeshiruButton.Orange</item>
+        <item name="buttonBarNeutralButtonStyle">@style/VeshiruButton.Orange</item>
     </style>
 
-    <style name="LichiiButton.Orange" parent="Widget.Material3.Button.TextButton.Dialog">
-        <item name="android:textColor">@color/lichii_primary_orange</item>
-        <item name="rippleColor">@color/lichii_inversePrimary_orange</item>
+    <style name="VeshiruButton.Orange" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/veshiru_primary_orange</item>
+        <item name="rippleColor">@color/veshiru_inversePrimary_orange</item>
     </style>
 
     <!-- Violet theme dialog -->
-    <style name="LichiiMaterialDialog.Violet" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="colorPrimary">@color/lichii_primaryContainer_violet</item>
-        <item name="colorSurface">@color/lichii_primaryContainer_violet</item>
-        <item name="colorSecondary">@color/lichii_primary_violet</item>
-        <item name="android:textColorLink">@color/lichii_primary_violet</item>
-        <item name="buttonBarPositiveButtonStyle">@style/LichiiButton.Violet</item>
-        <item name="buttonBarNegativeButtonStyle">@style/LichiiButton.Violet</item>
-        <item name="buttonBarNeutralButtonStyle">@style/LichiiButton.Violet</item>
+    <style name="VeshiruMaterialDialog.Violet" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/veshiru_primaryContainer_violet</item>
+        <item name="colorSurface">@color/veshiru_primaryContainer_violet</item>
+        <item name="colorSecondary">@color/veshiru_primary_violet</item>
+        <item name="android:textColorLink">@color/veshiru_primary_violet</item>
+        <item name="buttonBarPositiveButtonStyle">@style/VeshiruButton.Violet</item>
+        <item name="buttonBarNegativeButtonStyle">@style/VeshiruButton.Violet</item>
+        <item name="buttonBarNeutralButtonStyle">@style/VeshiruButton.Violet</item>
     </style>
 
-    <style name="LichiiButton.Violet" parent="Widget.Material3.Button.TextButton.Dialog">
-        <item name="android:textColor">@color/lichii_primary_violet</item>
-        <item name="rippleColor">@color/lichii_inversePrimary_violet</item>
+    <style name="VeshiruButton.Violet" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/veshiru_primary_violet</item>
+        <item name="rippleColor">@color/veshiru_inversePrimary_violet</item>
     </style>
 
     <!-- Gray theme dialog -->
-    <style name="LichiiMaterialDialog.Gray" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="colorPrimary">@color/lichii_primaryContainer_gray</item>
-        <item name="colorSurface">@color/lichii_primaryContainer_gray</item>
-        <item name="colorSecondary">@color/lichii_primary_gray</item>
-        <item name="android:textColorLink">@color/lichii_primary_gray</item>
-        <item name="buttonBarPositiveButtonStyle">@style/LichiiButton.Gray</item>
-        <item name="buttonBarNegativeButtonStyle">@style/LichiiButton.Gray</item>
-        <item name="buttonBarNeutralButtonStyle">@style/LichiiButton.Gray</item>
+    <style name="VeshiruMaterialDialog.Gray" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/veshiru_primaryContainer_gray</item>
+        <item name="colorSurface">@color/veshiru_primaryContainer_gray</item>
+        <item name="colorSecondary">@color/veshiru_primary_gray</item>
+        <item name="android:textColorLink">@color/veshiru_primary_gray</item>
+        <item name="buttonBarPositiveButtonStyle">@style/VeshiruButton.Gray</item>
+        <item name="buttonBarNegativeButtonStyle">@style/VeshiruButton.Gray</item>
+        <item name="buttonBarNeutralButtonStyle">@style/VeshiruButton.Gray</item>
     </style>
 
-    <style name="LichiiButton.Gray" parent="Widget.Material3.Button.TextButton.Dialog">
-        <item name="android:textColor">@color/lichii_primary_gray</item>
-        <item name="rippleColor">@color/lichii_inversePrimary_gray</item>
+    <style name="VeshiruButton.Gray" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/veshiru_primary_gray</item>
+        <item name="rippleColor">@color/veshiru_inversePrimary_gray</item>
     </style>
 
     <!-- pink theme dialog -->
-    <style name="LichiiMaterialDialog.PINK" parent="ThemeOverlay.Material3.MaterialAlertDialog">
-        <item name="colorPrimary">@color/lichii_primaryContainer_pink</item>
-        <item name="colorSurface">@color/lichii_primaryContainer_pink</item>
-        <item name="colorSecondary">@color/lichii_primary_pink</item>
-        <item name="android:textColorLink">@color/lichii_primary_pink</item>
-        <item name="buttonBarPositiveButtonStyle">@style/LichiiButton.Pink</item>
-        <item name="buttonBarNegativeButtonStyle">@style/LichiiButton.Pink</item>
-        <item name="buttonBarNeutralButtonStyle">@style/LichiiButton.Pink</item>
+    <style name="VeshiruMaterialDialog.PINK" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/veshiru_primaryContainer_pink</item>
+        <item name="colorSurface">@color/veshiru_primaryContainer_pink</item>
+        <item name="colorSecondary">@color/veshiru_primary_pink</item>
+        <item name="android:textColorLink">@color/veshiru_primary_pink</item>
+        <item name="buttonBarPositiveButtonStyle">@style/VeshiruButton.Pink</item>
+        <item name="buttonBarNegativeButtonStyle">@style/VeshiruButton.Pink</item>
+        <item name="buttonBarNeutralButtonStyle">@style/VeshiruButton.Pink</item>
     </style>
 
-    <style name="LichiiButton.Pink" parent="Widget.Material3.Button.TextButton.Dialog">
-        <item name="android:textColor">@color/lichii_primary_pink</item>
-        <item name="rippleColor">@color/lichii_inversePrimary_pink</item>
+    <style name="VeshiruButton.Pink" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/veshiru_primary_pink</item>
+        <item name="rippleColor">@color/veshiru_inversePrimary_pink</item>
     </style>
 
     <!-- Eden theme styles -->
@@ -210,7 +210,7 @@
     <style name="EdenPopupMenu" parent="Widget.Material3.PopupMenu">
         <item name="android:popupBackground">@drawable/popup_menu_background</item>
     </style>
-    <style name="LichiiPopupMenu" parent="Widget.Material3.PopupMenu">
+    <style name="VeshiruPopupMenu" parent="Widget.Material3.PopupMenu">
         <item name="android:popupBackground">@drawable/popup_menu_background</item>
     </style>
 

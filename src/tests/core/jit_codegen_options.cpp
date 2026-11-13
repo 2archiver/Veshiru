@@ -273,7 +273,7 @@ TEST_CASE("JIT codegen options: random blocks", "[jit_codegen_options]") {
 namespace {
 
 constexpr const char* FaultTestName = "JIT codegen options: fastmem faults";
-constexpr const char* FaultChildVariable = "LICHII_JIT_FAULT_TEST_CHILD";
+constexpr const char* FaultChildVariable = "VESHIRU_JIT_FAULT_TEST_CHILD";
 
 constexpr u32 LdrX(u32 rt, u32 rn, u32 imm) { return 0xF9400000 | (imm / 8) << 10 | rn << 5 | rt; }
 constexpr u32 LdrW(u32 rt, u32 rn, u32 imm) { return 0xB9400000 | (imm / 4) << 10 | rn << 5 | rt; }

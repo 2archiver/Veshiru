@@ -24,11 +24,11 @@ using namespace Common::FS::ProfileMigration;
 
 struct Fixture {
     fs::path base = fs::temp_directory_path() /
-                    ("lichii-migration-test-" +
+                    ("veshiru-migration-test-" +
                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::path source = base / "eden";
-    fs::path destination = base / "lichii";
-    fs::path state = base / "lichii.migration";
+    fs::path destination = base / "veshiru";
+    fs::path state = base / "veshiru.migration";
 
     Fixture() {
         fs::create_directories(source);
@@ -61,7 +61,7 @@ std::vector<fs::path> Backups(const fs::path& root) {
     std::vector<fs::path> paths;
     for (const auto& item : fs::directory_iterator(root.parent_path())) {
         const auto name = item.path().filename().string();
-        if (name.starts_with(root.filename().string() + ".lichii-import-") &&
+        if (name.starts_with(root.filename().string() + ".veshiru-import-") &&
             name.ends_with(".backup")) {
             paths.push_back(item.path());
         }
@@ -87,7 +87,7 @@ TEST_CASE("Copy verifies and stages every root before preparing or publishing",
           "[profile_migration]") {
     Fixture f;
     const auto cache = f.base / "eden-cache";
-    const auto new_cache = f.base / "lichii-cache";
+    const auto new_cache = f.base / "veshiru-cache";
     Write(f.source / "config/settings.ini", "old paths");
     Write(cache / "shader/blob", std::string(140000, 'x'));
     fs::create_directories(f.source / "empty");
@@ -132,7 +132,7 @@ TEST_CASE("Interrupted multi-root publication remains pending and retries safely
           "[profile_migration]") {
     Fixture f;
     const auto cache = f.base / "eden-cache";
-    const auto new_cache = f.base / "lichii-cache";
+    const auto new_cache = f.base / "veshiru-cache";
     Write(f.source / "save", "legacy");
     Write(f.destination / "save", "existing");
     Write(cache / "blob", "cache");
@@ -235,7 +235,7 @@ TEST_CASE("Every multi-root publication cutpoint can recover after process exit"
         CAPTURE(cut);
         Fixture f;
         const auto cache = f.base / "eden-cache";
-        const auto new_cache = f.base / "lichii-cache";
+        const auto new_cache = f.base / "veshiru-cache";
         Write(f.source / "save", "legacy");
         Write(f.destination / "save", "existing");
         Write(cache / "blob", "old cache");
@@ -263,7 +263,7 @@ TEST_CASE("Every multi-root publication cutpoint can recover after process exit"
         for (const auto& root : plan.roots) {
             for (const auto& item : fs::directory_iterator(f.base)) {
                 const auto name = item.path().filename().string();
-                if (name.starts_with(root.destination.filename().string() + ".lichii-import-") &&
+                if (name.starts_with(root.destination.filename().string() + ".veshiru-import-") &&
                     name.ends_with(".stage")) {
                     stages.push_back(item.path());
                     auto backup = item.path();
@@ -307,7 +307,7 @@ TEST_CASE("Every multi-root publication cutpoint can recover after process exit"
 TEST_CASE("A failed second link removes only this attempt's staged links", "[profile_migration]") {
     Fixture f;
     const auto cache = f.base / "eden-cache";
-    const auto new_cache = f.base / "lichii-cache";
+    const auto new_cache = f.base / "veshiru-cache";
     Write(f.source / "save", "legacy");
     Write(f.destination / "save", "existing");
     Write(cache / "blob", "cache");

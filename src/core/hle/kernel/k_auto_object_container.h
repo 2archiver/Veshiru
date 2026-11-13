@@ -15,8 +15,8 @@ class KProcess;
 
 class KAutoObjectWithListContainer {
 public:
-    LICHII_NON_COPYABLE(KAutoObjectWithListContainer);
-    LICHII_NON_MOVEABLE(KAutoObjectWithListContainer);
+    VESHIRU_NON_COPYABLE(KAutoObjectWithListContainer);
+    VESHIRU_NON_MOVEABLE(KAutoObjectWithListContainer);
 
     using ListType = boost::intrusive::rbtree<KAutoObjectWithList>;
 

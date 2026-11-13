@@ -27,8 +27,8 @@ public:
     explicit HIDCore(Kernel::KernelCore& kernel);
     ~HIDCore();
 
-    LICHII_NON_COPYABLE(HIDCore);
-    LICHII_NON_MOVEABLE(HIDCore);
+    VESHIRU_NON_COPYABLE(HIDCore);
+    VESHIRU_NON_MOVEABLE(HIDCore);
 
     EmulatedController* GetEmulatedController(NpadIdType npad_id_type);
     const EmulatedController* GetEmulatedController(NpadIdType npad_id_type) const;

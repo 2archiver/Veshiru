@@ -79,11 +79,11 @@ struct Memory::Impl {
     void MapMemoryRegion(Common::PageTable& page_table, Common::ProcessAddress base, u64 size,
                          Common::PhysicalAddress target, Common::MemoryPermission perms,
                          bool separate_heap) {
-        ASSERT_MSG((size & LICHII_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
-        ASSERT_MSG((base & LICHII_PAGEMASK) == 0, "non-page aligned base: {:016X}", GetInteger(base));
+        ASSERT_MSG((size & VESHIRU_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
+        ASSERT_MSG((base & VESHIRU_PAGEMASK) == 0, "non-page aligned base: {:016X}", GetInteger(base));
         ASSERT_MSG(target >= DramMemoryMap::Base, "Out of bounds target: {:016X}",
                    GetInteger(target));
-        MapPages(page_table, base / LICHII_PAGESIZE, size / LICHII_PAGESIZE, target,
+        MapPages(page_table, base / VESHIRU_PAGESIZE, size / VESHIRU_PAGESIZE, target,
                  Common::PageType::Memory);
 
         if (current_page_table->fastmem_arena) {
@@ -93,9 +93,9 @@ struct Memory::Impl {
 
     void UnmapRegion(Common::PageTable& page_table, Common::ProcessAddress base, u64 size,
                      bool separate_heap) {
-        ASSERT_MSG((size & LICHII_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
-        ASSERT_MSG((base & LICHII_PAGEMASK) == 0, "non-page aligned base: {:016X}", GetInteger(base));
-        MapPages(page_table, base / LICHII_PAGESIZE, size / LICHII_PAGESIZE, 0,
+        ASSERT_MSG((size & VESHIRU_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
+        ASSERT_MSG((base & VESHIRU_PAGEMASK) == 0, "non-page aligned base: {:016X}", GetInteger(base));
+        MapPages(page_table, base / VESHIRU_PAGESIZE, size / VESHIRU_PAGESIZE, 0,
                  Common::PageType::Unmapped);
 
         if (current_page_table->fastmem_arena) {
@@ -105,8 +105,8 @@ struct Memory::Impl {
 
     void ProtectRegion(Common::PageTable& page_table, VAddr vaddr, u64 size,
                        Common::MemoryPermission perms) {
-        ASSERT_MSG((size & LICHII_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
-        ASSERT_MSG((vaddr & LICHII_PAGEMASK) == 0, "non-page aligned base: {:016X}", vaddr);
+        ASSERT_MSG((size & VESHIRU_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
+        ASSERT_MSG((vaddr & VESHIRU_PAGEMASK) == 0, "non-page aligned base: {:016X}", vaddr);
 
         if (!current_page_table->fastmem_arena) {
             return;
@@ -114,9 +114,9 @@ struct Memory::Impl {
 
         u64 protect_bytes = 0, protect_begin = 0;
 
-        current_page_table->entries.CommitRegion(vaddr >> LICHII_PAGEBITS, (vaddr + size) >> LICHII_PAGEBITS);
-        for (u64 addr = vaddr; addr < vaddr + size; addr += LICHII_PAGESIZE) {
-            const Common::PageType page_type = current_page_table->entries.GetUnchecked(addr >> LICHII_PAGEBITS).Type();
+        current_page_table->entries.CommitRegion(vaddr >> VESHIRU_PAGEBITS, (vaddr + size) >> VESHIRU_PAGEBITS);
+        for (u64 addr = vaddr; addr < vaddr + size; addr += VESHIRU_PAGESIZE) {
+            const Common::PageType page_type = current_page_table->entries.GetUnchecked(addr >> VESHIRU_PAGEBITS).Type();
             switch (page_type) {
             case Common::PageType::RasterizerCachedMemory:
                 if (protect_bytes > 0) {
@@ -127,7 +127,7 @@ struct Memory::Impl {
             default:
                 if (protect_bytes == 0)
                     protect_begin = addr;
-                protect_bytes += LICHII_PAGESIZE;
+                protect_bytes += VESHIRU_PAGESIZE;
             }
         }
 
@@ -137,13 +137,13 @@ struct Memory::Impl {
     }
 
     [[nodiscard]] u8* GetPointerFromRasterizerCachedMemory(u64 vaddr) const {
-        if (u64 paddr = current_page_table->entries[vaddr >> LICHII_PAGEBITS].Pointer(true); paddr)
+        if (u64 paddr = current_page_table->entries[vaddr >> VESHIRU_PAGEBITS].Pointer(true); paddr)
             return reinterpret_cast<u8*>(paddr) + vaddr;
         return {};
     }
 
     [[nodiscard]] u8* GetPointerFromDebugMemory(u64 vaddr) const {
-        if (u64 paddr = current_page_table->entries[vaddr >> LICHII_PAGEBITS].Pointer(true); paddr)
+        if (u64 paddr = current_page_table->entries[vaddr >> VESHIRU_PAGEBITS].Pointer(true); paddr)
             return reinterpret_cast<u8*>(paddr) + vaddr;
         return {};
     }
@@ -270,14 +270,14 @@ struct Memory::Impl {
             return false;
         }
         std::size_t remaining_size = size;
-        std::size_t page_index = addr >> LICHII_PAGEBITS;
-        std::size_t page_offset = addr & LICHII_PAGEMASK;
+        std::size_t page_index = addr >> VESHIRU_PAGEBITS;
+        std::size_t page_offset = addr & VESHIRU_PAGEMASK;
         bool user_accessible = true;
 
-        current_page_table->entries.CommitRegion(page_index, page_index + (size >> LICHII_PAGEBITS) + 1);
+        current_page_table->entries.CommitRegion(page_index, page_index + (size >> VESHIRU_PAGEBITS) + 1);
         while (remaining_size != 0) {
-            const std::size_t copy_amount = (std::min)(std::size_t(LICHII_PAGESIZE) - page_offset, remaining_size);
-            const auto current_vaddr = u64((page_index << LICHII_PAGEBITS) + page_offset);
+            const std::size_t copy_amount = (std::min)(std::size_t(VESHIRU_PAGESIZE) - page_offset, remaining_size);
+            const auto current_vaddr = u64((page_index << VESHIRU_PAGEBITS) + page_offset);
             const auto [pointer, type, _] = current_page_table->entries.GetUnchecked(page_index).PointerTypeBlock();
             switch (type) {
             case Common::PageType::Unmapped: {
@@ -286,7 +286,7 @@ struct Memory::Impl {
                 break;
             }
             case Common::PageType::Memory: {
-                u8* mem_ptr = reinterpret_cast<u8*>(pointer + page_offset + (page_index << LICHII_PAGEBITS));
+                u8* mem_ptr = reinterpret_cast<u8*>(pointer + page_offset + (page_index << VESHIRU_PAGEBITS));
                 on_memory(offset, copy_amount, mem_ptr);
                 break;
             }
@@ -329,8 +329,8 @@ struct Memory::Impl {
     }
 
     [[nodiscard]] inline const u8* GetSpan(const VAddr addr, const std::size_t size) const noexcept {
-        const auto first = current_page_table->entries[addr >> LICHII_PAGEBITS].Block();
-        const auto last = current_page_table->entries[(addr + size) >> LICHII_PAGEBITS].Block();
+        const auto first = current_page_table->entries[addr >> VESHIRU_PAGEBITS].Block();
+        const auto last = current_page_table->entries[(addr + size) >> VESHIRU_PAGEBITS].Block();
         if (Common::PageTable::PageEntryData::CanFastSpan(first, last)) {
             return GetPointerSilent(addr);
         }
@@ -341,8 +341,8 @@ struct Memory::Impl {
         return GetContiguousSpan(addr, size);
     }
     [[nodiscard]] inline u8* GetSpan(const VAddr addr, const std::size_t size) noexcept {
-        const auto first = current_page_table->entries[addr >> LICHII_PAGEBITS].Block();
-        const auto last = current_page_table->entries[(addr + size) >> LICHII_PAGEBITS].Block();
+        const auto first = current_page_table->entries[addr >> VESHIRU_PAGEBITS].Block();
+        const auto last = current_page_table->entries[(addr + size) >> VESHIRU_PAGEBITS].Block();
         if (Common::PageTable::PageEntryData::CanFastSpan(first, last)) {
             return GetPointerSilent(addr);
         }
@@ -453,11 +453,11 @@ struct Memory::Impl {
         // Iterate over a contiguous CPU address space, marking/unmarking the region.
         // The region is at a granularity of CPU pages.
 
-        const u64 num_pages = ((vaddr + size - 1) >> LICHII_PAGEBITS) - (vaddr >> LICHII_PAGEBITS) + 1;
+        const u64 num_pages = ((vaddr + size - 1) >> VESHIRU_PAGEBITS) - (vaddr >> VESHIRU_PAGEBITS) + 1;
 
-        current_page_table->entries.CommitRegion(vaddr >> LICHII_PAGEBITS, (vaddr >> LICHII_PAGEBITS) + num_pages);
-        for (u64 i = 0; i < num_pages; ++i, vaddr += LICHII_PAGESIZE) {
-            auto& entry = current_page_table->entries.GetUnchecked(vaddr >> LICHII_PAGEBITS);
+        current_page_table->entries.CommitRegion(vaddr >> VESHIRU_PAGEBITS, (vaddr >> VESHIRU_PAGEBITS) + num_pages);
+        for (u64 i = 0; i < num_pages; ++i, vaddr += VESHIRU_PAGESIZE) {
+            auto& entry = current_page_table->entries.GetUnchecked(vaddr >> VESHIRU_PAGEBITS);
             const auto [pointer, type, block] = entry.PointerTypeBlock(true);
             if (debug) {
                 // Switch page type to debug if now debug
@@ -529,10 +529,10 @@ struct Memory::Impl {
         // granularity of CPU pages, hence why we iterate on a CPU page basis (note: GPU page size
         // is different). This assumes the specified GPU address region is contiguous as well.
 
-        const u64 num_pages = ((vaddr + size - 1) >> LICHII_PAGEBITS) - (vaddr >> LICHII_PAGEBITS) + 1;
-        current_page_table->entries.CommitRegion(vaddr >> LICHII_PAGEBITS, (vaddr >> LICHII_PAGEBITS) + num_pages);
-        for (u64 i = 0; i < num_pages; ++i, vaddr += LICHII_PAGESIZE) {
-            auto& entry = current_page_table->entries.GetUnchecked(vaddr >> LICHII_PAGEBITS);
+        const u64 num_pages = ((vaddr + size - 1) >> VESHIRU_PAGEBITS) - (vaddr >> VESHIRU_PAGEBITS) + 1;
+        current_page_table->entries.CommitRegion(vaddr >> VESHIRU_PAGEBITS, (vaddr >> VESHIRU_PAGEBITS) + num_pages);
+        for (u64 i = 0; i < num_pages; ++i, vaddr += VESHIRU_PAGESIZE) {
+            auto& entry = current_page_table->entries.GetUnchecked(vaddr >> VESHIRU_PAGEBITS);
             const Common::PageType page_type = entry.Type();
             if (cached) {
                 // Switch page type to cached if now cached
@@ -603,7 +603,7 @@ struct Memory::Impl {
             !ReadTrapsEnabled()) {
             return;
         }
-        const u64 page_end = ((vaddr + size - 1) >> LICHII_PAGEBITS) + 1;
+        const u64 page_end = ((vaddr + size - 1) >> VESHIRU_PAGEBITS) + 1;
         std::scoped_lock lk{read_trap_mutex};
         u64 run_begin = 0;
         u64 run_pages = 0;
@@ -611,12 +611,12 @@ struct Memory::Impl {
             if (run_pages > 0) {
                 // Reads that hit a cached read area must not skip the flush of a new trap.
                 read_trap_generation.fetch_add(1, std::memory_order_release);
-                host_buffer->Protect(run_begin << LICHII_PAGEBITS, run_pages << LICHII_PAGEBITS,
+                host_buffer->Protect(run_begin << VESHIRU_PAGEBITS, run_pages << VESHIRU_PAGEBITS,
                                      Common::MemoryPermission{});
                 run_pages = 0;
             }
         };
-        for (u64 page = vaddr >> LICHII_PAGEBITS; page != page_end; ++page) {
+        for (u64 page = vaddr >> VESHIRU_PAGEBITS; page != page_end; ++page) {
             const bool cached = std::as_const(current_page_table->entries)[page].Type() ==
                                 Common::PageType::RasterizerCachedMemory;
             armed_read_trap_count.fetch_add(1, std::memory_order_relaxed);
@@ -638,8 +638,8 @@ struct Memory::Impl {
             return false;
         }
         std::scoped_lock lk{read_trap_mutex};
-        const auto it = armed_read_traps.lower_bound(vaddr >> LICHII_PAGEBITS);
-        return it != armed_read_traps.end() && *it <= ((vaddr + size - 1) >> LICHII_PAGEBITS);
+        const auto it = armed_read_traps.lower_bound(vaddr >> VESHIRU_PAGEBITS);
+        return it != armed_read_traps.end() && *it <= ((vaddr + size - 1) >> VESHIRU_PAGEBITS);
     }
 
     /// Takes read permission away again from armed pages that were just cached again.
@@ -648,10 +648,10 @@ struct Memory::Impl {
             return;
         }
         std::scoped_lock lk{read_trap_mutex};
-        const u64 page_end = ((vaddr + size - 1) >> LICHII_PAGEBITS) + 1;
-        for (auto it = armed_read_traps.lower_bound(vaddr >> LICHII_PAGEBITS);
+        const u64 page_end = ((vaddr + size - 1) >> VESHIRU_PAGEBITS) + 1;
+        for (auto it = armed_read_traps.lower_bound(vaddr >> VESHIRU_PAGEBITS);
              it != armed_read_traps.end() && *it < page_end; ++it) {
-            host_buffer->Protect(*it << LICHII_PAGEBITS, LICHII_PAGESIZE, Common::MemoryPermission{});
+            host_buffer->Protect(*it << VESHIRU_PAGEBITS, VESHIRU_PAGESIZE, Common::MemoryPermission{});
         }
     }
 
@@ -661,11 +661,11 @@ struct Memory::Impl {
             return;
         }
         std::scoped_lock lk{read_trap_mutex};
-        const u64 page_end = ((vaddr + size - 1) >> LICHII_PAGEBITS) + 1;
-        auto it = armed_read_traps.lower_bound(vaddr >> LICHII_PAGEBITS);
+        const u64 page_end = ((vaddr + size - 1) >> VESHIRU_PAGEBITS) + 1;
+        auto it = armed_read_traps.lower_bound(vaddr >> VESHIRU_PAGEBITS);
         while (it != armed_read_traps.end() && *it < page_end) {
             // Still cached (this read came through the rasterizer path): writes stay trapped.
-            host_buffer->Protect(*it << LICHII_PAGEBITS, LICHII_PAGESIZE,
+            host_buffer->Protect(*it << VESHIRU_PAGEBITS, VESHIRU_PAGESIZE,
                                  Common::MemoryPermission::Read);
             it = armed_read_traps.erase(it);
             armed_read_trap_count.fetch_sub(1, std::memory_order_relaxed);
@@ -686,14 +686,14 @@ struct Memory::Impl {
         auto base = GetInteger(base_address);
 
         LOG_DEBUG(HW_Memory, "Mapping {:016X} onto {:016X}-{:016X}", GetInteger(target),
-                  base * LICHII_PAGESIZE, (base + size) * LICHII_PAGESIZE);
+                  base * VESHIRU_PAGESIZE, (base + size) * VESHIRU_PAGESIZE);
 
         const auto end = base + size;
         ASSERT_MSG(end <= page_table.entries.size(), "out of range mapping at {:016X}", base + page_table.entries.size());
 
         if (!target) {
             ASSERT_MSG(type != Common::PageType::Memory,
-                       "Mapping memory page without a pointer @ {:016x}", base * LICHII_PAGESIZE);
+                       "Mapping memory page without a pointer @ {:016x}", base * VESHIRU_PAGESIZE);
 
             page_table.entries.ZeroRegion(base, end);
         } else {
@@ -713,7 +713,7 @@ struct Memory::Impl {
 
             page_table.entries.CommitRegion(base, end);
             while (base != end) {
-                auto host_ptr = reinterpret_cast<u64>(system.DeviceMemory().GetPointer<u8>(target)) - (base << LICHII_PAGEBITS);;
+                auto host_ptr = reinterpret_cast<u64>(system.DeviceMemory().GetPointer<u8>(target)) - (base << VESHIRU_PAGEBITS);;
                 auto& entry = page_table.entries.GetUnchecked(base);
 
                 entry.Store(false, type, current_block, host_ptr);
@@ -721,7 +721,7 @@ struct Memory::Impl {
                            "memory mapping base yield a nullptr within the table");
 
                 base += 1;
-                target += LICHII_PAGESIZE;
+                target += VESHIRU_PAGESIZE;
             }
         }
     }
@@ -732,7 +732,7 @@ struct Memory::Impl {
         vaddr &= 0xffffffffffffULL;
         if (AddressSpaceContains(*current_page_table, vaddr, 1)) [[likely]] {
             // Avoid adding any extra logic to this fast-path block
-            const auto raw = current_page_table->entries[vaddr >> LICHII_PAGEBITS].Raw();
+            const auto raw = current_page_table->entries[vaddr >> VESHIRU_PAGEBITS].Raw();
             if (auto pointer = Common::PageTable::PageEntryData::ExtractPointer(raw); pointer) [[likely]] {
                 return reinterpret_cast<u8*>(pointer + vaddr);
             } else {
@@ -783,9 +783,9 @@ struct Memory::Impl {
         }
 
         const VAddr end = addr + size;
-        const VAddr first_page = ((addr >> LICHII_PAGEBITS) + 1) << LICHII_PAGEBITS;
+        const VAddr first_page = ((addr >> VESHIRU_PAGEBITS) + 1) << VESHIRU_PAGEBITS;
         const std::uintptr_t base_ptr = reinterpret_cast<std::uintptr_t>(base);
-        for (VAddr page = first_page; page < end; page += LICHII_PAGESIZE) {
+        for (VAddr page = first_page; page < end; page += VESHIRU_PAGESIZE) {
             const std::uintptr_t expected = base_ptr + (page - addr);
             if (reinterpret_cast<std::uintptr_t>(GetPointerSilent(page)) != expected) {
                 return nullptr;
@@ -873,7 +873,7 @@ struct Memory::Impl {
             return;
         }
         const auto raw =
-            current_page_table->entries[(v_address & 0xffffffffffffULL) >> LICHII_PAGEBITS].Raw();
+            current_page_table->entries[(v_address & 0xffffffffffffULL) >> VESHIRU_PAGEBITS].Raw();
         LOG_ERROR(HW_Memory,
                   "Rasterizer access at {:#x}: host pointer {} is outside the emulated physical "
                   "memory at {} (page type {}, block {})",
@@ -973,7 +973,7 @@ struct Memory::Impl {
         };
         gpu_device_memory->ApplyOpOnPointer(p, scratch_buffers[core], [&](DAddr address) {
             auto& current_area = rasterizer_write_areas[core];
-            PAddr subaddress = address >> LICHII_PAGEBITS;
+            PAddr subaddress = address >> VESHIRU_PAGEBITS;
             // Performance note:
             // It may not be a good idea to assume accesses are within the same subaddress (i.e same page)
             // It is often the case the games like to access wildly different addresses. Hence why I propose
@@ -1075,7 +1075,7 @@ void Memory::ProtectRegion(Common::PageTable& page_table, Common::ProcessAddress
 
 bool Memory::IsValidVirtualAddress(const Common::ProcessAddress vaddr) const {
     const auto& page_table = *impl->current_page_table;
-    const size_t page = vaddr >> LICHII_PAGEBITS;
+    const size_t page = vaddr >> VESHIRU_PAGEBITS;
     if (page >= page_table.entries.size()) {
         return false;
     }
@@ -1089,9 +1089,9 @@ bool Memory::IsValidVirtualAddressRange(Common::ProcessAddress base, u64 size) c
     if (end < base) {
         return false;
     }
-    Common::ProcessAddress page = Common::AlignDown(GetInteger(base), LICHII_PAGESIZE);
+    Common::ProcessAddress page = Common::AlignDown(GetInteger(base), VESHIRU_PAGESIZE);
 
-    for (; page < end; page += LICHII_PAGESIZE) {
+    for (; page < end; page += VESHIRU_PAGESIZE) {
         if (!IsValidVirtualAddress(page)) {
             return false;
         }

@@ -177,7 +177,7 @@ public:
                                const VfsCopyFunction& copy = &VfsRawCopy);
 
     // Due to the fact that we must use Meta-type NCAs to determine the existence of files, this
-    // poses quite a challenge. Instead of creating a new meta NCA for this file, Lichii will create a
+    // poses quite a challenge. Instead of creating a new meta NCA for this file, Veshiru will create a
     // dir inside the NAND called 'yuzu_meta' and store the raw CNMT there.
     // TODO(DarkLordZach): Author real meta-type NCAs and install those.
     InstallResult InstallEntry(const NCA& nca, TitleType type, bool overwrite_if_exists = false,

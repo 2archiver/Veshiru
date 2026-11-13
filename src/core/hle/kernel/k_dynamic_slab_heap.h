@@ -12,8 +12,8 @@ namespace Kernel {
 
 template <typename T, bool ClearNode = false>
 class KDynamicSlabHeap : protected impl::KSlabHeapImpl {
-    LICHII_NON_COPYABLE(KDynamicSlabHeap);
-    LICHII_NON_MOVEABLE(KDynamicSlabHeap);
+    VESHIRU_NON_COPYABLE(KDynamicSlabHeap);
+    VESHIRU_NON_MOVEABLE(KDynamicSlabHeap);
 
 public:
     constexpr KDynamicSlabHeap() = default;

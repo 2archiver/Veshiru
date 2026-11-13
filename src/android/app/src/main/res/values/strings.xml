@@ -419,8 +419,8 @@
     <string name="install_game_content_success_overwrite">%1$d overwritten successfully</string>
     <string name="custom_driver_not_supported">Custom drivers not supported</string>
     <string name="custom_driver_not_supported_description">Custom driver loading isn\'t currently supported for this device.\nCheck this option again in the future to see if support was added!</string>
-    <string name="manage_lichii_data">Manage Eden data</string>
-    <string name="manage_lichii_data_description">Import/export firmware, keys, user data, and more!</string>
+    <string name="manage_veshiru_data">Manage Eden data</string>
+    <string name="manage_veshiru_data_description">Import/export firmware, keys, user data, and more!</string>
     <string name="game_folders">Game folders</string>
     <string name="deep_scan">Deep scan</string>
     <string name="add_game_folder">Add game folder</string>
@@ -486,7 +486,7 @@
     <string name="user_data_description">Import/export all app data.\n\nWhen importing user data, all existing user data will be deleted!\n\nImporting data from Citron may cause issues. It\'s recommended to manually import all needed data.</string>
     <string name="exporting_user_data">Exporting user data…</string>
     <string name="importing_user_data">Importing user data…</string>
-    <string name="invalid_lichii_backup">Invalid Eden backup</string>
+    <string name="invalid_veshiru_backup">Invalid Eden backup</string>
     <string name="user_data_export_success">User data exported successfully</string>
     <string name="user_data_import_success">User data imported successfully</string>
     <string name="user_data_export_cancelled">Export cancelled</string>
@@ -941,7 +941,7 @@
     <string name="loader_error_encrypted_keys_description"><![CDATA[Please ensure your prod.keys file is installed so that games can be decrypted.]]></string>
     <string name="loader_error_video_core">An error occurred initializing the video core</string>
     <string name="loader_error_memory">Not enough memory to start the game</string>
-    <string name="loader_error_memory_description">Lichii could not allocate the game\'s memory. Close other applications to free memory, then try again.</string>
+    <string name="loader_error_memory_description">Veshiru could not allocate the game\'s memory. Close other applications to free memory, then try again.</string>
     <string name="loader_error_video_core_description">This is usually caused by an incompatible GPU driver. Installing a custom GPU driver may resolve this problem.</string>
     <string name="loader_error_file_not_found">ROM file does not exist</string>
 

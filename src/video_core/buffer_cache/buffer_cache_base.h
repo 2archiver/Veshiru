@@ -195,7 +195,7 @@ class BufferCache : public VideoCommon::ChannelSetupCaches<BufferCacheChannelInf
     friend struct BufferCacheTestAccess;
     // Page size for caching purposes.
     // This is unrelated to the CPU page size and it can be changed as it seems optimal.
-#ifdef LICHII_LEGACY
+#ifdef VESHIRU_LEGACY
     static constexpr u32 CACHING_PAGEBITS = 12;
 #else
     static constexpr u32 CACHING_PAGEBITS = 16;
@@ -213,7 +213,7 @@ class BufferCache : public VideoCommon::ChannelSetupCaches<BufferCacheChannelInf
     static constexpr bool SEPARATE_IMAGE_BUFFERS_BINDINGS = P::SEPARATE_IMAGE_BUFFER_BINDINGS;
     static constexpr bool USE_MEMORY_MAPS_FOR_UPLOADS = P::USE_MEMORY_MAPS_FOR_UPLOADS;
 
-#ifdef LICHII_LEGACY
+#ifdef VESHIRU_LEGACY
     static constexpr s64 TARGET_THRESHOLD = 3_GiB;
 #else
     static constexpr s64 TARGET_THRESHOLD = 4_GiB;
@@ -818,7 +818,7 @@ private:
     Tegra::MaxwellDeviceMemoryManager& device_memory;
 
     Common::SlotVector<Buffer> slot_buffers;
-#ifdef LICHII_LEGACY
+#ifdef VESHIRU_LEGACY
     static constexpr size_t TICKS_TO_DESTROY = 6;
 #else
     static constexpr size_t TICKS_TO_DESTROY = 8;
@@ -1200,7 +1200,7 @@ private:
     u64 minimum_memory = 0;
     u64 critical_memory = 0;
     BufferId inline_buffer_id;
-#ifdef LICHII_LEGACY
+#ifdef VESHIRU_LEGACY
     bool immediately_free = false;
 #endif
 

@@ -752,25 +752,25 @@ jint InitFFmpegOnLoad(JavaVM* vm) {
 
 extern "C" {
 
-void Java_io_github_zortos293_lichii_NativeLibrary_surfaceChanged(JNIEnv* env, jobject instance,
+void Java_dev_veshiru_emulator_NativeLibrary_surfaceChanged(JNIEnv* env, jobject instance,
                                                           [[maybe_unused]] jobject surf) {
     EmulationSession::GetInstance().SetNativeWindow(ANativeWindow_fromSurface(env, surf));
     EmulationSession::GetInstance().SurfaceChanged();
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_surfaceDestroyed(JNIEnv* env, jobject instance) {
+void Java_dev_veshiru_emulator_NativeLibrary_surfaceDestroyed(JNIEnv* env, jobject instance) {
     if (auto* native_window = EmulationSession::GetInstance().NativeWindow(); native_window) {
         ANativeWindow_release(native_window);
     }
     EmulationSession::GetInstance().SetNativeWindow(nullptr);
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_setAppDirectory(JNIEnv* env, jobject instance,
+void Java_dev_veshiru_emulator_NativeLibrary_setAppDirectory(JNIEnv* env, jobject instance,
                                                            [[maybe_unused]] jstring j_directory) {
     Common::FS::SetAppDirectory(Common::Android::GetJString(env, j_directory));
 }
 
-int Java_io_github_zortos293_lichii_NativeLibrary_installFileToNand(JNIEnv* env, jobject instance,
+int Java_dev_veshiru_emulator_NativeLibrary_installFileToNand(JNIEnv* env, jobject instance,
                                                             jstring j_file, jobject jcallback) {
     auto jlambdaClass = env->GetObjectClass(jcallback);
     auto jlambdaInvokeMethod = env->GetMethodID(
@@ -788,7 +788,7 @@ int Java_io_github_zortos293_lichii_NativeLibrary_installFileToNand(JNIEnv* env,
                                    Common::Android::GetJString(env, j_file), callback));
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_doesUpdateMatchProgram(JNIEnv* env, jobject jobj,
+jboolean Java_dev_veshiru_emulator_NativeLibrary_doesUpdateMatchProgram(JNIEnv* env, jobject jobj,
                                                                       jstring jprogramId,
                                                                       jstring jupdatePath) {
     const u64 program_id = FileSys::GetBaseTitleID(EmulationSession::GetProgramId(env, jprogramId));
@@ -809,7 +809,7 @@ jboolean Java_io_github_zortos293_lichii_NativeLibrary_doesUpdateMatchProgram(JN
     return false;
 }
 
-void JNICALL Java_io_github_zortos293_lichii_NativeLibrary_initializeGpuDriver(JNIEnv* env,
+void JNICALL Java_dev_veshiru_emulator_NativeLibrary_initializeGpuDriver(JNIEnv* env,
                                                                        [[maybe_unused]] jclass clazz,
                                                                        jstring hook_lib_dir,
                                                                        jstring custom_driver_dir,
@@ -848,7 +848,7 @@ void JNICALL Java_io_github_zortos293_lichii_NativeLibrary_initializeGpuDriver(J
     return android_get_device_api_level() >= 28 && CheckKgslPresent();
 }
 
-jboolean JNICALL Java_io_github_zortos293_lichii_utils_GpuDriverHelper_supportsCustomDriverLoading(
+jboolean JNICALL Java_dev_veshiru_emulator_utils_GpuDriverHelper_supportsCustomDriverLoading(
     JNIEnv* env, jobject instance) {
 #ifdef ARCHITECTURE_arm64
     // If the KGSL device exists custom drivers can be loaded using adrenotools
@@ -858,7 +858,7 @@ jboolean JNICALL Java_io_github_zortos293_lichii_utils_GpuDriverHelper_supportsC
 #endif
 }
 
-jobjectArray Java_io_github_zortos293_lichii_utils_GpuDriverHelper_getSystemDriverInfo(
+jobjectArray Java_dev_veshiru_emulator_utils_GpuDriverHelper_getSystemDriverInfo(
     JNIEnv* env, jobject j_obj, jobject j_surf, jstring j_hook_lib_dir) {
 #ifdef ARCHITECTURE_arm64
     const char* file_redirect_dir_{};
@@ -894,7 +894,7 @@ jobjectArray Java_io_github_zortos293_lichii_utils_GpuDriverHelper_getSystemDriv
     return j_driver_info;
 }
 
-jstring Java_io_github_zortos293_lichii_utils_GpuDriverHelper_getGpuModel(JNIEnv *env, jobject j_obj, jobject j_surf, jstring j_hook_lib_dir) {
+jstring Java_dev_veshiru_emulator_utils_GpuDriverHelper_getGpuModel(JNIEnv *env, jobject j_obj, jobject j_surf, jstring j_hook_lib_dir) {
 #ifdef ARCHITECTURE_arm64
     const char* file_redirect_dir_{};
     int featureFlags{};
@@ -924,32 +924,32 @@ jstring Java_io_github_zortos293_lichii_utils_GpuDriverHelper_getGpuModel(JNIEnv
 #endif
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_reloadKeys(JNIEnv* env, jclass clazz) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_reloadKeys(JNIEnv* env, jclass clazz) {
     Core::Crypto::KeyManager::Instance().ReloadKeys();
     return static_cast<jboolean>(Core::Crypto::KeyManager::Instance().AreKeysLoaded());
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_unpauseEmulation(JNIEnv* env, jclass clazz) {
+void Java_dev_veshiru_emulator_NativeLibrary_unpauseEmulation(JNIEnv* env, jclass clazz) {
     EmulationSession::GetInstance().UnPauseEmulation();
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_pauseEmulation(JNIEnv* env, jclass clazz) {
+void Java_dev_veshiru_emulator_NativeLibrary_pauseEmulation(JNIEnv* env, jclass clazz) {
     EmulationSession::GetInstance().PauseEmulation();
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_stopEmulation(JNIEnv* env, jclass clazz) {
+void Java_dev_veshiru_emulator_NativeLibrary_stopEmulation(JNIEnv* env, jclass clazz) {
     EmulationSession::GetInstance().HaltEmulation();
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_isRunning(JNIEnv* env, jclass clazz) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_isRunning(JNIEnv* env, jclass clazz) {
     return static_cast<jboolean>(EmulationSession::GetInstance().IsRunning());
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_isPaused(JNIEnv* env, jclass clazz) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_isPaused(JNIEnv* env, jclass clazz) {
     return static_cast<jboolean>(EmulationSession::GetInstance().IsPaused());
 }
 
-jbyteArray Java_io_github_zortos293_lichii_NativeLibrary_getAppletCaptureBuffer(JNIEnv* env, jclass clazz) {
+jbyteArray Java_dev_veshiru_emulator_NativeLibrary_getAppletCaptureBuffer(JNIEnv* env, jclass clazz) {
     using namespace VideoCore::Capture;
 
     if (!EmulationSession::GetInstance().IsRunning()) {
@@ -975,15 +975,15 @@ jbyteArray Java_io_github_zortos293_lichii_NativeLibrary_getAppletCaptureBuffer(
     return buffer;
 }
 
-jint Java_io_github_zortos293_lichii_NativeLibrary_getAppletCaptureWidth(JNIEnv* env, jclass clazz) {
+jint Java_dev_veshiru_emulator_NativeLibrary_getAppletCaptureWidth(JNIEnv* env, jclass clazz) {
     return static_cast<jint>(VideoCore::Capture::LinearWidth);
 }
 
-jint Java_io_github_zortos293_lichii_NativeLibrary_getAppletCaptureHeight(JNIEnv* env, jclass clazz) {
+jint Java_dev_veshiru_emulator_NativeLibrary_getAppletCaptureHeight(JNIEnv* env, jclass clazz) {
     return static_cast<jint>(VideoCore::Capture::LinearHeight);
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_initializeSystem(JNIEnv* env, jclass clazz,
+void Java_dev_veshiru_emulator_NativeLibrary_initializeSystem(JNIEnv* env, jclass clazz,
                                                             jboolean reload) {
     // Initialize the emulated system.
     if (!reload) {
@@ -992,7 +992,7 @@ void Java_io_github_zortos293_lichii_NativeLibrary_initializeSystem(JNIEnv* env,
     EmulationSession::GetInstance().InitializeSystem(reload);
 }
 
-jdoubleArray Java_io_github_zortos293_lichii_NativeLibrary_getPerfStats(JNIEnv* env, jclass clazz) {
+jdoubleArray Java_dev_veshiru_emulator_NativeLibrary_getPerfStats(JNIEnv* env, jclass clazz) {
     jdoubleArray j_stats = env->NewDoubleArray(4);
 
     if (EmulationSession::GetInstance().IsRunning()) {
@@ -1008,7 +1008,7 @@ jdoubleArray Java_io_github_zortos293_lichii_NativeLibrary_getPerfStats(JNIEnv* 
     return j_stats;
 }
 
-jint Java_io_github_zortos293_lichii_NativeLibrary_getShadersBuilding(JNIEnv* env, jclass clazz) {
+jint Java_dev_veshiru_emulator_NativeLibrary_getShadersBuilding(JNIEnv* env, jclass clazz) {
     jint j_shaders = 0;
 
     if (EmulationSession::GetInstance().IsRunning()) {
@@ -1018,7 +1018,7 @@ jint Java_io_github_zortos293_lichii_NativeLibrary_getShadersBuilding(JNIEnv* en
     return j_shaders;
 }
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_getCpuBackend(JNIEnv* env, jclass clazz) {
+jstring Java_dev_veshiru_emulator_NativeLibrary_getCpuBackend(JNIEnv* env, jclass clazz) {
     if (Settings::IsNceEnabled()) {
         return Common::Android::ToJString(env, "NCE");
     }
@@ -1026,12 +1026,12 @@ jstring Java_io_github_zortos293_lichii_NativeLibrary_getCpuBackend(JNIEnv* env,
     return Common::Android::ToJString(env, "JIT");
 }
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_getGpuDriver(JNIEnv* env, jobject jobj) {
+jstring Java_dev_veshiru_emulator_NativeLibrary_getGpuDriver(JNIEnv* env, jobject jobj) {
     return Common::Android::ToJString(
         env, EmulationSession::GetInstance().System().GPU().Renderer().GetDeviceVendor());
 }
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_getCpuSummary(JNIEnv* env, jobject /*jobj*/) {
+jstring Java_dev_veshiru_emulator_NativeLibrary_getCpuSummary(JNIEnv* env, jobject /*jobj*/) {
     get_arm_cpu_name();
     constexpr const char* CPUINFO_PATH = "/proc/cpuinfo";
 
@@ -1204,7 +1204,7 @@ bool GetFrameGenerationSupport() {
 }
 } // namespace
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_getVulkanDriverVersion(JNIEnv* env, jobject jobj) {
+jstring Java_dev_veshiru_emulator_NativeLibrary_getVulkanDriverVersion(JNIEnv* env, jobject jobj) {
     try {
         const auto props = GetVulkanDeviceProperties();
         if (props.deviceID == 0) {
@@ -1253,7 +1253,7 @@ jstring Java_io_github_zortos293_lichii_NativeLibrary_getVulkanDriverVersion(JNI
     }
 }
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_getVulkanApiVersion(JNIEnv* env, jobject jobj) {
+jstring Java_dev_veshiru_emulator_NativeLibrary_getVulkanApiVersion(JNIEnv* env, jobject jobj) {
     try {
         const auto props = GetVulkanDeviceProperties();
         if (props.deviceID == 0) {
@@ -1277,7 +1277,7 @@ jstring Java_io_github_zortos293_lichii_NativeLibrary_getVulkanApiVersion(JNIEnv
     }
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_supportsFrameGeneration(JNIEnv* env, jobject jobj) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_supportsFrameGeneration(JNIEnv* env, jobject jobj) {
     try {
         return static_cast<jboolean>(GetFrameGenerationSupport());
     } catch (...) {
@@ -1285,7 +1285,7 @@ jboolean Java_io_github_zortos293_lichii_NativeLibrary_supportsFrameGeneration(J
     }
 }
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_getGpuModel(JNIEnv* env, jobject jobj) {
+jstring Java_dev_veshiru_emulator_NativeLibrary_getGpuModel(JNIEnv* env, jobject jobj) {
     const auto props = GetVulkanDeviceProperties();
     if (props.deviceID == 0) {
         return Common::Android::ToJString(env, "Unknown");
@@ -1294,24 +1294,24 @@ jstring Java_io_github_zortos293_lichii_NativeLibrary_getGpuModel(JNIEnv* env, j
     return Common::Android::ToJString(env, props.deviceName);
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_applySettings(JNIEnv* env, jobject jobj) {
+void Java_dev_veshiru_emulator_NativeLibrary_applySettings(JNIEnv* env, jobject jobj) {
     EmulationSession::GetInstance().System().ApplySettings();
     EmulationSession::GetInstance().System().HIDCore().ReloadInputDevices();
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_logSettings(JNIEnv* env, jobject jobj) {
+void Java_dev_veshiru_emulator_NativeLibrary_logSettings(JNIEnv* env, jobject jobj) {
     Settings::LogSettings();
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_refreshThreadPolicies(JNIEnv* env, jobject jobj) {
+void Java_dev_veshiru_emulator_NativeLibrary_refreshThreadPolicies(JNIEnv* env, jobject jobj) {
     Common::RefreshThreadPolicies();
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_GetDebugKnobAt(JNIEnv* env, jobject jobj, jint index) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_GetDebugKnobAt(JNIEnv* env, jobject jobj, jint index) {
     return static_cast<jboolean>(Settings::GetDebugKnobAt(static_cast<u8>(index)));
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_setTurboSpeedLimit(JNIEnv *env, jobject jobj, jboolean enabled) {
+void Java_dev_veshiru_emulator_NativeLibrary_setTurboSpeedLimit(JNIEnv *env, jobject jobj, jboolean enabled) {
     if (enabled) {
         Settings::values.use_speed_limit.SetValue(true);
         Settings::SetSpeedMode(Settings::SpeedMode::Turbo);
@@ -1320,7 +1320,7 @@ void Java_io_github_zortos293_lichii_NativeLibrary_setTurboSpeedLimit(JNIEnv *en
     }
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_setSlowSpeedLimit(JNIEnv *env, jobject jobj, jboolean enabled) {
+void Java_dev_veshiru_emulator_NativeLibrary_setSlowSpeedLimit(JNIEnv *env, jobject jobj, jboolean enabled) {
     if (enabled) {
         Settings::values.use_speed_limit.SetValue(true);
         Settings::SetSpeedMode(Settings::SpeedMode::Slow);
@@ -1329,22 +1329,22 @@ void Java_io_github_zortos293_lichii_NativeLibrary_setSlowSpeedLimit(JNIEnv *env
     }
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_setStandardSpeedLimit(JNIEnv *env, jobject jobj, jboolean enabled) {
+void Java_dev_veshiru_emulator_NativeLibrary_setStandardSpeedLimit(JNIEnv *env, jobject jobj, jboolean enabled) {
     Settings::values.use_speed_limit.SetValue(enabled);
     if (enabled) {
         Settings::SetSpeedMode(Settings::SpeedMode::Standard);
     }
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_isTurboMode(JNIEnv *env, jobject jobj) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_isTurboMode(JNIEnv *env, jobject jobj) {
     return Settings::values.current_speed_mode.GetValue() == Settings::SpeedMode::Turbo;
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_isSlowMode(JNIEnv *env, jobject jobj) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_isSlowMode(JNIEnv *env, jobject jobj) {
     return Settings::values.current_speed_mode.GetValue() == Settings::SpeedMode::Slow;
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_run(JNIEnv* env, jobject jobj, jstring j_path,
+void Java_dev_veshiru_emulator_NativeLibrary_run(JNIEnv* env, jobject jobj, jstring j_path,
                                                jint j_program_index,
                                                jboolean j_frontend_initiated) {
     const std::string path = Common::Android::GetJString(env, j_path);
@@ -1358,23 +1358,23 @@ void Java_io_github_zortos293_lichii_NativeLibrary_run(JNIEnv* env, jobject jobj
     }
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_logDeviceInfo(JNIEnv* env, jclass clazz) {
+void Java_dev_veshiru_emulator_NativeLibrary_logDeviceInfo(JNIEnv* env, jclass clazz) {
     LOG_INFO(Frontend, "eden Version: {}-{}", Common::g_scm_branch, Common::g_scm_desc);
     LOG_INFO(Frontend, "Host OS: Android API level {}", android_get_device_api_level());
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_submitInlineKeyboardText(JNIEnv* env, jclass clazz,
+void Java_dev_veshiru_emulator_NativeLibrary_submitInlineKeyboardText(JNIEnv* env, jclass clazz,
                                                                     jstring j_text) {
     const std::u16string input = Common::UTF8ToUTF16(Common::Android::GetJString(env, j_text));
     EmulationSession::GetInstance().SoftwareKeyboard()->SubmitInlineKeyboardText(input);
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_submitInlineKeyboardInput(JNIEnv* env, jclass clazz,
+void Java_dev_veshiru_emulator_NativeLibrary_submitInlineKeyboardInput(JNIEnv* env, jclass clazz,
                                                                      jint j_key_code) {
     EmulationSession::GetInstance().SoftwareKeyboard()->SubmitInlineKeyboardInput(j_key_code);
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_initializeEmptyUserDirectory(JNIEnv* env,
+void Java_dev_veshiru_emulator_NativeLibrary_initializeEmptyUserDirectory(JNIEnv* env,
                                                                         jobject instance) {
     const auto nand_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir);
     auto vfs_nand_dir = EmulationSession::GetInstance().System().GetFilesystem()->OpenDirectory(
@@ -1394,7 +1394,7 @@ void Java_io_github_zortos293_lichii_NativeLibrary_initializeEmptyUserDirectory(
     }
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerInit(JNIEnv* env, jobject obj) {
+void Java_dev_veshiru_emulator_NativeLibrary_playTimeManagerInit(JNIEnv* env, jobject obj) {
     // for some reason the full user directory isnt initialized in Android, so we need to create it
     const auto play_time_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::PlayTimeDir);
     if (!Common::FS::IsDir(play_time_dir) && !Common::FS::CreateDir(play_time_dir))
@@ -1403,19 +1403,19 @@ void Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerInit(JNIEnv* e
     play_time_manager = std::make_unique<PlayTime::PlayTimeManager>();
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerStart(JNIEnv* env, jobject obj) {
+void Java_dev_veshiru_emulator_NativeLibrary_playTimeManagerStart(JNIEnv* env, jobject obj) {
     if (play_time_manager) {
         play_time_manager->SetProgramId(EmulationSession::GetInstance().System().GetApplicationProcessProgramID());
         play_time_manager->Start();
     }
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerStop(JNIEnv* env, jobject obj) {
+void Java_dev_veshiru_emulator_NativeLibrary_playTimeManagerStop(JNIEnv* env, jobject obj) {
     if (play_time_manager)
         play_time_manager->Stop();
 }
 
-jlong Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerGetPlayTime(JNIEnv* env, jobject obj, jstring jprogramId) {
+jlong Java_dev_veshiru_emulator_NativeLibrary_playTimeManagerGetPlayTime(JNIEnv* env, jobject obj, jstring jprogramId) {
     if (play_time_manager) {
         u64 program_id = EmulationSession::GetProgramId(env, jprogramId);
         return play_time_manager->GetPlayTime(program_id);
@@ -1423,12 +1423,12 @@ jlong Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerGetPlayTime(J
     return 0UL;
 }
 
-jlong Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerGetCurrentTitleId(JNIEnv* env,
+jlong Java_dev_veshiru_emulator_NativeLibrary_playTimeManagerGetCurrentTitleId(JNIEnv* env,
                                                                              jobject obj) {
     return EmulationSession::GetInstance().System().GetApplicationProcessProgramID();
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerResetProgramPlayTime(JNIEnv* env, jobject obj,
+void Java_dev_veshiru_emulator_NativeLibrary_playTimeManagerResetProgramPlayTime(JNIEnv* env, jobject obj,
                                                                 jstring jprogramId) {
     if (play_time_manager) {
         u64 program_id = EmulationSession::GetProgramId(env, jprogramId);
@@ -1436,7 +1436,7 @@ void Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerResetProgramPl
     }
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerSetPlayTime(JNIEnv* env, jobject obj,
+void Java_dev_veshiru_emulator_NativeLibrary_playTimeManagerSetPlayTime(JNIEnv* env, jobject obj,
                                                                 jstring jprogramId, jlong playTimeSeconds) {
     if (play_time_manager) {
         u64 program_id = EmulationSession::GetProgramId(env, jprogramId);
@@ -1444,7 +1444,7 @@ void Java_io_github_zortos293_lichii_NativeLibrary_playTimeManagerSetPlayTime(JN
     }
 }
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_getAppletLaunchPath(JNIEnv* env, jclass clazz,
+jstring Java_dev_veshiru_emulator_NativeLibrary_getAppletLaunchPath(JNIEnv* env, jclass clazz,
                                                                   jlong jid) {
     auto bis_system =
         EmulationSession::GetInstance().System().GetFileSystemController().GetSystemNANDContents();
@@ -1461,12 +1461,12 @@ jstring Java_io_github_zortos293_lichii_NativeLibrary_getAppletLaunchPath(JNIEnv
     return Common::Android::ToJString(env, applet_nca->GetFullPath());
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_setCurrentAppletId(JNIEnv* env, jclass clazz,
+void Java_dev_veshiru_emulator_NativeLibrary_setCurrentAppletId(JNIEnv* env, jclass clazz,
                                                               jint jappletId) {
     EmulationSession::GetInstance().SetAppletId(jappletId);
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_setCabinetMode(JNIEnv* env, jclass clazz,
+void Java_dev_veshiru_emulator_NativeLibrary_setCabinetMode(JNIEnv* env, jclass clazz,
                                                           jint jcabinetMode) {
     EmulationSession::GetInstance().System().GetFrontendAppletHolder().SetCabinetMode(
         static_cast<Service::NFP::CabinetMode>(jcabinetMode));
@@ -1476,11 +1476,11 @@ bool isFirmwarePresent() {
     return FirmwareManager::CheckFirmwarePresence(EmulationSession::GetInstance().System());
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_isFirmwareAvailable(JNIEnv* env, jclass clazz) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_isFirmwareAvailable(JNIEnv* env, jclass clazz) {
     return isFirmwarePresent();
 }
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_firmwareVersion(JNIEnv* env, jclass clazz) {
+jstring Java_dev_veshiru_emulator_NativeLibrary_firmwareVersion(JNIEnv* env, jclass clazz) {
     const auto pair = FirmwareManager::GetFirmwareVersion(EmulationSession::GetInstance().System());
     const auto firmware_data = pair.first;
     const auto result = pair.second;
@@ -1497,20 +1497,20 @@ jstring Java_io_github_zortos293_lichii_NativeLibrary_firmwareVersion(JNIEnv* en
     return Common::Android::ToJString(env, display_version);
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_gameRequiresFirmware(JNIEnv* env, jclass clazz, jstring jprogramId) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_gameRequiresFirmware(JNIEnv* env, jclass clazz, jstring jprogramId) {
     auto program_id = EmulationSession::GetProgramId(env, jprogramId);
 
     return FirmwareManager::GameRequiresFirmware(program_id);
 }
 
-jint Java_io_github_zortos293_lichii_NativeLibrary_installKeys(JNIEnv* env, jclass clazz, jstring jpath, jstring jext) {
+jint Java_dev_veshiru_emulator_NativeLibrary_installKeys(JNIEnv* env, jclass clazz, jstring jpath, jstring jext) {
     const auto path = Common::Android::GetJString(env, jpath);
     const auto ext = Common::Android::GetJString(env, jext);
 
     return static_cast<int>(FirmwareManager::InstallKeys(path, ext));
 }
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_getLosslessDllPath(JNIEnv* env, jclass clazz) {
+jstring Java_dev_veshiru_emulator_NativeLibrary_getLosslessDllPath(JNIEnv* env, jclass clazz) {
 #ifdef HAS_LSFG
     const auto path = VideoCore::FrameGen::GetLosslessDllPath();
     return Common::Android::ToJString(env, Common::FS::PathToUTF8String(path));
@@ -1519,7 +1519,7 @@ jstring Java_io_github_zortos293_lichii_NativeLibrary_getLosslessDllPath(JNIEnv*
 #endif
 }
 
-jint Java_io_github_zortos293_lichii_NativeLibrary_validateLosslessDll(JNIEnv* env, jclass clazz) {
+jint Java_dev_veshiru_emulator_NativeLibrary_validateLosslessDll(JNIEnv* env, jclass clazz) {
 #ifdef HAS_LSFG
     return static_cast<jint>(VideoCore::FrameGen::GetInstalledLosslessStatus());
 #else
@@ -1527,7 +1527,7 @@ jint Java_io_github_zortos293_lichii_NativeLibrary_validateLosslessDll(JNIEnv* e
 #endif
 }
 
-jint Java_io_github_zortos293_lichii_NativeLibrary_prepareLosslessDll(JNIEnv* env, jclass clazz) {
+jint Java_dev_veshiru_emulator_NativeLibrary_prepareLosslessDll(JNIEnv* env, jclass clazz) {
 #ifdef HAS_LSFG
     return static_cast<jint>(VideoCore::FrameGen::BuildShaderCache());
 #else
@@ -1535,7 +1535,7 @@ jint Java_io_github_zortos293_lichii_NativeLibrary_prepareLosslessDll(JNIEnv* en
 #endif
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_removeLosslessDll(JNIEnv* env, jclass clazz) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_removeLosslessDll(JNIEnv* env, jclass clazz) {
 #ifdef HAS_LSFG
     return static_cast<jboolean>(VideoCore::FrameGen::RemoveInstalledLosslessDll());
 #else
@@ -1543,7 +1543,7 @@ jboolean Java_io_github_zortos293_lichii_NativeLibrary_removeLosslessDll(JNIEnv*
 #endif
 }
 
-jobjectArray Java_io_github_zortos293_lichii_NativeLibrary_getPatchesForFile(JNIEnv* env, jobject jobj,
+jobjectArray Java_dev_veshiru_emulator_NativeLibrary_getPatchesForFile(JNIEnv* env, jobject jobj,
                                                                      jstring jpath,
                                                                      jstring jprogramId) {
     const auto path = Common::Android::GetJString(env, jpath);
@@ -1580,27 +1580,27 @@ jobjectArray Java_io_github_zortos293_lichii_NativeLibrary_getPatchesForFile(JNI
     return jpatchArray;
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_removeUpdate(JNIEnv* env, jobject jobj,
+void Java_dev_veshiru_emulator_NativeLibrary_removeUpdate(JNIEnv* env, jobject jobj,
                                                         jstring jprogramId) {
     auto program_id = EmulationSession::GetProgramId(env, jprogramId);
     ContentManager::RemoveUpdate(EmulationSession::GetInstance().System().GetFileSystemController(),
                                  program_id);
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_removeDLC(JNIEnv* env, jobject jobj,
+void Java_dev_veshiru_emulator_NativeLibrary_removeDLC(JNIEnv* env, jobject jobj,
                                                      jstring jprogramId) {
     auto program_id = EmulationSession::GetProgramId(env, jprogramId);
     ContentManager::RemoveAllDLC(EmulationSession::GetInstance().System(), program_id);
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_removeMod(JNIEnv* env, jobject jobj, jstring jprogramId,
+void Java_dev_veshiru_emulator_NativeLibrary_removeMod(JNIEnv* env, jobject jobj, jstring jprogramId,
                                                      jstring jname) {
     auto program_id = EmulationSession::GetProgramId(env, jprogramId);
     ContentManager::RemoveMod(EmulationSession::GetInstance().System().GetFileSystemController(),
                               program_id, Common::Android::GetJString(env, jname));
 }
 
-jobjectArray Java_io_github_zortos293_lichii_NativeLibrary_verifyInstalledContents(JNIEnv* env,
+jobjectArray Java_dev_veshiru_emulator_NativeLibrary_verifyInstalledContents(JNIEnv* env,
                                                                            jobject jobj,
                                                                            jobject jcallback) {
     auto jlambdaClass = env->GetObjectClass(jcallback);
@@ -1624,7 +1624,7 @@ jobjectArray Java_io_github_zortos293_lichii_NativeLibrary_verifyInstalledConten
     return jresult;
 }
 
-jint Java_io_github_zortos293_lichii_NativeLibrary_verifyGameContents(JNIEnv* env, jobject jobj,
+jint Java_dev_veshiru_emulator_NativeLibrary_verifyGameContents(JNIEnv* env, jobject jobj,
                                                               jstring jpath, jobject jcallback) {
     auto jlambdaClass = env->GetObjectClass(jcallback);
     auto jlambdaInvokeMethod = env->GetMethodID(
@@ -1640,7 +1640,7 @@ jint Java_io_github_zortos293_lichii_NativeLibrary_verifyGameContents(JNIEnv* en
         session.System(), Common::Android::GetJString(env, jpath), callback));
 }
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_getSavePath(JNIEnv* env, jobject jobj,
+jstring Java_dev_veshiru_emulator_NativeLibrary_getSavePath(JNIEnv* env, jobject jobj,
                                                           jstring jprogramId) {
     auto program_id = EmulationSession::GetProgramId(env, jprogramId);
     if (program_id == 0) {
@@ -1664,7 +1664,7 @@ jstring Java_io_github_zortos293_lichii_NativeLibrary_getSavePath(JNIEnv* env, j
     return Common::Android::ToJString(env, user_save_data_path);
 }
 
-jstring Java_io_github_zortos293_lichii_NativeLibrary_getDefaultProfileSaveDataRoot(JNIEnv* env,
+jstring Java_dev_veshiru_emulator_NativeLibrary_getDefaultProfileSaveDataRoot(JNIEnv* env,
                                                                             jobject jobj,
                                                                             jboolean jfuture) {
     Service::Account::ProfileManager manager;
@@ -1677,29 +1677,29 @@ jstring Java_io_github_zortos293_lichii_NativeLibrary_getDefaultProfileSaveDataR
     return Common::Android::ToJString(env, user_save_data_root);
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_addFileToFilesystemProvider(JNIEnv* env, jobject jobj,
+void Java_dev_veshiru_emulator_NativeLibrary_addFileToFilesystemProvider(JNIEnv* env, jobject jobj,
                                                                        jstring jpath) {
     EmulationSession::GetInstance().ConfigureFilesystemProvider(
         Common::Android::GetJString(env, jpath));
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_addGameFolderFileToFilesystemProvider(
+void Java_dev_veshiru_emulator_NativeLibrary_addGameFolderFileToFilesystemProvider(
     JNIEnv* env, jobject jobj, jstring jpath) {
     EmulationSession::GetInstance().ConfigureFilesystemProviderFromGameFolder(
         Common::Android::GetJString(env, jpath));
 }
 
-void Java_io_github_zortos293_lichii_NativeLibrary_clearFilesystemProvider(JNIEnv* env, jobject jobj) {
+void Java_dev_veshiru_emulator_NativeLibrary_clearFilesystemProvider(JNIEnv* env, jobject jobj) {
     EmulationSession::GetInstance().GetContentProvider()->ClearAllEntries();
 }
 
-jboolean Java_io_github_zortos293_lichii_NativeLibrary_areKeysPresent(JNIEnv* env, jobject jobj) {
+jboolean Java_dev_veshiru_emulator_NativeLibrary_areKeysPresent(JNIEnv* env, jobject jobj) {
     auto& system = EmulationSession::GetInstance().System();
     system.GetFileSystemController().CreateFactories(*system.GetFilesystem());
     return ContentManager::AreKeysPresent();
 }
 
-jint Java_io_github_zortos293_lichii_NativeLibrary_getVirtualAmiiboState(JNIEnv* env, jobject jobj) {
+jint Java_dev_veshiru_emulator_NativeLibrary_getVirtualAmiiboState(JNIEnv* env, jobject jobj) {
     if (!EmulationSession::GetInstance().IsRunning()) {
         return static_cast<jint>(InputCommon::VirtualAmiibo::State::Disabled);
     }
@@ -1713,7 +1713,7 @@ jint Java_io_github_zortos293_lichii_NativeLibrary_getVirtualAmiiboState(JNIEnv*
     return static_cast<jint>(virtual_amiibo->GetCurrentState());
 }
 
-jint Java_io_github_zortos293_lichii_NativeLibrary_loadAmiibo(JNIEnv* env, jobject jobj,
+jint Java_dev_veshiru_emulator_NativeLibrary_loadAmiibo(JNIEnv* env, jobject jobj,
                                                       jbyteArray jdata) {
     if (!EmulationSession::GetInstance().IsRunning() || jdata == nullptr) {
         return static_cast<jint>(InputCommon::VirtualAmiibo::Info::WrongDeviceState);
@@ -1738,7 +1738,7 @@ jint Java_io_github_zortos293_lichii_NativeLibrary_loadAmiibo(JNIEnv* env, jobje
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_io_github_zortos293_lichii_NativeLibrary_initJvm(JNIEnv *env, jclass clazz) {
+Java_dev_veshiru_emulator_NativeLibrary_initJvm(JNIEnv *env, jclass clazz) {
     JavaVM *vm;
     if (env->GetJavaVM(&vm) != JNI_OK)
         return;
@@ -1747,7 +1747,7 @@ Java_io_github_zortos293_lichii_NativeLibrary_initJvm(JNIEnv *env, jclass clazz)
 }
 
 JNIEXPORT void JNICALL
-Java_io_github_zortos293_lichii_NativeLibrary_initMultiplayer(
+Java_dev_veshiru_emulator_NativeLibrary_initMultiplayer(
         JNIEnv* env, [[maybe_unused]] jobject obj) {
     if (multiplayer) {
         return;
@@ -1760,12 +1760,12 @@ Java_io_github_zortos293_lichii_NativeLibrary_initMultiplayer(
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayGetPublicRooms(
+Java_dev_veshiru_emulator_network_NetPlayManager_netPlayGetPublicRooms(
         JNIEnv *env, [[maybe_unused]] jobject obj) {
     return Common::Android::ToJStringArray(env, multiplayer->NetPlayGetPublicRooms());
 }
 
-JNIEXPORT jint JNICALL Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayCreateRoom(
+JNIEXPORT jint JNICALL Java_dev_veshiru_emulator_network_NetPlayManager_netPlayCreateRoom(
         JNIEnv* env, [[maybe_unused]] jobject obj, jstring ipaddress, jint port,
         jstring username, jstring preferredGameName, jlong preferredGameId, jstring password,
         jstring room_name, jint max_players, jboolean isPublic) {
@@ -1776,7 +1776,7 @@ JNIEXPORT jint JNICALL Java_io_github_zortos293_lichii_network_NetPlayManager_ne
                               Common::Android::GetJString(env, room_name), max_players, isPublic));
 }
 
-JNIEXPORT jint JNICALL Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayJoinRoom(
+JNIEXPORT jint JNICALL Java_dev_veshiru_emulator_network_NetPlayManager_netPlayJoinRoom(
         JNIEnv* env, [[maybe_unused]] jobject obj, jstring ipaddress, jint port,
         jstring username, jstring password) {
     return static_cast<jint>(
@@ -1785,62 +1785,62 @@ JNIEXPORT jint JNICALL Java_io_github_zortos293_lichii_network_NetPlayManager_ne
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayRoomInfo(
+Java_dev_veshiru_emulator_network_NetPlayManager_netPlayRoomInfo(
         JNIEnv* env, [[maybe_unused]] jobject obj) {
     return Common::Android::ToJStringArray(env, multiplayer->NetPlayRoomInfo());
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayIsJoined(
+Java_dev_veshiru_emulator_network_NetPlayManager_netPlayIsJoined(
         [[maybe_unused]] JNIEnv* env, [[maybe_unused]] jobject obj) {
     return multiplayer->NetPlayIsJoined();
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayIsHostedRoom(
+Java_dev_veshiru_emulator_network_NetPlayManager_netPlayIsHostedRoom(
         [[maybe_unused]] JNIEnv* env, [[maybe_unused]] jobject obj) {
     return multiplayer->NetPlayIsHostedRoom();
 }
 
 JNIEXPORT void JNICALL
-Java_io_github_zortos293_lichii_network_NetPlayManager_netPlaySendMessage(
+Java_dev_veshiru_emulator_network_NetPlayManager_netPlaySendMessage(
         JNIEnv* env, [[maybe_unused]] jobject obj, jstring msg) {
     multiplayer->NetPlaySendMessage(Common::Android::GetJString(env, msg));
 }
 
-JNIEXPORT void JNICALL Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayKickUser(
+JNIEXPORT void JNICALL Java_dev_veshiru_emulator_network_NetPlayManager_netPlayKickUser(
         JNIEnv* env, [[maybe_unused]] jobject obj, jstring username) {
     multiplayer->NetPlayKickUser(Common::Android::GetJString(env, username));
 }
 
-JNIEXPORT void JNICALL Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayLeaveRoom(
+JNIEXPORT void JNICALL Java_dev_veshiru_emulator_network_NetPlayManager_netPlayLeaveRoom(
         [[maybe_unused]] JNIEnv* env, [[maybe_unused]] jobject obj) {
     multiplayer->NetPlayLeaveRoom();
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayIsModerator(
+Java_dev_veshiru_emulator_network_NetPlayManager_netPlayIsModerator(
         [[maybe_unused]] JNIEnv* env, [[maybe_unused]] jobject obj) {
     return multiplayer->NetPlayIsModerator();
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayGetBanList(
+Java_dev_veshiru_emulator_network_NetPlayManager_netPlayGetBanList(
         JNIEnv* env, [[maybe_unused]] jobject obj) {
     return Common::Android::ToJStringArray(env, multiplayer->NetPlayGetBanList());
 }
 
-JNIEXPORT void JNICALL Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayBanUser(
+JNIEXPORT void JNICALL Java_dev_veshiru_emulator_network_NetPlayManager_netPlayBanUser(
         JNIEnv* env, [[maybe_unused]] jobject obj, jstring username) {
     multiplayer->NetPlayBanUser(Common::Android::GetJString(env, username));
 }
 
-JNIEXPORT void JNICALL Java_io_github_zortos293_lichii_network_NetPlayManager_netPlayUnbanUser(
+JNIEXPORT void JNICALL Java_dev_veshiru_emulator_network_NetPlayManager_netPlayUnbanUser(
         JNIEnv* env, [[maybe_unused]] jobject obj, jstring username) {
     multiplayer->NetPlayUnbanUser(Common::Android::GetJString(env, username));
 }
 
-JNIEXPORT void JNICALL Java_io_github_zortos293_lichii_NativeLibrary_updatePowerState(
+JNIEXPORT void JNICALL Java_dev_veshiru_emulator_NativeLibrary_updatePowerState(
         JNIEnv* env,
         jobject,
         jint percentage,
@@ -1852,7 +1852,7 @@ JNIEXPORT void JNICALL Java_io_github_zortos293_lichii_NativeLibrary_updatePower
     g_has_battery.store(hasBattery, std::memory_order_relaxed);
 }
 
-JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_isUpdateCheckerEnabled(
+JNIEXPORT jboolean JNICALL Java_dev_veshiru_emulator_NativeLibrary_isUpdateCheckerEnabled(
         JNIEnv* env,
         jobject obj) {
 #ifdef ENABLE_UPDATE_CHECKER
@@ -1862,7 +1862,7 @@ JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_isUpdat
 #endif
     }
 
-JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_isNightlyBuild(
+JNIEXPORT jboolean JNICALL Java_dev_veshiru_emulator_NativeLibrary_isNightlyBuild(
     JNIEnv* env,
     jobject obj) {
 #ifdef NIGHTLY_BUILD
@@ -1875,7 +1875,7 @@ JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_isNight
 #ifdef ENABLE_UPDATE_CHECKER
 
 
-JNIEXPORT jobject JNICALL Java_io_github_zortos293_lichii_NativeLibrary_checkForUpdate(
+JNIEXPORT jobject JNICALL Java_dev_veshiru_emulator_NativeLibrary_checkForUpdate(
         JNIEnv* env,
         jobject obj) {
     std::optional<Common::Net::Release> release = UpdateChecker::GetUpdate();
@@ -1890,7 +1890,7 @@ JNIEXPORT jobject JNICALL Java_io_github_zortos293_lichii_NativeLibrary_checkFor
     // If not, something has gone wrong, but the Kotlin side can handle it.
     const auto assets = release->GetPlatformAssets();
 
-    jclass updateResultClass = env->FindClass("io/github/zortos293/lichii/NativeLibrary$UpdateResult");
+    jclass updateResultClass = env->FindClass("dev/veshiru/emulator/NativeLibrary$UpdateResult");
     if (!updateResultClass) {
         LOG_ERROR(Frontend, "Could not find UpdateResult class");
         return nullptr;
@@ -1947,13 +1947,13 @@ JNIEXPORT jobject JNICALL Java_io_github_zortos293_lichii_NativeLibrary_checkFor
 
 #endif
 
-JNIEXPORT jstring JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getBuildVersion(
+JNIEXPORT jstring JNICALL Java_dev_veshiru_emulator_NativeLibrary_getBuildVersion(
         JNIEnv* env,
         [[maybe_unused]] jobject obj) {
     return env->NewStringUTF(Common::g_build_version);
 }
 
-JNIEXPORT jobjectArray JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getAllUsers(
+JNIEXPORT jobjectArray JNICALL Java_dev_veshiru_emulator_NativeLibrary_getAllUsers(
         JNIEnv* env,
         [[maybe_unused]] jobject obj) {
     auto& manager = EmulationSession::GetInstance().System().GetProfileManager();
@@ -1998,7 +1998,7 @@ JNIEXPORT jobjectArray JNICALL Java_io_github_zortos293_lichii_NativeLibrary_get
     return result;
 }
 
-JNIEXPORT jstring JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getUserUsername(
+JNIEXPORT jstring JNICALL Java_dev_veshiru_emulator_NativeLibrary_getUserUsername(
         JNIEnv* env,
         [[maybe_unused]] jobject obj,
         jstring juuid) {
@@ -2018,21 +2018,21 @@ JNIEXPORT jstring JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getUserU
     return result ? result : env->NewStringUTF("");
 }
 
-JNIEXPORT jlong JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getUserCount(
+JNIEXPORT jlong JNICALL Java_dev_veshiru_emulator_NativeLibrary_getUserCount(
         JNIEnv* env,
         [[maybe_unused]] jobject obj) {
     auto& manager = EmulationSession::GetInstance().System().GetProfileManager();
     return static_cast<jlong>(manager.GetUserCount());
 }
 
-JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_canCreateUser(
+JNIEXPORT jboolean JNICALL Java_dev_veshiru_emulator_NativeLibrary_canCreateUser(
         JNIEnv* env,
         [[maybe_unused]] jobject obj) {
     auto& manager = EmulationSession::GetInstance().System().GetProfileManager();
     return manager.CanSystemRegisterUser();
 }
 
-JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_createUser(
+JNIEXPORT jboolean JNICALL Java_dev_veshiru_emulator_NativeLibrary_createUser(
         JNIEnv* env,
         [[maybe_unused]] jobject obj,
         jstring juuid,
@@ -2050,7 +2050,7 @@ JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_createU
     return false;
 }
 
-JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_updateUserUsername(
+JNIEXPORT jboolean JNICALL Java_dev_veshiru_emulator_NativeLibrary_updateUserUsername(
         JNIEnv* env,
         [[maybe_unused]] jobject obj,
         jstring juuid,
@@ -2075,7 +2075,7 @@ JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_updateU
     return false;
 }
 
-JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_removeUser(
+JNIEXPORT jboolean JNICALL Java_dev_veshiru_emulator_NativeLibrary_removeUser(
         JNIEnv* env,
         [[maybe_unused]] jobject obj,
         jstring juuid) {
@@ -2100,7 +2100,7 @@ JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_removeU
     return false;
 }
 
-JNIEXPORT jstring JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getCurrentUser(
+JNIEXPORT jstring JNICALL Java_dev_veshiru_emulator_NativeLibrary_getCurrentUser(
         JNIEnv* env,
         [[maybe_unused]] jobject obj) {
     auto& manager = EmulationSession::GetInstance().System().GetProfileManager();
@@ -2113,7 +2113,7 @@ JNIEXPORT jstring JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getCurre
     return result ? result : env->NewStringUTF("");
 }
 
-JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_setCurrentUser(
+JNIEXPORT jboolean JNICALL Java_dev_veshiru_emulator_NativeLibrary_setCurrentUser(
         JNIEnv* env,
         [[maybe_unused]] jobject obj,
         jstring juuid) {
@@ -2129,7 +2129,7 @@ JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_setCurr
     return false;
 }
 
-JNIEXPORT jstring JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getUserImagePath(
+JNIEXPORT jstring JNICALL Java_dev_veshiru_emulator_NativeLibrary_getUserImagePath(
         JNIEnv* env,
         [[maybe_unused]] jobject obj,
         jstring juuid) {
@@ -2143,7 +2143,7 @@ JNIEXPORT jstring JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getUserI
     return result ? result : env->NewStringUTF("");
 }
 
-JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_saveUserImage(
+JNIEXPORT jboolean JNICALL Java_dev_veshiru_emulator_NativeLibrary_saveUserImage(
         JNIEnv* env,
         [[maybe_unused]] jobject obj,
         jstring juuid,
@@ -2170,7 +2170,7 @@ JNIEXPORT jboolean JNICALL Java_io_github_zortos293_lichii_NativeLibrary_saveUse
     }
 }
 
-JNIEXPORT void JNICALL Java_io_github_zortos293_lichii_NativeLibrary_reloadProfiles(
+JNIEXPORT void JNICALL Java_dev_veshiru_emulator_NativeLibrary_reloadProfiles(
         JNIEnv* env,
         [[maybe_unused]] jobject obj) {
     auto& manager = EmulationSession::GetInstance().System().GetProfileManager();
@@ -2275,7 +2275,7 @@ static FileSys::VirtualDir GetFirmwareAvatarDirectory() {
     return extracted->GetSubdirectory("chara");
 }
 
-JNIEXPORT jint JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getFirmwareAvatarCount(
+JNIEXPORT jint JNICALL Java_dev_veshiru_emulator_NativeLibrary_getFirmwareAvatarCount(
         JNIEnv* env,
         [[maybe_unused]] jobject obj) {
     const auto chara_dir = GetFirmwareAvatarDirectory();
@@ -2292,7 +2292,7 @@ JNIEXPORT jint JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getFirmware
     return count;
 }
 
-JNIEXPORT jbyteArray JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getFirmwareAvatarImage(
+JNIEXPORT jbyteArray JNICALL Java_dev_veshiru_emulator_NativeLibrary_getFirmwareAvatarImage(
         JNIEnv* env,
         [[maybe_unused]] jobject obj,
         jint index) {
@@ -2326,7 +2326,7 @@ JNIEXPORT jbyteArray JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getFi
     return nullptr;
 }
 
-JNIEXPORT jbyteArray JNICALL Java_io_github_zortos293_lichii_NativeLibrary_getDefaultAccountBackupJpeg(
+JNIEXPORT jbyteArray JNICALL Java_dev_veshiru_emulator_NativeLibrary_getDefaultAccountBackupJpeg(
         JNIEnv* env,
         [[maybe_unused]] jobject obj) {
     jbyteArray result = env->NewByteArray(Core::Constants::ACCOUNT_BACKUP_JPEG.size());

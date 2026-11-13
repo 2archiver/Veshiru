@@ -760,8 +760,8 @@ TEST_CASE("DeviceMemoryManager: UpdatePagesCachedBatch basic") {
 
     // small ranges should be accepted and not crash
     std::vector<std::pair<DAddr, size_t>> ranges;
-    ranges.emplace_back(0, Core::Memory::LICHII_PAGESIZE);
-    ranges.emplace_back(Core::Memory::LICHII_PAGESIZE, Core::Memory::LICHII_PAGESIZE);
+    ranges.emplace_back(0, Core::Memory::VESHIRU_PAGESIZE);
+    ranges.emplace_back(Core::Memory::VESHIRU_PAGESIZE, Core::Memory::VESHIRU_PAGESIZE);
     manager.UpdatePagesCachedBatch(ranges, 1);
     SUCCEED("UpdatePagesCachedBatch executed without error");
 }

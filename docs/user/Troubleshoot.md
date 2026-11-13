@@ -40,7 +40,7 @@ is reached. Little of it is ever written to disk: what runs out is the limit, no
    use the system-wide figure.
 
 On an RX 6750 GRE with 16 GB of RAM, a 31.9 GB commit limit failed 25 pipelines in Ocarina of
-Time's intro, and 53.9 GB failed none ([#462](https://github.com/zortos293/Lichii/issues/462)).
+Time's intro, and 53.9 GB failed none ([#462](https://github.com/2archiver/Veshiru/issues/462)).
 
 ## This mod only works on an Emulator
 

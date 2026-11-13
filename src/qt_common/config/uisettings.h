@@ -61,10 +61,10 @@ enum class Theme {
     DarkColorful,
     MidnightBlue,
     MidnightBlueColorful,
-    LichiiDark,
+    VeshiruDark,
 };
 
-static constexpr Theme default_theme{Theme::LichiiDark};
+static constexpr Theme default_theme{Theme::VeshiruDark};
 
 using Themes = std::array<std::pair<const char*, const char*>, 7>;
 extern const Themes themes;

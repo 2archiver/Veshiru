@@ -13,8 +13,8 @@ namespace FileSys {
 
 template <size_t DataAlign_, size_t BufferAlign_>
 class AlignmentMatchingStorage : public IStorage {
-    LICHII_NON_COPYABLE(AlignmentMatchingStorage);
-    LICHII_NON_MOVEABLE(AlignmentMatchingStorage);
+    VESHIRU_NON_COPYABLE(AlignmentMatchingStorage);
+    VESHIRU_NON_MOVEABLE(AlignmentMatchingStorage);
 
 public:
     static constexpr size_t DataAlign = DataAlign_;
@@ -77,8 +77,8 @@ public:
 
 template <size_t BufferAlign_>
 class AlignmentMatchingStoragePooledBuffer : public IStorage {
-    LICHII_NON_COPYABLE(AlignmentMatchingStoragePooledBuffer);
-    LICHII_NON_MOVEABLE(AlignmentMatchingStoragePooledBuffer);
+    VESHIRU_NON_COPYABLE(AlignmentMatchingStoragePooledBuffer);
+    VESHIRU_NON_MOVEABLE(AlignmentMatchingStoragePooledBuffer);
 
 public:
     static constexpr size_t BufferAlign = BufferAlign_;

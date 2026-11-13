@@ -9,7 +9,7 @@ LIBS = {
               "src/input_common/*", "src/network/*", "src/web_service/*", "src/shader_recompiler/*",
               "src/frontend_common/*", "src/tests/*", "src/dynarmic/*", "src/updater/*"],
     # The JNI glue and the input driver's Android names belong to the android area.
-    "exclude": ["src/common/android/*", "src/input_common/drivers/android.*", "src/tests/lichii_cmd/*",
+    "exclude": ["src/common/android/*", "src/input_common/drivers/android.*", "src/tests/veshiru_cmd/*",
                 "*/CMakeLists.txt", "*.cmake"],
 }
 
@@ -20,19 +20,19 @@ MACROS = r"\bYUZU_(PAGESIZE|PAGEBITS|PAGEMASK|NON_COPYABLE|NON_MOVEABLE|NO_INLIN
 TEXT = [
     # Macros and functions the libraries define, wherever they are used. In a macro body the
     # two characters the name gains come out of the padding before the line's backslash.
-    (MACROS + r"(.*?)  \\$", r"LICHII_\1\2\\"),
-    (MACROS, r"LICHII_\1"),
-    (r"\bGetYuzuVersionData\b", "GetLichiiVersionData"),
+    (MACROS + r"(.*?)  \\$", r"VESHIRU_\1\2\\"),
+    (MACROS, r"VESHIRU_\1"),
+    (r"\bGetYuzuVersionData\b", "GetVeshiruVersionData"),
     # The raw CNMTs installed into the NAND's yuzu_meta directory. The directory keeps its name.
     (r"\bAccumulateYuzuMeta\b", "AccumulateRawMeta", {"files": REGISTERED_CACHE}),
     (r"\bRawInstallYuzuMeta\b", "RawInstallMeta", {"files": REGISTERED_CACHE}),
     (r"\byuzu_meta(_iter)?\b", r"raw_meta\1", {"files": REGISTERED_CACHE}),
     (r"\bin yuzu meta\b", "in the yuzu_meta directory", {"files": REGISTERED_CACHE}),
     # The project name in prose, log text and user-visible strings, then identifiers.
-    (r"(?<![A-Za-z0-9_])[yY]uzu(?![A-Za-z0-9_])", "Lichii", LIBS),
-    (r"yuzu", "lichii", LIBS),
-    (r"Yuzu", "Lichii", LIBS),
-    (r"YUZU", "LICHII", LIBS),
+    (r"(?<![A-Za-z0-9_])[yY]uzu(?![A-Za-z0-9_])", "Veshiru", LIBS),
+    (r"yuzu", "veshiru", LIBS),
+    (r"Yuzu", "Veshiru", LIBS),
+    (r"YUZU", "VESHIRU", LIBS),
 ]
 
 KEEP = [

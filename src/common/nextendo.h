@@ -59,7 +59,7 @@ std::optional<Account> LoadAccount();
 void SaveAccount(const Account& account);
 void ClearAccount();
 
-// Why Lichii last signed the account out by itself. None after a sign-in or a sign-out.
+// Why Veshiru last signed the account out by itself. None after a sign-in or a sign-out.
 enum class SignOutReason {
     None,
     // nextendo.network refused the refresh token (invalid_grant).

@@ -254,7 +254,7 @@ template<std::size_t bitsize>
 const void* EmitReadMemoryMov(BlockOfCode& code, int value_idx, const Xbyak::RegExp& addr, bool ordered) {
     // An x86 load is already ordered before later loads and stores (acquire), and ordered stores
     // are xchg, which drains the store buffer: an ordered or exclusive load of up to 64 bits is a
-    // plain mov (from Lichii #161). A locked xadd took the cache line exclusively on every core
+    // plain mov (from Veshiru #161). A locked xadd took the cache line exclusively on every core
     // that read it, and faulted on pages that are not writable.
     if (ordered && bitsize == 128) {
         code.xor_(eax, eax);

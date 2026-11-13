@@ -44,7 +44,7 @@ GRAPHICS_KEY_SIZE = 1056
 CACHE_VERSIONS = range(46, 55)
 CACHE_NAME = re.compile(r"vulkan(?:\.fork-v\d+)?\.bin")
 # The shader cache v2 log of a title, beside its Vulkan pipeline cache
-V2_LOG_NAME = "lichii-cache.v2.bin"
+V2_LOG_NAME = "veshiru-cache.v2.bin"
 
 
 class CacheError(ValueError):

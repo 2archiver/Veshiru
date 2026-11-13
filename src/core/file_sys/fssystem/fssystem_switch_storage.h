@@ -7,8 +7,8 @@
 namespace FileSys {
 
 class RegionSwitchStorage : public IReadOnlyStorage {
-    LICHII_NON_COPYABLE(RegionSwitchStorage);
-    LICHII_NON_MOVEABLE(RegionSwitchStorage);
+    VESHIRU_NON_COPYABLE(RegionSwitchStorage);
+    VESHIRU_NON_MOVEABLE(RegionSwitchStorage);
 
 public:
     struct Region {

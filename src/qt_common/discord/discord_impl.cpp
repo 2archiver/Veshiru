@@ -24,7 +24,7 @@
 
 #include "discord_impl.h"
 
-#ifdef LICHII_BUNDLED_OPENSSL
+#ifdef VESHIRU_BUNDLED_OPENSSL
 #include <openssl/cert.h>
 #endif
 
@@ -42,7 +42,7 @@ std::optional<std::string> FetchFromCovers(const std::string& file_name, bool wa
     client.set_read_timeout(3);
     client.set_follow_location(true);
 
-#ifdef LICHII_BUNDLED_OPENSSL
+#ifdef VESHIRU_BUNDLED_OPENSSL
     client.load_ca_cert_store(kCert, sizeof(kCert));
 #endif
 
@@ -98,7 +98,7 @@ std::string DiscordImpl::GetGameString(const std::string& title) {
     return icon_name;
 }
 
-static constexpr char DEFAULT_DISCORD_TEXT[] = "Lichii is an emulator for the Nintendo Switch";
+static constexpr char DEFAULT_DISCORD_TEXT[] = "Veshiru is an emulator for the Nintendo Switch";
 static constexpr char DEFAULT_DISCORD_IMAGE[] =
     "https://git.eden-emu.dev/eden-emu/eden/raw/branch/master/dist/qt_themes/default/icons/256x256/"
     "eden.png";
@@ -151,7 +151,7 @@ void DiscordImpl::Update() {
             return;
         }
 
-        // Used to format Icon URL for Lichii website game compatibility page
+        // Used to format Icon URL for Veshiru website game compatibility page
         std::string icon_name = GetGameString(game_title);
         auto const game_url = fmt::format(
             "https://raw.githubusercontent.com/eden-emulator/boxart/refs/heads/master/img/{}.png",
@@ -162,7 +162,7 @@ void DiscordImpl::Update() {
         client.set_read_timeout(3);
         client.set_follow_location(true);
 
-#ifdef LICHII_BUNDLED_OPENSSL
+#ifdef VESHIRU_BUNDLED_OPENSSL
         client.load_ca_cert_store(kCert, sizeof(kCert));
 #endif
 

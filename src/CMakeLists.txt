@@ -7,7 +7,7 @@
 include_directories(.)
 
 # Dynarmic
-if ((ARCHITECTURE_x86_64 OR ARCHITECTURE_arm64 OR ARCHITECTURE_riscv64 OR ARCHITECTURE_loongarch64) AND NOT LICHII_STATIC_ROOM)
+if ((ARCHITECTURE_x86_64 OR ARCHITECTURE_arm64 OR ARCHITECTURE_riscv64 OR ARCHITECTURE_loongarch64) AND NOT VESHIRU_STATIC_ROOM)
     add_subdirectory(dynarmic)
     add_library(dynarmic::dynarmic ALIAS dynarmic)
 endif()
@@ -16,7 +16,7 @@ endif()
 set_property(DIRECTORY APPEND PROPERTY
     COMPILE_DEFINITIONS $<$<CONFIG:Debug>:_DEBUG> $<$<NOT:$<CONFIG:Debug>>:NDEBUG>)
 
-if (LICHII_STATIC_BUILD)
+if (VESHIRU_STATIC_BUILD)
     add_compile_definitions(QT_STATICPLUGIN)
 endif()
 
@@ -26,9 +26,9 @@ if (NIGHTLY_BUILD)
 endif()
 
 # Legacy (android only)
-if (LICHII_LEGACY)
+if (VESHIRU_LEGACY)
     message(WARNING "Making legacy build. Performance may suffer.")
-    add_compile_definitions(LICHII_LEGACY)
+    add_compile_definitions(VESHIRU_LEGACY)
 endif()
 
 # Genshin Spoof (android only)
@@ -90,7 +90,7 @@ if (MSVC AND NOT CXX_CLANG)
     # Diagnostics the project does not accept. ENABLE_WERROR decides whether they are
     # errors (/we) or warnings at level 4 (/w4), the same way it decides between
     # -Werror=... and -W... for GCC and Clang below.
-    set(LICHII_MSVC_DIAGNOSTIC_CODES
+    set(VESHIRU_MSVC_DIAGNOSTIC_CODES
         4062 # Enumerator 'identifier' in a switch of enum 'enumeration' is not handled
         4189 # 'identifier': local variable is initialized but not referenced
         4265 # 'class': class has virtual functions, but destructor is not virtual
@@ -110,14 +110,14 @@ if (MSVC AND NOT CXX_CLANG)
     )
 
     if (ENABLE_WERROR)
-        set(LICHII_MSVC_DIAGNOSTIC_LEVEL /we)
+        set(VESHIRU_MSVC_DIAGNOSTIC_LEVEL /we)
     else()
-        set(LICHII_MSVC_DIAGNOSTIC_LEVEL /w4)
+        set(VESHIRU_MSVC_DIAGNOSTIC_LEVEL /w4)
     endif()
 
-    unset(LICHII_MSVC_DIAGNOSTICS)
-    foreach (code IN LISTS LICHII_MSVC_DIAGNOSTIC_CODES)
-        list(APPEND LICHII_MSVC_DIAGNOSTICS ${LICHII_MSVC_DIAGNOSTIC_LEVEL}${code})
+    unset(VESHIRU_MSVC_DIAGNOSTICS)
+    foreach (code IN LISTS VESHIRU_MSVC_DIAGNOSTIC_CODES)
+        list(APPEND VESHIRU_MSVC_DIAGNOSTICS ${VESHIRU_MSVC_DIAGNOSTIC_LEVEL}${code})
     endforeach()
 
     add_compile_options(
@@ -139,7 +139,7 @@ if (MSVC AND NOT CXX_CLANG)
         /external:anglebrackets # Treats all headers included by #include <header>, where the header file is enclosed in angle brackets (< >), as external headers
         /external:W0            # Sets the default warning level to 0 for external headers, effectively disabling warnings for them.
 
-        ${LICHII_MSVC_DIAGNOSTICS} # /we or /w4, see above
+        ${VESHIRU_MSVC_DIAGNOSTICS} # /we or /w4, see above
         /w44505 # 'function': unreferenced local function has been removed
 
         /wd4100 # 'identifier': unreferenced formal parameter
@@ -255,10 +255,10 @@ else()
         add_compile_definitions(_FILE_OFFSET_BITS=64)
     endif()
 
-    if (LICHII_STATIC_BUILD AND NOT APPLE AND NOT MSVC)
+    if (VESHIRU_STATIC_BUILD AND NOT APPLE AND NOT MSVC)
         add_compile_options(-static)
 
-        # lichii-cmd requires us to explicitly link libpthread, libgcc, and libstdc++ as static
+        # veshiru-cmd requires us to explicitly link libpthread, libgcc, and libstdc++ as static
         add_link_options(-Wl,-Bstatic -static -lpthread)
         add_link_options(-static-libgcc -static-libstdc++)
     endif()
@@ -285,16 +285,16 @@ endif()
 add_subdirectory(common)
 add_subdirectory(network)
 
-if (LICHII_ROOM)
+if (VESHIRU_ROOM)
     add_subdirectory(dedicated_room)
 endif()
 
-if (LICHII_ROOM_STANDALONE)
-    add_subdirectory(lichii_room_standalone)
-    set_target_properties(lichii-room PROPERTIES OUTPUT_NAME "eden-room")
+if (VESHIRU_ROOM_STANDALONE)
+    add_subdirectory(veshiru_room_standalone)
+    set_target_properties(veshiru-room PROPERTIES OUTPUT_NAME "eden-room")
 endif()
 
-if (LICHII_STATIC_ROOM)
+if (VESHIRU_STATIC_ROOM)
     return()
 endif()
 
@@ -306,22 +306,22 @@ add_subdirectory(input_common)
 add_subdirectory(frontend_common)
 add_subdirectory(shader_recompiler)
 
-if (LICHII_TESTS)
+if (VESHIRU_TESTS)
     add_subdirectory(tests)
 endif()
 
-if (LICHII_FUZZERS)
+if (VESHIRU_FUZZERS)
     add_subdirectory(fuzz)
 endif()
 
-if (LICHII_CMD)
-    add_subdirectory(lichii_cmd)
-    set_target_properties(lichii-cmd PROPERTIES OUTPUT_NAME "eden-cli")
+if (VESHIRU_CMD)
+    add_subdirectory(veshiru_cmd)
+    set_target_properties(veshiru-cmd PROPERTIES OUTPUT_NAME "eden-cli")
 endif()
 
 if (ENABLE_QT)
     add_subdirectory(qt_common)
-    add_subdirectory(lichii)
+    add_subdirectory(veshiru)
     if (WIN32 AND ENABLE_UPDATE_CHECKER)
         add_subdirectory(updater)
     endif()
@@ -333,7 +333,7 @@ endif()
 
 if (ANDROID)
     add_subdirectory(android/app/src/main/jni)
-    target_include_directories(lichii-android PRIVATE android/app/src/main)
+    target_include_directories(veshiru-android PRIVATE android/app/src/main)
 endif()
 
 include(GenerateDepHashes)

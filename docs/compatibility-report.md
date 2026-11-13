@@ -1,6 +1,6 @@
 # Opt-in desktop compatibility reports
 
-After stopping a Switch 2 game, right-click that game and choose **Submit compatibility report**. The action is available only for the latest session in the current Lichii process. Starting another game clears that session, and closing Lichii discards it. This feature does not store play history.
+After stopping a Switch 2 game, right-click that game and choose **Submit compatibility report**. The action is available only for the latest session in the current Veshiru process. Starting another game clears that session, and closing Veshiru discards it. This feature does not store play history.
 
 Search the website catalog, select the exact game, and press **Confirm game**. Search is explicit and supports catalog pages. A Nintendo title ID is never used as a catalog ID. The search box uses control metadata or the loader's known title, including NUP package titles. Missing title metadata leaves the search blank rather than using a filename.
 
@@ -24,7 +24,7 @@ NUP packages select their embedded update internally, outside that catalog. Thei
 
 A separate controller/view design was considered. The dialog-owned implementation avoids a second mutable representation of one fixed-purpose form. The tests inject a network manager through a private construction seam and exercise the same widgets and state transitions as production, without emulator startup.
 
-The native v1 wire contract is [the website API reference](https://github.com/zortos293/Lichii-Website/blob/57ad91b89e80b5be040892c7e0983d69c887e307/docs/desktop-api.md). It has no private-log consent or upload fields. The two required attestations concern public disclosure and safe report contents.
+The native v1 wire contract is [the website API reference](https://github.com/2archiver/Veshiru-Website/blob/57ad91b89e80b5be040892c7e0983d69c887e307/docs/desktop-api.md). It has no private-log consent or upload fields. The two required attestations concern public disclosure and safe report contents.
 
 ## Verification without a game
 
@@ -37,7 +37,7 @@ cmake --build build/compatibility-report --parallel 4
 ctest --test-dir build/compatibility-report --output-on-failure
 ```
 
-The target also joins the normal Qt build when `LICHII_TESTS` is enabled. It uses the production Qt string-conversion definitions. Tests cover consent gates, catalog confirmation and pagination, stale responses, cancellation, double submission, exact allowed fields, retry identity, field errors, rate limits, malformed/oversized responses and unsafe receipt URLs. A loopback HTTP fixture checks actual Qt transport and ensures a seeded cookie is not sent. Neither fake transport nor loopback tests can send a production report.
+The target also joins the normal Qt build when `VESHIRU_TESTS` is enabled. It uses the production Qt string-conversion definitions. Tests cover consent gates, catalog confirmation and pagination, stale responses, cancellation, double submission, exact allowed fields, retry identity, field errors, rate limits, malformed/oversized responses and unsafe receipt URLs. A loopback HTTP fixture checks actual Qt transport and ensures a seeded cookie is not sent. Neither fake transport nor loopback tests can send a production report.
 
 For a synthetic dialog using only fake transport:
 

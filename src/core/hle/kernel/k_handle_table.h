@@ -23,8 +23,8 @@ namespace Kernel {
 class KernelCore;
 
 class KHandleTable {
-    LICHII_NON_COPYABLE(KHandleTable);
-    LICHII_NON_MOVEABLE(KHandleTable);
+    VESHIRU_NON_COPYABLE(KHandleTable);
+    VESHIRU_NON_MOVEABLE(KHandleTable);
 
 public:
     static constexpr size_t MaxTableSize = 1024;

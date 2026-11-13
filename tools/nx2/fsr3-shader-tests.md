@@ -1,6 +1,6 @@
 # FSR3 temporal regression checks
 
-This port adapts Frizti/Lichii `a605fac744b2e20202165d4b8c100d735cd39987`
+This port adapts Frizti/Veshiru `a605fac744b2e20202165d4b8c100d735cd39987`
 from the pinned `oot-gather-fix` tip `765659af4ccb7201d1145c57f3b45ce84653cea0`.
 The original change was authored by chuppatricky as
 `e725488a1e0c69efe31780d9d97f5b67bdefdf82`.

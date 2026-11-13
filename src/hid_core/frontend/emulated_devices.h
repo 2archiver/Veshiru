@@ -83,8 +83,8 @@ public:
     explicit EmulatedDevices();
     ~EmulatedDevices();
 
-    LICHII_NON_COPYABLE(EmulatedDevices);
-    LICHII_NON_MOVEABLE(EmulatedDevices);
+    VESHIRU_NON_COPYABLE(EmulatedDevices);
+    VESHIRU_NON_MOVEABLE(EmulatedDevices);
 
     /// Removes all callbacks created from input devices
     void UnloadInput();

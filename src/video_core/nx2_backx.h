@@ -13,7 +13,7 @@
 #include "common/logging.h"
 
 /// The GPU back thread's work outside draw preparation: locks and passes it skips where a check
-/// without the lock shows the locked work would change nothing (ported from jpkto/Lichii
+/// without the lock shows the locked work would change nothing (ported from jpkto/Veshiru
 /// 7a5e5357cb and f5edeabdbb). Guest CPU write traps hold the buffer cache's lock across page
 /// protection calls, so every acquisition the back makes can meet one and spin.
 namespace VideoCommon::BackX {

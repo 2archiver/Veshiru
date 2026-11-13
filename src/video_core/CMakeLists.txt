@@ -554,7 +554,7 @@ if (ENABLE_OPENGL)
     target_link_libraries(video_core PUBLIC glad)
 endif()
 
-if (LICHII_USE_EXTERNAL_FFMPEG)
+if (VESHIRU_USE_EXTERNAL_FFMPEG)
     add_dependencies(video_core ffmpeg-build)
 endif()
 

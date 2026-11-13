@@ -317,8 +317,8 @@
     <string name="install_game_content_success_overwrite">%1$d nadpisano</string>
     <string name="custom_driver_not_supported">Niestandardowe sterowniki nieobsługiwane</string>
     <string name="custom_driver_not_supported_description">Ładowanie niestandardowego sterownika nie jest obecnie obsługiwane na tym urządzeniu.\nSprawdź tę opcję ponownie w przyszłości, aby zobaczyć, czy dodano obsługę!</string>
-    <string name="manage_lichii_data">Zarządzaj danymi Eden</string>
-    <string name="manage_lichii_data_description">Importuj/eksportuj firmware, klucze i dane.</string>
+    <string name="manage_veshiru_data">Zarządzaj danymi Eden</string>
+    <string name="manage_veshiru_data_description">Importuj/eksportuj firmware, klucze i dane.</string>
     <string name="game_folders">Foldery gier</string>
     <string name="deep_scan">Głębokie skanowanie</string>
     <string name="add_game_folder">Dodaj folder gier</string>
@@ -384,7 +384,7 @@
     <string name="user_data_description">Importuj/eksportuj wszystkie dane aplikacji.\n\nPodczas importu danych użytkownika wszystkie istniejące dane użytkownika zostaną usunięte!\n\nImport danych z Citron może powodować problemy. Zaleca się ręczny import wszystkich potrzebnych danych.</string>
     <string name="exporting_user_data">Eksportowanie danych użytkownika…</string>
     <string name="importing_user_data">Importowanie danych użytkownika…</string>
-    <string name="invalid_lichii_backup">Nieprawidłowa kopia zapasowa Eden</string>
+    <string name="invalid_veshiru_backup">Nieprawidłowa kopia zapasowa Eden</string>
     <string name="user_data_export_success">Dane użytkownika wyeksportowano pomyślnie</string>
     <string name="user_data_import_success">Dane użytkownika zaimportowano pomyślnie</string>
     <string name="user_data_export_cancelled">Eksport anulowano</string>

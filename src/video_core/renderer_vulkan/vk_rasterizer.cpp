@@ -2977,7 +2977,7 @@ bool RasterizerVulkan::OnCPUWrite(DAddr addr, u64 size) {
 }
 
 void RasterizerVulkan::OnCacheInvalidations(std::span<const std::pair<DAddr, u64>> ranges) {
-    // Each cache's lock is taken once for all the writes, not once a write (jpkto/Lichii
+    // Each cache's lock is taken once for all the writes, not once a write (jpkto/Veshiru
     // f5edeabdbb): guest CPU write traps hold the buffer cache's for long. The caches are
     // independent (TextureCache::WriteMemory reads and changes only texture state, and the page
     // counts both change commute), so each ends as with the writes applied one by one.
@@ -3935,7 +3935,7 @@ void RasterizerVulkan::AccelerateInlineToMemory(GPUVAddr address, size_t copy_si
     // on command list pages and kept words (GPU-written too). Every range the buffer cache records
     // as GPU-written marks its pages in Tegra::g_nx2_gpu_written_pages first, under its lock, on
     // this thread, and the bits never clear. So when no written page has either mark the locked
-    // section changes nothing, and the write skips the lock (jpkto/Lichii 7a5e5357cb).
+    // section changes nothing, and the write skips the lock (jpkto/Veshiru 7a5e5357cb).
     const DAddr page_begin = Common::AlignDown(*cpu_addr, Core::DEVICE_PAGESIZE);
     const DAddr page_end = Common::AlignUp(*cpu_addr + copy_size, Core::DEVICE_PAGESIZE);
     const auto reaches_list_page = [&] {
@@ -5122,7 +5122,7 @@ void RasterizerVulkan::UpdateVertexInput(Tegra::Engines::Maxwell3D::Regs& regs) 
     }
 
     // The state these registers built before, recorded by reference instead of built and copied
-    // into the command again (jpkto/Lichii e7581fa9f6): converting every attribute's format and
+    // into the command again (jpkto/Veshiru e7581fa9f6): converting every attribute's format and
     // copying both arrays into the command was ~0.5 ms a frame of Mario Kart World's back.
     VideoCommon::VertexInputKey key{
         .num_attributes = max_attributes,

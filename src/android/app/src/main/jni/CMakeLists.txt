@@ -3,7 +3,7 @@
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-add_library(lichii-android SHARED
+add_library(veshiru-android SHARED
     emu_window/emu_window.cpp
     emu_window/emu_window.h
     native.cpp
@@ -19,19 +19,19 @@ add_library(lichii-android SHARED
     native_post_processing.cpp
 )
 
-set_property(TARGET lichii-android PROPERTY IMPORTED_LOCATION ${FFmpeg_LIBRARY_DIR})
+set_property(TARGET veshiru-android PROPERTY IMPORTED_LOCATION ${FFmpeg_LIBRARY_DIR})
 
-target_link_libraries(lichii-android PRIVATE audio_core common core input_common frontend_common video_core)
-target_link_libraries(lichii-android PRIVATE android camera2ndk EGL glad jnigraphics log GLESv2)
+target_link_libraries(veshiru-android PRIVATE audio_core common core input_common frontend_common video_core)
+target_link_libraries(veshiru-android PRIVATE android camera2ndk EGL glad jnigraphics log GLESv2)
 if (ARCHITECTURE_arm64)
-    target_link_libraries(lichii-android PRIVATE adrenotools)
+    target_link_libraries(veshiru-android PRIVATE adrenotools)
 endif()
 
-target_link_libraries(lichii-android PRIVATE ${FFmpeg_LIBRARIES} OpenSSL::SSL cpp-jwt::cpp-jwt)
+target_link_libraries(veshiru-android PRIVATE ${FFmpeg_LIBRARIES} OpenSSL::SSL cpp-jwt::cpp-jwt)
 if (ENABLE_UPDATE_CHECKER)
-    target_compile_definitions(lichii-android PUBLIC ENABLE_UPDATE_CHECKER)
+    target_compile_definitions(veshiru-android PUBLIC ENABLE_UPDATE_CHECKER)
 endif()
 
-set(CPACK_PACKAGE_EXECUTABLES ${CPACK_PACKAGE_EXECUTABLES} lichii-android)
+set(CPACK_PACKAGE_EXECUTABLES ${CPACK_PACKAGE_EXECUTABLES} veshiru-android)
 
-target_link_options(lichii-android PRIVATE "-Wl,-Bsymbolic")
+target_link_options(veshiru-android PRIVATE "-Wl,-Bsymbolic")

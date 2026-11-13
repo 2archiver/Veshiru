@@ -248,7 +248,7 @@ struct ColorConsoleBackend final : public Backend {
 struct FileBackend final : public Backend {
     explicit FileBackend(const std::filesystem::path filename) noexcept {
         // Move a log over its ".old.txt" copy. The rename replaces the copy atomically, and fails
-        // if the log is still open elsewhere (e.g. in a Lichii process that hasn't exited yet).
+        // if the log is still open elsewhere (e.g. in a Veshiru process that hasn't exited yet).
         // A log that can't even be checked counts as a failure, so it is never truncated.
         const auto rotate = [](const std::filesystem::path& path) {
             std::error_code ec;
@@ -384,7 +384,7 @@ struct LogcatBackend : public Backend {
             }
         }();
         auto const df = GetDirectFormatArgs(entry);
-        __android_log_print(android_log_priority, "LichiiNative", "%s %s:%u:%s: %s", df.class_name, entry.filename, entry.line_num, entry.function, entry.message);
+        __android_log_print(android_log_priority, "VeshiruNative", "%s %s:%u:%s: %s", df.class_name, entry.filename, entry.line_num, entry.function, entry.message);
     }
     void Flush() noexcept override {}
 };

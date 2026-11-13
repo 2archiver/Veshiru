@@ -60,7 +60,7 @@ public:
     ConfigDirectory()
         : original{Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir)},
           path{std::filesystem::temp_directory_path() /
-               fmt::format("lichii-config-{}", std::random_device{}())} {
+               fmt::format("veshiru-config-{}", std::random_device{}())} {
         REQUIRE(std::filesystem::create_directory(path));
         Common::FS::SetEdenPath(Common::FS::EdenPath::ConfigDir, path);
         for (const auto& [key, setting] : Settings::values.linkage.by_key) {

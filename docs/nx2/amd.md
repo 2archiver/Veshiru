@@ -4,7 +4,7 @@ Switch 2 games are written for an NVIDIA GPU. Their native shaders and command s
 NVIDIA behaviour in places where Vulkan leaves the result undefined, and the translated Vulkan
 usually does the same thing on an NVIDIA host by luck. AMD drivers return something else, so a
 missing or wrong emulation detail tends to show up on AMD first: NaN haze, garbage pixels, black
-scenes, driver timeouts. This page lists the differences found so far, what Lichii does about
+scenes, driver timeouts. This page lists the differences found so far, what Veshiru does about
 each, and how to investigate a new one.
 
 Ocarina of Time (`0400486024DEC000`) is the main test case, but the rules apply to every title.
@@ -14,7 +14,7 @@ Ocarina of Time (`0400486024DEC000`) is the main test case, but the rules apply 
 "Open" in the last column means the fix is a pull request that isn't merged yet: nx2 still behaves
 the old way there.
 
-| Guest (NVIDIA) behaviour | Vulkan, and what AMD does | What Lichii does | Change |
+| Guest (NVIDIA) behaviour | Vulkan, and what AMD does | What Veshiru does | Change |
 |---|---|---|---|
 | `FMNMX` returns the operand that is not NaN, and saturation turns NaN into 0 | `FMin`, `FMax` and `FClamp` leave NaN undefined; AMD returns the NaN, and blurred or accumulated targets spread it over the screen | Min, max, clamp and saturate are emitted as `NMin`/`NMax`, clamp as `NMin(NMax(x, lo), hi)` | [#432] (from [#325]) |
 | A bound render target that the fragment shader doesn't export keeps its old value | The attachment gets an undefined value; AMD writes whatever its export registers hold (format maximum, NaN) | The colour write mask, in the pipeline and in the dynamic mask, leaves out the components the fragment shader doesn't write | [#353] (from [#323]) |
@@ -79,22 +79,22 @@ Check these before filing a new one.
 5. If you can, compare with an NVIDIA run. A difference that also shows up there is an emulation
    bug, not an AMD one.
 
-[#127]: https://github.com/zortos293/Lichii/pull/127
-[#163]: https://github.com/zortos293/Lichii/issues/163
-[#165]: https://github.com/zortos293/Lichii/issues/165
-[#200]: https://github.com/zortos293/Lichii/issues/200
-[#273]: https://github.com/zortos293/Lichii/pull/273
-[#285]: https://github.com/zortos293/Lichii/issues/285
-[#295]: https://github.com/zortos293/Lichii/pull/295
-[#323]: https://github.com/zortos293/Lichii/issues/323
-[#325]: https://github.com/zortos293/Lichii/issues/325
-[#342]: https://github.com/zortos293/Lichii/issues/342
-[#351]: https://github.com/zortos293/Lichii/pull/351
-[#353]: https://github.com/zortos293/Lichii/pull/353
-[#354]: https://github.com/zortos293/Lichii/pull/354
-[#378]: https://github.com/zortos293/Lichii/pull/378
-[#392]: https://github.com/zortos293/Lichii/issues/392
-[#403]: https://github.com/zortos293/Lichii/issues/403
-[#425]: https://github.com/zortos293/Lichii/pull/425
-[#432]: https://github.com/zortos293/Lichii/pull/432
-[#462]: https://github.com/zortos293/Lichii/issues/462
+[#127]: https://github.com/2archiver/Veshiru/pull/127
+[#163]: https://github.com/2archiver/Veshiru/issues/163
+[#165]: https://github.com/2archiver/Veshiru/issues/165
+[#200]: https://github.com/2archiver/Veshiru/issues/200
+[#273]: https://github.com/2archiver/Veshiru/pull/273
+[#285]: https://github.com/2archiver/Veshiru/issues/285
+[#295]: https://github.com/2archiver/Veshiru/pull/295
+[#323]: https://github.com/2archiver/Veshiru/issues/323
+[#325]: https://github.com/2archiver/Veshiru/issues/325
+[#342]: https://github.com/2archiver/Veshiru/issues/342
+[#351]: https://github.com/2archiver/Veshiru/pull/351
+[#353]: https://github.com/2archiver/Veshiru/pull/353
+[#354]: https://github.com/2archiver/Veshiru/pull/354
+[#378]: https://github.com/2archiver/Veshiru/pull/378
+[#392]: https://github.com/2archiver/Veshiru/issues/392
+[#403]: https://github.com/2archiver/Veshiru/issues/403
+[#425]: https://github.com/2archiver/Veshiru/pull/425
+[#432]: https://github.com/2archiver/Veshiru/pull/432
+[#462]: https://github.com/2archiver/Veshiru/issues/462

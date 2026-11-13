@@ -116,7 +116,7 @@ const CPUCaps g_cpu_caps = [] {
     CPUCaps caps = {};
 
     // Assumes the CPU supports the CPUID instruction. Those that don't would likely not support
-    // Lichii at all anyway
+    // Veshiru at all anyway
     int cpu_id[4];
 
     // Detect CPU's CPUID capabilities and grab manufacturer string

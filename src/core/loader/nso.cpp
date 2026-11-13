@@ -45,7 +45,7 @@ struct MODHeader {
 static_assert(sizeof(MODHeader) == 0x1c, "MODHeader has incorrect size.");
 
 constexpr u32 PageAlignSize(u32 size) {
-    return static_cast<u32>((size + Core::Memory::LICHII_PAGEMASK) & ~Core::Memory::LICHII_PAGEMASK);
+    return static_cast<u32>((size + Core::Memory::VESHIRU_PAGEMASK) & ~Core::Memory::VESHIRU_PAGEMASK);
 }
 } // Anonymous namespace
 

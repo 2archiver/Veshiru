@@ -13,7 +13,7 @@
 
 #include "core/gpu_dirty_memory_manager.h"
 
-// Ported from jpkto/Lichii 7a5e5357cb (src/tests/video_core/nx2_backx.cpp).
+// Ported from jpkto/Veshiru 7a5e5357cb (src/tests/video_core/nx2_backx.cpp).
 
 namespace {
 

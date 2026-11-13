@@ -42,7 +42,7 @@ std::string ReadDump(const std::filesystem::path& directory) {
 TEST_CASE("ListMacroTrace: a macro call is noted only when a GPU-written entry fed it",
           "[video_core]") {
     namespace Trace = VideoCommon::ListMacroTrace;
-    const auto directory = std::filesystem::temp_directory_path() / "lichii-list-macro-trace";
+    const auto directory = std::filesystem::temp_directory_path() / "veshiru-list-macro-trace";
     SetDebugDir(directory);
     const std::vector<u32> code(9, 0);
     const std::vector<u32> parameters{7, 8, 9};
@@ -99,7 +99,7 @@ TEST_CASE("ListMacroTrace: a macro call is noted only when a GPU-written entry f
 TEST_CASE("ListMacroTrace: what reads the data RAM words a GPU-written entry's call stored",
           "[video_core]") {
     namespace Trace = VideoCommon::ListMacroTrace;
-    const auto directory = std::filesystem::temp_directory_path() / "lichii-list-macro-reader";
+    const auto directory = std::filesystem::temp_directory_path() / "veshiru-list-macro-reader";
     SetDebugDir(directory);
     // Compute macro 055743923e135e09 (method 0xe74): data RAM 0x20-0x22 = its three parameters.
     const std::vector<u32> store{0x00000087, 0xb9c7c008, 0x399c7f01,

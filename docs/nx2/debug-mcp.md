@@ -5,7 +5,7 @@ package, wait for the owner to launch the game, press a hotkey and send the log 
 dumps. Every new question costs a relaunch, and most cost a rebuild, because every
 `EDEN_NX2_*` switch is read once at startup.
 
-This document designs an opt-in debug server inside Lichii and an MCP adapter that agents run on
+This document designs an opt-in debug server inside Veshiru and an MCP adapter that agents run on
 the PC, so an agent can ask a running game questions directly. Phase 1 is implemented on the
 `feat/debug-mcp` branch; the later phases are proposals with the hook points they need.
 
@@ -24,7 +24,7 @@ Line numbers refer to `feat/debug-mcp` at the time of writing.
 ## Architecture
 
 ```
-agent ──stdio MCP──> tools/nx2/debug_mcp.py ──TCP 127.0.0.1, JSON lines──> Lichii
+agent ──stdio MCP──> tools/nx2/debug_mcp.py ──TCP 127.0.0.1, JSON lines──> Veshiru
   (on the PC)          (Python, stdlib only)                               ├─ "DebugServer" thread
                                                                            │    tools: status, screenshot, log_*, ...
                                                                            └─ rasterizer thread
@@ -57,7 +57,7 @@ server copies its threading model, not its protocol.
 - MCP's own transports are stdio, which needs the agent to launch the process (it cannot launch
   the emulator, which the owner starts), and Streamable HTTP, which needs sessions and
   server-sent events. Neither fits inside the emulator cheaply.
-- A JSON-lines socket is about 200 lines of C++ with libraries Lichii already links (Boost.Asio,
+- A JSON-lines socket is about 200 lines of C++ with libraries Veshiru already links (Boost.Asio,
   nlohmann::json, both already used by `core`). Anything can drive it: the adapter, a test,
   or `python -c`.
 - The adapter owns everything that is MCP: tool descriptions, input schemas, image content, error
@@ -87,7 +87,7 @@ Three kinds of work, three places:
    is safe.
 3. **Existing renderer hooks.** The screenshot uses `RendererBase::RequestScreenshot`
    (`src/video_core/renderer_base.cpp:38`), the path the Qt screenshot hotkey uses
-   (`src/lichii/bootmanager.cpp:819`). It is already safe to call from another thread, and the
+   (`src/veshiru/bootmanager.cpp:819`). It is already safe to call from another thread, and the
    renderer fills the buffer at the next present (`renderer_vulkan.cpp:350`).
 
 The server thread waits for rasterizer-thread work with a timeout (5 s for screenshots and
@@ -394,7 +394,7 @@ Live switch classification, from the switches in `src/`:
 
 The core cannot save state. There is no serialisation of the kernel, services, the dynarmic and
 NCE CPU state, or the GPU caches, and Eden and yuzu never had it. The `saveState` in
-`src/lichii/main_window.cpp` is Qt window geometry. Adding save states is a project of its own,
+`src/veshiru/main_window.cpp` is Qt window geometry. Adding save states is a project of its own,
 not a tool. The practical substitute is a reproduction script: phase 2 input sequences, recorded
 once (`EDEN_NX2_KEY_RECORD` already records keys in `eden-cli`) and replayed after boot.
 
@@ -402,7 +402,7 @@ once (`EDEN_NX2_KEY_RECORD` already records keys in `eden-cli`) and replayed aft
 
 1. Build the branch as usual:
    `bash C:/lx/build-fix.sh feat/debug-mcp debug-mcp "Any - debug server" "EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545"`.
-   Optionally add `EDEN_NX2_DEBUG_DIR=C:/Users/Zortos/.capy/work/lichii-debug/debug-mcp/dumps`
+   Optionally add `EDEN_NX2_DEBUG_DIR=C:/Users/Zortos/.capy/work/veshiru-debug/debug-mcp/dumps`
    so dumps land next to the build.
 2. The owner launches the game from the shortcut. The log shows
    `Debug server listening on 127.0.0.1:6545, dump dir ...`.

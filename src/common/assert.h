@@ -18,13 +18,13 @@ void AssertFailSoftImpl();
 
 // Prevents errors on old GCC... smh...
 #ifdef _MSC_VER
-#define LICHII_NO_INLINE __declspec(noinline)
+#define VESHIRU_NO_INLINE __declspec(noinline)
 #else
-#define LICHII_NO_INLINE __attribute__((noinline))
+#define VESHIRU_NO_INLINE __attribute__((noinline))
 #endif
 
 #define ASSERT_MSG(_a_, ...)                                                                       \
-    ([&]() LICHII_NO_INLINE {                                                                       \
+    ([&]() VESHIRU_NO_INLINE {                                                                       \
         auto&& assert_condition = (_a_);                                                           \
         if (!(assert_condition)) [[unlikely]] {                                                   \
             LOG_CRITICAL(Debug, __FILE__ ": assert " __VA_ARGS__);                                \

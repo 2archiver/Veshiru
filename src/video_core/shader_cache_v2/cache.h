@@ -25,9 +25,9 @@ namespace VideoCommon::ShaderCacheV2 {
 struct LogRecord;
 
 /// The log of a title, in its shader cache directory
-inline constexpr std::string_view FileName{"lichii-cache.v2.bin"};
+inline constexpr std::string_view FileName{"veshiru-cache.v2.bin"};
 /// What the driver compiled for that title's pipelines, beside it (driver_blobs.h)
-inline constexpr std::string_view DriverFileName{"lichii-cache.v2.driver.bin"};
+inline constexpr std::string_view DriverFileName{"veshiru-cache.v2.driver.bin"};
 
 /// What the log held for a program the shader cache captured
 enum class ProgramLookup : u8 {

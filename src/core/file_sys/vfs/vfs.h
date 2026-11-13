@@ -38,8 +38,8 @@ enum class VfsEntryType {
 // functionality, they will need to override.
 class VfsFilesystem {
 public:
-    LICHII_NON_COPYABLE(VfsFilesystem);
-    LICHII_NON_MOVEABLE(VfsFilesystem);
+    VESHIRU_NON_COPYABLE(VfsFilesystem);
+    VESHIRU_NON_MOVEABLE(VfsFilesystem);
 
     explicit VfsFilesystem(VirtualDir root);
     virtual ~VfsFilesystem();
@@ -89,8 +89,8 @@ protected:
 // A class representing a file in an abstract filesystem.
 class VfsFile {
 public:
-    LICHII_NON_COPYABLE(VfsFile);
-    LICHII_NON_MOVEABLE(VfsFile);
+    VESHIRU_NON_COPYABLE(VfsFile);
+    VESHIRU_NON_MOVEABLE(VfsFile);
 
     VfsFile() = default;
     virtual ~VfsFile();
@@ -192,8 +192,8 @@ public:
 // A class representing a directory in an abstract filesystem.
 class VfsDirectory {
 public:
-    LICHII_NON_COPYABLE(VfsDirectory);
-    LICHII_NON_MOVEABLE(VfsDirectory);
+    VESHIRU_NON_COPYABLE(VfsDirectory);
+    VESHIRU_NON_MOVEABLE(VfsDirectory);
 
     VfsDirectory() = default;
     virtual ~VfsDirectory();

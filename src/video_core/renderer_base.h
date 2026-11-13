@@ -67,8 +67,8 @@ struct RendererSettings {
 
 class RendererBase {
 public:
-    LICHII_NON_COPYABLE(RendererBase);
-    LICHII_NON_MOVEABLE(RendererBase);
+    VESHIRU_NON_COPYABLE(RendererBase);
+    VESHIRU_NON_MOVEABLE(RendererBase);
 
     explicit RendererBase(Core::Frontend::EmuWindow& window,
                           std::unique_ptr<Core::Frontend::GraphicsContext> context);

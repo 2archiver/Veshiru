@@ -15,7 +15,7 @@ namespace VideoCommon {
 /// The registers RasterizerVulkan::UpdateVertexInput builds a dynamic vertex input state from:
 /// every attribute's format word, every binding's stride, divisor and instancing, the bindings the
 /// buffer cache repacks, and how many of each the device takes. The build reads nothing else, so
-/// equal keys build equal states. From jpkto/Lichii e7581fa9f6.
+/// equal keys build equal states. From jpkto/Veshiru e7581fa9f6.
 struct VertexInputKey {
     static constexpr size_t MaxEntries = 32;
 

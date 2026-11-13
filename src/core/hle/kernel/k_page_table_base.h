@@ -52,8 +52,8 @@ class KResourceLimit;
 class KSystemResource;
 
 class KPageTableBase {
-    LICHII_NON_COPYABLE(KPageTableBase);
-    LICHII_NON_MOVEABLE(KPageTableBase);
+    VESHIRU_NON_COPYABLE(KPageTableBase);
+    VESHIRU_NON_MOVEABLE(KPageTableBase);
 
 public:
     using TraversalEntry = Common::PageTable::TraversalEntry;

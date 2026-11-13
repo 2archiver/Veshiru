@@ -9,7 +9,7 @@
 namespace detail {
 template <class F>
 class ScopeGuard {
-    LICHII_NON_COPYABLE(ScopeGuard);
+    VESHIRU_NON_COPYABLE(ScopeGuard);
 
 private:
     F f;

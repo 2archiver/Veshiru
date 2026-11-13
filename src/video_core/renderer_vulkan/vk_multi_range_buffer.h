@@ -46,7 +46,7 @@ public:
 
     explicit MultiRangeBufferCache(const Device& device);
 
-    LICHII_NON_COPYABLE(MultiRangeBufferCache);
+    VESHIRU_NON_COPYABLE(MultiRangeBufferCache);
 
     [[nodiscard]] MultiRangeRef Get(const Device& device, Scheduler& scheduler,
                                     MemoryAllocator& memory_allocator, u64 key,

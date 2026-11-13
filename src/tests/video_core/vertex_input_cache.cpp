@@ -7,7 +7,7 @@
 
 #include "video_core/vertex_input_cache.h"
 
-// Ported from jpkto/Lichii e7581fa9f6 (src/tests/video_core/draw_reuse.cpp).
+// Ported from jpkto/Veshiru e7581fa9f6 (src/tests/video_core/draw_reuse.cpp).
 
 TEST_CASE("Vertex input states are found by every register they are built from",
           "[video_core][vertex_input_cache]") {

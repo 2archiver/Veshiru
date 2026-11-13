@@ -46,17 +46,17 @@ Q_DECLARE_METATYPE(GameListItemType);
  * @param size The desired width and height of the default icon.
  * @return QPixmap default icon
  */
-static bool IsLichiiTheme() {
-    return UISettings::values.theme == "lichii";
+static bool IsVeshiruTheme() {
+    return UISettings::values.theme == "veshiru";
 }
 
 static QPixmap GetDefaultIcon(u32 size) {
-    if (size == 0 || !IsLichiiTheme()) {
+    if (size == 0 || !IsVeshiruTheme()) {
         QPixmap icon(size, size);
         icon.fill(Qt::transparent);
         return icon;
     }
-    // Lichii Dark draws a game without art as a tile with a controller glyph.
+    // Veshiru Dark draws a game without art as a tile with a controller glyph.
     const int side = static_cast<int>(size);
     QImage icon(side, side, QImage::Format_ARGB32_Premultiplied);
     icon.fill(Qt::transparent);
@@ -68,13 +68,13 @@ static QPixmap GetDefaultIcon(u32 size) {
     painter.drawRoundedRect(QRectF(0, 0, side, side), side * 0.18, side * 0.18);
     const int glyph = side * 3 / 8;
     painter.drawImage(QRect((side - glyph) / 2, (side - glyph) / 2, glyph, glyph),
-                      QImage(QStringLiteral(":/lichii/icons/menu_gamepad@2x.png")));
+                      QImage(QStringLiteral(":/veshiru/icons/menu_gamepad@2x.png")));
     painter.end();
     return QPixmap::fromImage(icon);
 }
 
 static QPixmap RoundedIcon(const QPixmap& picture) {
-    if (!IsLichiiTheme() || picture.isNull()) {
+    if (!IsVeshiruTheme() || picture.isNull()) {
         return picture;
     }
     QImage icon(picture.size(), QImage::Format_ARGB32_Premultiplied);
@@ -91,16 +91,16 @@ static QPixmap RoundedIcon(const QPixmap& picture) {
 }
 
 static QPixmap ThemeIcon(const char* name) {
-    if (IsLichiiTheme()) {
-        // Lichii Dark keeps folder rows compact with the 16 px line icons from its set.
+    if (IsVeshiruTheme()) {
+        // Veshiru Dark keeps folder rows compact with the 16 px line icons from its set.
         const std::string_view icon{name};
-        const char* lichii_name = icon == "sd_card"    ? "sd"
+        const char* veshiru_name = icon == "sd_card"    ? "sd"
                                   : icon == "chip"     ? "cpu"
                                   : icon == "list-add" ? "plus"
                                   : icon == "star"     ? "star"
                                                        : "folder";
         QPixmap pixmap(
-            QStringLiteral(":/lichii/icons/menu_%1@2x.png").arg(QLatin1String(lichii_name)));
+            QStringLiteral(":/veshiru/icons/menu_%1@2x.png").arg(QLatin1String(veshiru_name)));
         pixmap.setDevicePixelRatio(2.0);
         return pixmap;
     }

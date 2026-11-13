@@ -23,7 +23,7 @@ using namespace FrontendCommon;
 namespace {
 struct Fixture {
     fs::path root = fs::temp_directory_path() /
-                    ("lichii-import-config-" + std::to_string(std::random_device{}()));
+                    ("veshiru-import-config-" + std::to_string(std::random_device{}()));
     Fixture() {
         fs::create_directories(root);
     }
@@ -36,7 +36,7 @@ struct Fixture {
 
 TEST_CASE("Imported paths are remapped by path component", "[migration]") {
     const auto old_root = fs::absolute("eden");
-    const auto new_root = fs::absolute("lichii");
+    const auto new_root = fs::absolute("veshiru");
     CHECK(RemapImportedPath(old_root / "custom-nand", old_root, new_root) ==
           new_root / "custom-nand");
     CHECK(RemapImportedPath(old_root, old_root, new_root) == new_root);
@@ -52,7 +52,7 @@ TEST_CASE("Move remaps every raw imported storage path before the source disappe
           "[migration]") {
     Fixture fixture;
     const auto source = fixture.root / "eden";
-    const auto destination = fixture.root / "lichii";
+    const auto destination = fixture.root / "veshiru";
     const auto config = source / "config";
     fs::create_directories(config / "custom");
     constexpr std::array keys{"nand_directory", "save_directory", "sdmc_directory",
@@ -68,7 +68,7 @@ TEST_CASE("Move remaps every raw imported storage path before the source disappe
         file << "[Screenshots]\nscreenshot_path=\""
              << (source / "custom-screenshots").generic_string() << "\"\n";
     }
-    const auto state = fixture.root / "lichii.migration";
+    const auto state = fixture.root / "veshiru.migration";
     Migration::RunImport(
         {{{source, destination}}, Migration::Strategy::Move, state, {}}, [&](const auto& staged) {
             RemapImportedConfig(staged.at(0).destination / "config", source, destination);
@@ -123,11 +123,11 @@ TEST_CASE("CLI-first configuration is blocked and portable user stays untouched"
     setenv("XDG_CONFIG_HOME", (fixture.root / "config").c_str(), 1);
     setenv("XDG_CACHE_HOME", (fixture.root / "cache").c_str(), 1);
     fs::create_directories(fixture.root / "data/eden");
-    fs::create_directories(fixture.root / "config/lichii");
+    fs::create_directories(fixture.root / "config/veshiru");
     Common::FS::SetAppDirectory("");
     CHECK(NeedsLegacyProfileImport());
     CHECK_THROWS(CheckLegacyProfileBeforeConfig());
-    CHECK(fs::is_empty(fixture.root / "config/lichii"));
+    CHECK(fs::is_empty(fixture.root / "config/veshiru"));
     Migration::MarkFresh(ProfileImportStateDirectory());
     CHECK_FALSE(NeedsLegacyProfileImport());
     CHECK_NOTHROW(CheckLegacyProfileBeforeConfig());

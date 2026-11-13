@@ -1,7 +1,7 @@
 # Renaming inherited yuzu names
 
-Lichii inherits code from yuzu through Eden and Eglantine. The yuzu project name is replaced
-with Lichii in code, build files, paths, user-visible text and documentation. Copyright and
+Veshiru inherits code from yuzu through Eden and Eglantine. The yuzu project name is replaced
+with Veshiru in code, build files, paths, user-visible text and documentation. Copyright and
 licence notices stay exactly as they are, and so does anything that existing user data,
 caches or build directories depend on.
 
@@ -37,7 +37,7 @@ there are renamed).
 - **attribution**: copyright notices and statements of where the code comes from. Removing
   them would break the GPL.
 - **compat**: on-disk names, file magics, protocol strings and old option names that existing
-  installs depend on. Lichii keeps reading them.
+  installs depend on. Veshiru keeps reading them.
 - **removed**: text that was deleted rather than renamed. A KEEP pattern stops `apply` from
   rewriting it if an upstream sync brings it back, and `check --strict` fails on it, with the
   reason saying what to delete.
@@ -45,11 +45,11 @@ there are renamed).
 
 ## Build options
 
-The CMake options are `LICHII_*` (`LICHII_TESTS`, `LICHII_CMD`, `LICHII_USE_BUNDLED_QT`, ...).
+The CMake options are `VESHIRU_*` (`VESHIRU_TESTS`, `VESHIRU_CMD`, `VESHIRU_USE_BUNDLED_QT`, ...).
 `CMakeModules/LegacyOptions.cmake` carries an old `-DYUZU_*` value, from the command line or
 an existing cache, to the new name and removes the old entry, so existing build directories
-and scripts keep their settings. The targets are `lichii` (output `lichii`), `lichii-cmd`
-(output `eden-cli`), `lichii-room` and `lichii_room_standalone` (output `eden-room`).
+and scripts keep their settings. The targets are `veshiru` (output `veshiru`), `veshiru-cmd`
+(output `eden-cli`), `veshiru-room` and `veshiru_room_standalone` (output `eden-room`).
 
 ## After an upstream sync
 
@@ -70,46 +70,46 @@ then merge nx2.
 
 | Old | New |
 |---|---|
-| `src/yuzu/` | `src/lichii/` (Qt frontend) |
-| `src/yuzu_cmd/` | `src/lichii_cmd/` |
-| `src/yuzu_room_standalone/yuzu_room_standalone.cpp` | `src/lichii_room_standalone/lichii_room_standalone.cpp` |
-| `src/dedicated_room/yuzu_room.{cpp,h,rc}` | `src/dedicated_room/lichii_room.{cpp,h,rc}` |
-| `src/tests/yuzu_cmd/` | `src/tests/lichii_cmd/` |
-| `dist/yuzu.manifest` | `dist/lichii.manifest` |
-| `src/android/app/src/main/java/org/yuzu/yuzu_emu/` | `src/android/app/src/main/java/io/github/zortos293/lichii/` |
+| `src/yuzu/` | `src/veshiru/` (Qt frontend) |
+| `src/yuzu_cmd/` | `src/veshiru_cmd/` |
+| `src/yuzu_room_standalone/yuzu_room_standalone.cpp` | `src/veshiru_room_standalone/veshiru_room_standalone.cpp` |
+| `src/dedicated_room/yuzu_room.{cpp,h,rc}` | `src/dedicated_room/veshiru_room.{cpp,h,rc}` |
+| `src/tests/yuzu_cmd/` | `src/tests/veshiru_cmd/` |
+| `dist/yuzu.manifest` | `dist/veshiru.manifest` |
+| `src/android/app/src/main/java/org/yuzu/yuzu_emu/` | `src/android/app/src/main/java/dev/veshiru/emulator/` |
 
 ### CMake targets
 
 | Old | New | Output |
 |---|---|---|
-| `yuzu` | `lichii` | `lichii` (`lichii.exe`) |
-| `yuzu-cmd` | `lichii-cmd` | `eden-cli` |
-| `yuzu-room` | `lichii-room` | `eden-room` |
-| `yuzu_room_standalone` | `lichii_room_standalone` | `eden-room` |
-| `yuzu-android` | `lichii-android` | `liblichii-android.so` |
+| `yuzu` | `veshiru` | `veshiru` (`veshiru.exe`) |
+| `yuzu-cmd` | `veshiru-cmd` | `eden-cli` |
+| `yuzu-room` | `veshiru-room` | `eden-room` |
+| `yuzu_room_standalone` | `veshiru_room_standalone` | `eden-room` |
+| `yuzu-android` | `veshiru-android` | `libveshiru-android.so` |
 
 ### CMake options
 
-Every `YUZU_<name>` option and the compile definition it produces is `LICHII_<name>`, for
-example `YUZU_TESTS` -> `LICHII_TESTS`, `YUZU_CMD` -> `LICHII_CMD`, `YUZU_ROOM` ->
-`LICHII_ROOM`, `YUZU_USE_BUNDLED_QT` -> `LICHII_USE_BUNDLED_QT`. The full list is `OPTIONS` in
+Every `YUZU_<name>` option and the compile definition it produces is `VESHIRU_<name>`, for
+example `YUZU_TESTS` -> `VESHIRU_TESTS`, `YUZU_CMD` -> `VESHIRU_CMD`, `YUZU_ROOM` ->
+`VESHIRU_ROOM`, `YUZU_USE_BUNDLED_QT` -> `VESHIRU_USE_BUNDLED_QT`. The full list is `OPTIONS` in
 `tools/rename/areas/build.py`.
 
 ### Android
 
 | Old | New |
 |---|---|
-| package and namespace `org.yuzu.yuzu_emu` | `io.github.zortos293.lichii` |
-| JNI exports `Java_org_yuzu_yuzu_1emu_*` | `Java_io_github_zortos293_lichii_*` |
-| `YuzuApplication`, `Yuzu*` classes, `Theme.Yuzu.*` | `LichiiApplication`, `Lichii*`, `Theme.Lichii.*` |
-| `ic_yuzu`, `ic_yuzu_splash` | `ic_lichii`, `ic_lichii_splash` |
+| package and namespace `org.yuzu.yuzu_emu` | `dev.veshiru.emulator` |
+| JNI exports `Java_org_yuzu_yuzu_1emu_*` | `Java_dev_veshiru_emulator_*` |
+| `YuzuApplication`, `Yuzu*` classes, `Theme.Yuzu.*` | `VeshiruApplication`, `Veshiru*`, `Theme.Veshiru.*` |
+| `ic_yuzu`, `ic_yuzu_splash` | `ic_veshiru`, `ic_veshiru_splash` |
 
 The applicationId `dev.eden.eden_emulator` was never a yuzu name and is unchanged.
 
 ### Identifiers and text
 
-Identifiers become `lichii`, `Lichii` and `LICHII` in the case they had, or a neutral name where
-Lichii reads wrong. In documentation and comments the project name yuzu or Yuzu becomes Lichii.
+Identifiers become `veshiru`, `Veshiru` and `VESHIRU` in the case they had, or a neutral name where
+Veshiru reads wrong. In documentation and comments the project name yuzu or Yuzu becomes Veshiru.
 
 ## Kept names
 
@@ -118,7 +118,7 @@ Each remaining yuzu is listed by `check -v` with its class and reason.
 - `YUZU_<name>`, `-DYUZU_*`: old CMake option names `LegacyOptions.cmake` still reads (compat).
 - `YuzuRoom-BanList-1`: ban list file magic of existing room ban lists (compat).
 - `yuzucach`: shader cache file magic in existing caches (compat).
-- Lineage statements naming yuzu among the projects Lichii builds on, and copyright notices
+- Lineage statements naming yuzu among the projects Veshiru builds on, and copyright notices
   (attribution).
 - References to the separate yuzu emulator in the user docs: Steam ROM Manager's
   "Nintendo Switch - Yuzu" preset, the `ikuzen/yuzu-hdr-multiplayer-dedicated` Docker image,

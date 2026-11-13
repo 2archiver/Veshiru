@@ -139,7 +139,7 @@ public:
 template <class P>
 class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelInfo> {
     /// Address shift for caching images into a hash table
-    static constexpr u64 LICHII_PAGEBITS = 20;
+    static constexpr u64 VESHIRU_PAGEBITS = 20;
 
     /// Enables debugging features to the texture cache
     static constexpr bool ENABLE_VALIDATION = P::ENABLE_VALIDATION;
@@ -154,7 +154,7 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
 
     static constexpr size_t UNSET_CHANNEL{(std::numeric_limits<size_t>::max)()};
 
-#ifdef LICHII_LEGACY
+#ifdef VESHIRU_LEGACY
     static constexpr s64 TARGET_THRESHOLD = 3_GiB;
 #else
     static constexpr s64 TARGET_THRESHOLD = 4_GiB;
@@ -458,8 +458,8 @@ private:
     template <typename Func>
     static void ForEachCPUPage(DAddr addr, size_t size, Func&& func) {
         static constexpr bool RETURNS_BOOL = std::is_same_v<std::invoke_result<Func, u64>, bool>;
-        const u64 page_end = (addr + size - 1) >> LICHII_PAGEBITS;
-        for (u64 page = addr >> LICHII_PAGEBITS; page <= page_end; ++page) {
+        const u64 page_end = (addr + size - 1) >> VESHIRU_PAGEBITS;
+        for (u64 page = addr >> VESHIRU_PAGEBITS; page <= page_end; ++page) {
             if constexpr (RETURNS_BOOL) {
                 if (func(page)) {
                     break;
@@ -473,8 +473,8 @@ private:
     template <typename Func>
     static void ForEachGPUPage(GPUVAddr addr, size_t size, Func&& func) {
         static constexpr bool RETURNS_BOOL = std::is_same_v<std::invoke_result<Func, u64>, bool>;
-        const u64 page_end = (addr + size - 1) >> LICHII_PAGEBITS;
-        for (u64 page = addr >> LICHII_PAGEBITS; page <= page_end; ++page) {
+        const u64 page_end = (addr + size - 1) >> VESHIRU_PAGEBITS;
+        for (u64 page = addr >> VESHIRU_PAGEBITS; page <= page_end; ++page) {
             if constexpr (RETURNS_BOOL) {
                 if (func(page)) {
                     break;
@@ -726,7 +726,7 @@ private:
     };
     Common::LeastRecentlyUsedCache<LRUItemParams> lru_cache;
 
- #ifdef LICHII_LEGACY
+ #ifdef VESHIRU_LEGACY
     static constexpr size_t TICKS_TO_DESTROY = 6;
  #else
     static constexpr size_t TICKS_TO_DESTROY = 8;

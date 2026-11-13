@@ -151,7 +151,7 @@ TEST_CASE("LocalRedirect: malformed server and CA certificates are ignored", "[c
     Settings::values.online_service_redirect = true;
     Settings::values.online_redirect_hosts = "a.example";
     Settings::values.online_redirect_server = "192.0.2.1";
-    const auto ca_path = std::filesystem::temp_directory_path() / "lichii_redirect_test_ca.der";
+    const auto ca_path = std::filesystem::temp_directory_path() / "veshiru_redirect_test_ca.der";
     constexpr char Pem[] = "-----BEGIN CERTIFICATE-----";
     WriteFile(ca_path, Pem, sizeof(Pem) - 1);
     Settings::values.online_redirect_ca = ca_path.string();

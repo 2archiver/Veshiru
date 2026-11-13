@@ -40,8 +40,8 @@ public:
     explicit SocketBase(SOCKET fd_) : fd{fd_} {}
     virtual ~SocketBase() = default;
 
-    LICHII_NON_COPYABLE(SocketBase);
-    LICHII_NON_MOVEABLE(SocketBase);
+    VESHIRU_NON_COPYABLE(SocketBase);
+    VESHIRU_NON_MOVEABLE(SocketBase);
 
     virtual Errno Initialize(Domain domain, Type type, Protocol protocol) = 0;
 

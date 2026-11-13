@@ -329,8 +329,8 @@
     <string name="install_game_content_success_overwrite">%1$d перезаписано</string>
     <string name="custom_driver_not_supported">Спеціальні драйвери не підтримуються</string>
     <string name="custom_driver_not_supported_description">Завантаження спеціальних драйверів цим пристроєм наразі не підтримується.\nПідтримку може бути додано пізніше, тож час від часу перевіряйте цей параметр!</string>
-    <string name="manage_lichii_data">Керування даними eden</string>
-    <string name="manage_lichii_data_description">Імпорт/експорт прошивки, ключів, даних користувача та іншого.</string>
+    <string name="manage_veshiru_data">Керування даними eden</string>
+    <string name="manage_veshiru_data_description">Імпорт/експорт прошивки, ключів, даних користувача та іншого.</string>
     <string name="game_folders">Тека з іграми</string>
     <string name="deep_scan">Глибоке сканування</string>
     <string name="add_game_folder">Додати теку з іграми</string>
@@ -399,7 +399,7 @@
     <string name="user_data_description">Імпортувати/експортувати всі дані програми.\n\nПри імпорті даних користувача всі наявні користувацькі дані буде видалено!\n\nЗавантаження даних із Citron може викликати проблеми. Рекомендується імпортувати всі необхідні дані звідти вручну.</string>
     <string name="exporting_user_data">Експорт даних користувача…</string>
     <string name="importing_user_data">Імпорт даних користувача…</string>
-    <string name="invalid_lichii_backup">Некоректна резервна копія Eden</string>
+    <string name="invalid_veshiru_backup">Некоректна резервна копія Eden</string>
     <string name="user_data_export_success">Дані користувача успішно експортовано</string>
     <string name="user_data_import_success">Дані користувача успішно імпортовано</string>
     <string name="user_data_export_cancelled">Експорт скасовано</string>

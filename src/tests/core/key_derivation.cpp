@@ -36,7 +36,7 @@ TEST_CASE("Keys of a generation the key file lacks are derived from its sources"
         SKIP("Keys are installed");
     }
 
-    const auto directory = std::filesystem::temp_directory_path() / "lichii-key-derivation-test";
+    const auto directory = std::filesystem::temp_directory_path() / "veshiru-key-derivation-test";
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
     {

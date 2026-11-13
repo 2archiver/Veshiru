@@ -12,8 +12,8 @@
 namespace FileSys {
 
 class HierarchicalSha3Storage : public IReadOnlyStorage {
-    LICHII_NON_COPYABLE(HierarchicalSha3Storage);
-    LICHII_NON_MOVEABLE(HierarchicalSha3Storage);
+    VESHIRU_NON_COPYABLE(HierarchicalSha3Storage);
+    VESHIRU_NON_MOVEABLE(HierarchicalSha3Storage);
 
 public:
     static constexpr s32 LayerCount = 3;

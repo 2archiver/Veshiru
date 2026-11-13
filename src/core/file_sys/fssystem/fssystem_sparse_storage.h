@@ -10,8 +10,8 @@
 namespace FileSys {
 
 class SparseStorage : public IndirectStorage {
-    LICHII_NON_COPYABLE(SparseStorage);
-    LICHII_NON_MOVEABLE(SparseStorage);
+    VESHIRU_NON_COPYABLE(SparseStorage);
+    VESHIRU_NON_MOVEABLE(SparseStorage);
 
 private:
     class ZeroStorage : public IReadOnlyStorage {

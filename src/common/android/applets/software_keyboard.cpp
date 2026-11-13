@@ -258,19 +258,19 @@ void AndroidKeyboard::SubmitNormalText(const ResultData& data) const {
 
 void InitJNI(JNIEnv* env) {
     s_software_keyboard_class = reinterpret_cast<jclass>(
-        env->NewGlobalRef(env->FindClass("io/github/zortos293/lichii/applets/keyboard/SoftwareKeyboard")));
+        env->NewGlobalRef(env->FindClass("dev/veshiru/emulator/applets/keyboard/SoftwareKeyboard")));
     s_keyboard_config_class = reinterpret_cast<jclass>(env->NewGlobalRef(
-        env->FindClass("io/github/zortos293/lichii/applets/keyboard/SoftwareKeyboard$KeyboardConfig")));
+        env->FindClass("dev/veshiru/emulator/applets/keyboard/SoftwareKeyboard$KeyboardConfig")));
     s_keyboard_data_class = reinterpret_cast<jclass>(env->NewGlobalRef(
-        env->FindClass("io/github/zortos293/lichii/applets/keyboard/SoftwareKeyboard$KeyboardData")));
+        env->FindClass("dev/veshiru/emulator/applets/keyboard/SoftwareKeyboard$KeyboardData")));
 
     s_swkbd_execute_normal = env->GetStaticMethodID(
         s_software_keyboard_class, "executeNormal",
-        "(Lio/github/zortos293/lichii/applets/keyboard/SoftwareKeyboard$KeyboardConfig;)Lio/github/zortos293/lichii/"
+        "(Ldev/veshiru/emulator/applets/keyboard/SoftwareKeyboard$KeyboardConfig;)Ldev/veshiru/emulator/"
         "applets/keyboard/SoftwareKeyboard$KeyboardData;");
     s_swkbd_execute_inline = env->GetStaticMethodID(
         s_software_keyboard_class, "executeInline",
-        "(Lio/github/zortos293/lichii/applets/keyboard/SoftwareKeyboard$KeyboardConfig;)V");
+        "(Ldev/veshiru/emulator/applets/keyboard/SoftwareKeyboard$KeyboardConfig;)V");
 }
 
 void CleanupJNI(JNIEnv* env) {

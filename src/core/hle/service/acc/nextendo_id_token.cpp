@@ -46,7 +46,7 @@ std::string Base64Url(std::string_view text) {
 
 // Nextendo's NEX servers don't check this signature, so a key made for the session will do.
 // Titles that verify it against Nextendo's JWKS (Splatoon 2's membership check) need Nextendo's
-// own key, which Lichii doesn't have.
+// own key, which Veshiru doesn't have.
 std::string SignRs256(std::string_view input) {
     static EVP_PKEY* const key = EVP_RSA_gen(2048);
     if (key == nullptr) {

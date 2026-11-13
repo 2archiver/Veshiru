@@ -65,7 +65,7 @@ To write the pipeline records of a whole cache as one path reads them:
 
 ```sh
 shader-sweep --list vulkan.fork-v54.bin --output-dir records [--path legacy|v2] \
-  [--programs-log lichii-cache.v2.bin]
+  [--programs-log veshiru-cache.v2.bin]
 ```
 
 `legacy` writes the records as they are in the file, and stops at the first damaged one, as

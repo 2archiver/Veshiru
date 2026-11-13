@@ -16,8 +16,8 @@ namespace Kernel {
 namespace {
 
 class KScopedLightLockPair {
-    LICHII_NON_COPYABLE(KScopedLightLockPair);
-    LICHII_NON_MOVEABLE(KScopedLightLockPair);
+    VESHIRU_NON_COPYABLE(KScopedLightLockPair);
+    VESHIRU_NON_MOVEABLE(KScopedLightLockPair);
 
 private:
     KLightLock* m_lower;

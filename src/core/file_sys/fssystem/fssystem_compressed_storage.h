@@ -19,8 +19,8 @@ namespace FileSys {
 using namespace Common::Literals;
 
 class CompressedStorage : public IReadOnlyStorage {
-    LICHII_NON_COPYABLE(CompressedStorage);
-    LICHII_NON_MOVEABLE(CompressedStorage);
+    VESHIRU_NON_COPYABLE(CompressedStorage);
+    VESHIRU_NON_MOVEABLE(CompressedStorage);
 
 public:
     static constexpr size_t NodeSize = 16_KiB;
@@ -49,8 +49,8 @@ public:
 
 private:
     class CompressedStorageCore {
-        LICHII_NON_COPYABLE(CompressedStorageCore);
-        LICHII_NON_MOVEABLE(CompressedStorageCore);
+        VESHIRU_NON_COPYABLE(CompressedStorageCore);
+        VESHIRU_NON_MOVEABLE(CompressedStorageCore);
 
     public:
         CompressedStorageCore() : m_table(), m_data_storage() {}
@@ -664,8 +664,8 @@ private:
     };
 
     class CacheManager {
-        LICHII_NON_COPYABLE(CacheManager);
-        LICHII_NON_MOVEABLE(CacheManager);
+        VESHIRU_NON_COPYABLE(CacheManager);
+        VESHIRU_NON_MOVEABLE(CacheManager);
 
     private:
         struct AccessRange {

@@ -103,15 +103,15 @@ jobs:
             -DCMAKE_CXX_COMPILER=g++-13 \
             -DENABLE_WERROR=ON \
             -DBUILD_TESTING=ON \
-            -DLICHII_TESTS=ON \
+            -DVESHIRU_TESTS=ON \
             -DENABLE_QT=ON \
             -DENABLE_QT_TRANSLATION=ON \
-            -DLICHII_CMD=ON \
-            -DLICHII_ROOM=OFF \
-            -DLICHII_ROOM_STANDALONE=OFF \
-            -DLICHII_USE_BUNDLED_QT=OFF \
+            -DVESHIRU_CMD=ON \
+            -DVESHIRU_ROOM=OFF \
+            -DVESHIRU_ROOM_STANDALONE=OFF \
+            -DVESHIRU_USE_BUNDLED_QT=OFF \
             "-DCMAKE_PREFIX_PATH=$QT_ROOT_DIR" \
-            -DLICHII_USE_BUNDLED_SDL3=ON \
+            -DVESHIRU_USE_BUNDLED_SDL3=ON \
             -DVulkanHeaders_FORCE_BUNDLED=ON \
             -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
             -DENABLE_UPDATE_CHECKER=ON \
@@ -228,14 +228,14 @@ jobs:
           "-DCMAKE_CXX_FLAGS=-DWIN32 -D_WINDOWS -EHsc -DNOMINMAX"
           -DENABLE_WERROR=ON
           -DBUILD_TESTING=ON
-          -DLICHII_TESTS=ON
+          -DVESHIRU_TESTS=ON
           -DENABLE_QT=ON
           -DENABLE_QT_TRANSLATION=ON
-          -DLICHII_CMD=ON
-          -DLICHII_ROOM=OFF
-          -DLICHII_ROOM_STANDALONE=OFF
-          -DLICHII_USE_BUNDLED_QT=OFF
-          -DLICHII_USE_BUNDLED_SDL3=ON
+          -DVESHIRU_CMD=ON
+          -DVESHIRU_ROOM=OFF
+          -DVESHIRU_ROOM_STANDALONE=OFF
+          -DVESHIRU_USE_BUNDLED_QT=OFF
+          -DVESHIRU_USE_BUNDLED_SDL3=ON
           -DENABLE_UPDATE_CHECKER=ON
           -DUSE_DISCORD_PRESENCE=OFF
           -DUSE_CCACHE=ON
@@ -250,15 +250,15 @@ jobs:
           cmake --build build --parallel
           ccache --show-stats -v
 
-      # nxformat is linked statically: lichii.exe must not need an nxformat.dll, which Windows
+      # nxformat is linked statically: veshiru.exe must not need an nxformat.dll, which Windows
       # may refuse to load (Smart App Control, code integrity policies) or that may be missing.
-      - name: Check lichii.exe does not import nxformat.dll
+      - name: Check veshiru.exe does not import nxformat.dll
         run: |
-          imports=$("$LLVM_ROOT/bin/llvm-readobj" --coff-imports build/bin/lichii.exe |
+          imports=$("$LLVM_ROOT/bin/llvm-readobj" --coff-imports build/bin/veshiru.exe |
             awk '/^(Import|DelayImport) {/ { kind = $1 } /^  Name:/ { print kind, $2 }')
           echo "$imports"
           if grep -qi ' nxformat.dll$' <<< "$imports"; then
-            echo "::error::lichii.exe imports nxformat.dll; nxformat must be linked statically"
+            echo "::error::veshiru.exe imports nxformat.dll; nxformat must be linked statically"
             exit 1
           fi
 

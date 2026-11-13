@@ -212,7 +212,7 @@ std::vector<Entry> ReadJournal(const fs::path& state) {
     std::string magic;
     std::size_t count{};
     file >> magic >> count;
-    if (!file || magic != "lichii-profile-import-v1" || count == 0 || count > 1024) {
+    if (!file || magic != "veshiru-profile-import-v1" || count == 0 || count > 1024) {
         throw std::runtime_error("Cannot read migration recovery journal");
     }
     std::vector<Entry> entries;
@@ -233,7 +233,7 @@ std::vector<Entry> ReadJournal(const fs::path& state) {
                            path(source_backup),
                            had_destination});
         const auto& entry = entries.back();
-        const auto prefix = entry.root.destination.native() + fs::path{".lichii-import-"}.native();
+        const auto prefix = entry.root.destination.native() + fs::path{".veshiru-import-"}.native();
         const auto stage_name = entry.stage.native();
         auto expected_backup = entry.stage;
         expected_backup.replace_extension(".backup");
@@ -258,7 +258,7 @@ std::vector<Entry> ReadJournal(const fs::path& state) {
 
 void WriteJournal(const fs::path& state, const std::vector<Entry>& entries) {
     std::ofstream file{state / "journal.tmp", std::ios::binary | std::ios::trunc};
-    file << "lichii-profile-import-v1 " << entries.size() << '\n';
+    file << "veshiru-profile-import-v1 " << entries.size() << '\n';
     for (const auto& entry : entries) {
         for (const auto& path : {entry.root.source, entry.root.destination, entry.stage,
                                  entry.backup, entry.source_backup}) {
@@ -383,11 +383,11 @@ void RunImport(const Plan& plan, const Prepare& prepare) {
     std::vector<Entry> entries;
     for (const auto& root : roots) {
         auto stage = root.destination;
-        stage += ".lichii-import-" + id + ".stage";
+        stage += ".veshiru-import-" + id + ".stage";
         auto backup = root.destination;
-        backup += ".lichii-import-" + id + ".backup";
+        backup += ".veshiru-import-" + id + ".backup";
         auto source_backup = root.source;
-        source_backup += ".lichii-import-" + id + ".backup";
+        source_backup += ".veshiru-import-" + id + ".backup";
         if (Exists(stage) || Exists(backup) || Exists(source_backup)) {
             throw std::runtime_error("Migration backup paths already exist");
         }
