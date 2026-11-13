@@ -15,6 +15,7 @@
 #include "common/settings_enums.h"
 #include "common/shutdown_progress.h"
 #include "frontend_common/settings_generator.h"
+#include "frontend_common/data_manager.h"
 #include "render/performance_overlay.h"
 #ifdef HAS_RESHADE
 #include "configuration/configure_post_processing.h"
@@ -22,7 +23,6 @@
 #endif
 #include "updater/update_dialog.h"
 
-#include "common/fs/ryujinx_compat.h"
 #include "main_window.h"
 #include "network/network.h"
 #include "qt_common/discord/discord.h"
@@ -41,7 +41,7 @@
 #include "bootmanager.h"
 #include "loading_screen.h"
 #include "qt_common/util/vk.h"
-#include "ryujinx_dialog.h"
+#include "eglantine_dialog.h"
 #include "set_play_time_dialog.h"
 #include "util/util.h"
 #include "veshiru/game/game_list.h"
@@ -114,7 +114,6 @@
 #include "qt_common/qt_string_lookup.h"
 
 #include "qt_common/util/content.h"
-#include "qt_common/util/fs.h"
 #include "qt_common/util/meta.h"
 #include "qt_common/util/mod.h"
 #include "qt_common/util/path.h"
@@ -1595,7 +1594,8 @@ void MainWindow::ConnectWidgetEvents() {
 
     connect(game_list, &GameList::OpenPerGameGeneralRequested, this,
             &MainWindow::OnGameListOpenPerGameProperties);
-    connect(game_list, &GameList::LinkToRyujinxRequested, this, &MainWindow::OnLinkToRyujinx);
+    connect(game_list, &GameList::LinkToEglantineRequested, this,
+            &MainWindow::OnLinkToEglantine);
 
     connect(this, &MainWindow::UpdateInstallProgress, this, &MainWindow::IncrementInstallProgress);
 
@@ -3206,49 +3206,37 @@ void MainWindow::OnGameListOpenPerGameProperties(const std::string& file) {
     OpenPerGameConfiguration(title_id, file);
 }
 
-void MainWindow::OnLinkToRyujinx(const u64& program_id) {
+void MainWindow::OnLinkToEglantine(const u64& program_id) {
     namespace fs = std::filesystem;
 
-    fs::path ryu_dir;
-
-    // find an existing Ryujinx linked path in config.ini; if it exists, use it as a "hint"
-    // If it's not defined in config.ini, use default
-    const fs::path existing_path =
-        UISettings::values.ryujinx_link_paths
-            .value(program_id, QDir(Common::FS::GetLegacyPath(Common::FS::RyujinxDir)))
-            .filesystemAbsolutePath();
-
-    // this function also prompts the user to manually specify a portable location
-    ryu_dir = QtCommon::FS::GetRyujinxSavePath(existing_path, program_id);
-
-    if (ryu_dir.empty())
-        return;
-
     const std::string user_id = GetProfileIDString();
-    if (user_id.empty())
+    if (user_id.empty()) {
+        QMessageBox::critical(this, tr("Link to Eglantine"),
+                              tr("Could not determine the current user profile."));
         return;
+    }
+
+    const fs::path eglantine_root = EglantineLink::ResolveEglantineRoot(this);
+    if (eglantine_root.empty()) {
+        // ResolveEglantineRoot already told the user what happened.
+        return;
+    }
 
     const std::string hex_program = fmt::format("{:016X}", program_id);
 
-    const fs::path eden_dir = FrontendCommon::DataManager::GetDataDir(
-                                  FrontendCommon::DataManager::DataDir::Saves, user_id) /
-                              hex_program;
+    const fs::path eglantine_dir =
+        EglantineLink::GetSaveDir(eglantine_root, user_id, program_id);
+    const fs::path veshiru_dir = FrontendCommon::DataManager::GetDataDir(
+                                     FrontendCommon::DataManager::DataDir::Saves, user_id) /
+                                 hex_program;
 
-    // CheckUnlink basically just checks to see if one or both are linked, and prompts the user to
-    // unlink if this is the case.
-    // If it returns false, neither dir is linked so it's fine to continue
-    if (!QtCommon::FS::CheckUnlink(eden_dir, ryu_dir)) {
-        RyujinxDialog dialog(eden_dir, ryu_dir, this);
-        if (dialog.exec() == QDialog::Accepted) {
-            UISettings::values.ryujinx_link_paths.insert(
-                program_id,
-                QString::fromStdString(Common::FS::GetRyuPathFromSavePath(ryu_dir).string()));
-        }
-    } else {
-        UISettings::values.ryujinx_link_paths.remove(program_id);
+    // If either directory is already a link, offer to unlink it first (and stop there).
+    if (EglantineLink::HandleAlreadyLinked(veshiru_dir, eglantine_dir, this)) {
+        return;
     }
 
-    config->SaveAllValues();
+    EglantineDialog dialog(veshiru_dir, eglantine_dir, this);
+    dialog.exec();
 }
 
 void MainWindow::OnMenuLoadFile() {

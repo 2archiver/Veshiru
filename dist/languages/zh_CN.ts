@@ -6200,8 +6200,8 @@ Please go to Configure -&gt; System -&gt; Network and make a selection.</source>
     </message>
     <message>
         <location filename="../../src/veshiru/game/game_list.cpp" line="461"/>
-        <source>Link to Ryujinx</source>
-        <translation>链接到 Ryujinx</translation>
+        <source>Link to Eglantine</source>
+        <translation>链接到 Eglantine</translation>
     </message>
     <message>
         <location filename="../../src/veshiru/game/game_list.cpp" line="463"/>
@@ -9647,8 +9647,8 @@ To:
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="41"/>
-        <source>This title is already linked to Ryujinx. Would you like to unlink it?</source>
-        <translation>此游戏已经被链接到 Ryujinx。您要取消链接它吗?</translation>
+        <source>This title is already linked to Eglantine. Would you like to unlink it?</source>
+        <translation>此游戏已经被链接到 Eglantine。您要取消链接它吗?</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="68"/>
@@ -9673,41 +9673,41 @@ To:
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="84"/>
-        <source>Successfully unlinked Ryujinx save data. Save data has been kept intact.</source>
-        <translation>已成功取消链接 Ryujinx 存档数据。存档数据已保持完整。</translation>
+        <source>Successfully unlinked Eglantine save data. Save data has been kept intact.</source>
+        <translation>已成功取消链接 Eglantine 存档数据。存档数据已保持完整。</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="97"/>
-        <source>Could not find Ryujinx installation</source>
-        <translation>无法找到 Ryujinx 安装数据</translation>
+        <source>Could not find Eglantine installation</source>
+        <translation>无法找到 Eglantine 安装数据</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="98"/>
-        <source>Could not find a valid Ryujinx installation. This may typically occur if you are using Ryujinx in portable mode.
+        <source>Could not find a valid Eglantine installation. This may typically occur if you are using Eglantine in portable mode.
 
 Would you like to manually select a portable folder to use?</source>
-        <translation>未找到有效的 Ryujinx 安装。这通常可能发生在您以便携模式使用 Ryujinx 时。您想手动选择一个便携模式文件夹来使用吗?</translation>
+        <translation>未找到有效的 Eglantine 安装。这通常可能发生在您以便携模式使用 Eglantine 时。您想手动选择一个便携模式文件夹来使用吗?</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="105"/>
-        <source>Ryujinx Portable Location</source>
-        <translation>便携 Ryujinx 安装位置</translation>
+        <source>Eglantine Portable Location</source>
+        <translation>便携 Eglantine 安装位置</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="122"/>
-        <source>Not a valid Ryujinx directory</source>
-        <translation>不是有效的 Ryujinx 安装目录</translation>
+        <source>Not a valid Eglantine directory</source>
+        <translation>不是有效的 Eglantine 安装目录</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="123"/>
-        <source>The specified directory does not contain valid Ryujinx data.</source>
-        <translation>指定的目录不包含有效的 Ryujinx 数据。</translation>
+        <source>The specified directory does not contain valid Eglantine data.</source>
+        <translation>指定的目录不包含有效的 Eglantine 数据。</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="141"/>
         <location filename="../../src/qt_common/util/fs.cpp" line="145"/>
-        <source>Could not find Ryujinx save data</source>
-        <translation>找不到 Ryujinx 的存档数据</translation>
+        <source>Could not find Eglantine save data</source>
+        <translation>找不到 Eglantine 的存档数据</translation>
     </message>
 </context>
 <context>
@@ -10129,33 +10129,33 @@ This is recommended if you want to share data between emulators.</source>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="129"/>
-        <source>Ryujinx title database does not exist.</source>
-        <translation>Ryujinx 标题数据库不存在。</translation>
+        <source>Eglantine title database does not exist.</source>
+        <translation>Eglantine 标题数据库不存在。</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="130"/>
-        <source>Invalid header on Ryujinx title database.</source>
-        <translation>Ryujinx 标题数据库头部无效。</translation>
+        <source>Invalid header on Eglantine title database.</source>
+        <translation>Eglantine 标题数据库头部无效。</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="131"/>
-        <source>Invalid magic header on Ryujinx title database.</source>
-        <translation>Ryujinx 标题数据库 magic 头部无效。</translation>
+        <source>Invalid magic header on Eglantine title database.</source>
+        <translation>Eglantine 标题数据库 magic 头部无效。</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="132"/>
-        <source>Invalid byte alignment on Ryujinx title database.</source>
-        <translation>Ryujinx 标题数据字节对齐无效。</translation>
+        <source>Invalid byte alignment on Eglantine title database.</source>
+        <translation>Eglantine 标题数据字节对齐无效。</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="133"/>
-        <source>No items found in Ryujinx title database.</source>
-        <translation>在 Ryujinx 的标题数据库中找不到项目。</translation>
+        <source>No items found in Eglantine title database.</source>
+        <translation>在 Eglantine 的标题数据库中找不到项目。</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="134"/>
-        <source>Title %1 not found in Ryujinx title database.</source>
-        <translation>在 Ryujinx 的标题数据库中找不到标题 %1。</translation>
+        <source>Title %1 not found in Eglantine title database.</source>
+        <translation>在 Eglantine 的标题数据库中找不到标题 %1。</translation>
     </message>
 </context>
 <context>
@@ -10575,43 +10575,43 @@ p, li { white-space: pre-wrap; }
     </message>
 </context>
 <context>
-    <name>RyujinxDialog</name>
+    <name>EglantineDialog</name>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="14"/>
-        <source>Ryujinx Link</source>
-        <translation>链接 Ryujinx</translation>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="14"/>
+        <source>Eglantine Link</source>
+        <translation>链接 Eglantine</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="26"/>
-        <source>Linking save data to Ryujinx lets both Ryujinx and Eden reference the same save files for your games.
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="26"/>
+        <source>Linking save data to Eglantine lets both Eglantine and Eden reference the same save files for your games.
 
-By selecting &quot;From Eden&quot;, previous save data stored in Ryujinx will be deleted, and vice versa for &quot;From Ryujinx&quot;.</source>
-        <translation>将存档数据链接到 Ryujinx 可以使 Ryujinx 和 Eden 都能引用相同的游戏存档文件。
+By selecting &quot;From Eden&quot;, previous save data stored in Eglantine will be deleted, and vice versa for &quot;From Eglantine&quot;.</source>
+        <translation>将存档数据链接到 Eglantine 可以使 Eglantine 和 Eden 都能引用相同的游戏存档文件。
 
-选择 “来自 Eden” 时，Ryujinx 中存储的上一个保存数据将被删除,反之选择“从 Ryujinx 开始”时亦然。</translation>
+选择 “来自 Eden” 时，Eglantine 中存储的上一个保存数据将被删除,反之选择“从 Eglantine 开始”时亦然。</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="40"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="40"/>
         <source>From Eden</source>
         <translation>来自 Eden</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="47"/>
-        <source>From Ryujinx</source>
-        <translation>来自 Ryujinx</translation>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="47"/>
+        <source>From Eglantine</source>
+        <translation>来自 Eglantine</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="54"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="54"/>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.cpp" line="37"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="37"/>
         <source>Failed to link save data</source>
         <translation>链接存档数据失败</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.cpp" line="38"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="38"/>
         <source>OS returned error: %1</source>
         <translation>OS 返回错误: %1</translation>
     </message>
@@ -11498,30 +11498,30 @@ or click to browse</source>
 <context>
     <name>fs</name>
     <message>
-        <source>Could not find Ryujinx installation</source>
-        <translation>无法找到 Ryujinx 安装数据</translation>
+        <source>Could not find Eglantine installation</source>
+        <translation>无法找到 Eglantine 安装数据</translation>
     </message>
     <message>
-        <source>Could not find a valid Ryujinx installation. This may typically occur if you are using Ryujinx in portable mode.
+        <source>Could not find a valid Eglantine installation. This may typically occur if you are using Eglantine in portable mode.
 
 Would you like to manually select a portable folder to use?</source>
-        <translation>未找到有效的 Ryujinx 安装。这通常可能发生在您以便携模式使用 Ryujinx 时。您想手动选择一个便携模式文件夹来使用吗?</translation>
+        <translation>未找到有效的 Eglantine 安装。这通常可能发生在您以便携模式使用 Eglantine 时。您想手动选择一个便携模式文件夹来使用吗?</translation>
     </message>
     <message>
-        <source>Ryujinx Portable Location</source>
-        <translation>便携 Ryujinx 安装位置</translation>
+        <source>Eglantine Portable Location</source>
+        <translation>便携 Eglantine 安装位置</translation>
     </message>
     <message>
-        <source>Not a valid Ryujinx directory</source>
-        <translation>不是有效的 Ryujinx 安装目录</translation>
+        <source>Not a valid Eglantine directory</source>
+        <translation>不是有效的 Eglantine 安装目录</translation>
     </message>
     <message>
-        <source>The specified directory does not contain valid Ryujinx data.</source>
-        <translation>指定的目录不包含有效的 Ryujinx 数据。</translation>
+        <source>The specified directory does not contain valid Eglantine data.</source>
+        <translation>指定的目录不包含有效的 Eglantine 数据。</translation>
     </message>
     <message>
-        <source>Could not find Ryujinx save data</source>
-        <translation>找不到 Ryujinx 的存档数据</translation>
+        <source>Could not find Eglantine save data</source>
+        <translation>找不到 Eglantine 的存档数据</translation>
     </message>
 </context>
 </TS>

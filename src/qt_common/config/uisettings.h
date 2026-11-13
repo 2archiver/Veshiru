@@ -223,7 +223,6 @@ struct Values {
     Setting<bool> cache_game_list{linkage, true, "cache_game_list", Category::UiGameList};
     Setting<bool> favorites_expanded{linkage, true, "favorites_expanded", Category::UiGameList};
     QVector<u64> favorited_ids;
-    QMap<u64, QDir> ryujinx_link_paths;
 
     // perf overlay
     Setting<bool> show_perf_overlay{linkage, false, "show_perf_overlay", Category::UiGameList};
