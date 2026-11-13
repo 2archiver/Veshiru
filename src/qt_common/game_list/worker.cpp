@@ -30,6 +30,7 @@
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/submission_package.h"
 #include "core/loader/loader.h"
+#include "core/loader/nup.h"
 #include "core/loader/nx.h"
 
 #include "qt_common/config/uisettings.h"
@@ -232,7 +233,7 @@ QString FormatPatchNameVersions(const FileSys::PatchManager& patch_manager,
     QString out;
     FileSys::VirtualFile update_raw;
     loader.ReadUpdateRaw(update_raw);
-    for (const auto& patch : patch_manager.GetPatches(update_raw)) {
+    for (const auto& patch : patch_manager.GetPatches(update_raw, &loader)) {
         const bool is_update = patch.type == FileSys::PatchType::Update;
         if (!updatable && is_update) {
             continue;
@@ -273,9 +274,12 @@ QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::stri
         });
 
     FileSys::NACP nacp{};
-    // An NX tree snapshot, like a NUP, is already the updated game: no patch manager update.
-    if ((file_type == Loader::FileType::NUP ||
-         (file_type == Loader::FileType::NX && !loader.IsRomFSUpdatable())) &&
+    // An NX tree snapshot is already the updated game. A NUP with a base lists its optional
+    // update through GetPatches; an update-only NUP is itself the bootable program version.
+    const bool nup_update_only =
+        file_type == Loader::FileType::NUP &&
+        static_cast<const Loader::AppLoader_NUP&>(loader).IsUpdateOnly();
+    if (((file_type == Loader::FileType::NX && !loader.IsRomFSUpdatable()) || nup_update_only) &&
         loader.ReadControlData(nacp) == Loader::ResultStatus::Success) {
         const std::string version_string = nacp.GetVersionString();
         if (!version_string.empty()) {

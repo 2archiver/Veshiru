@@ -1034,7 +1034,8 @@ VirtualFile PatchManager::PatchRomFS(const NCA* base_nca, VirtualFile base_romfs
     return romfs;
 }
 
-std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
+std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw,
+                                           const Loader::AppLoader* loader) const {
     if (title_id == 0) {
         return {};
     }
@@ -1422,6 +1423,28 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
                        .source = dlc_source});
     }
 
+    if (loader != nullptr) {
+        std::vector<Patch> carried;
+        if (loader->ReadCarriedPatches(carried) == Loader::ResultStatus::Success) {
+            for (auto& patch : carried) {
+                if (GetBaseTitleID(patch.program_id) != title_id) {
+                    continue;
+                }
+                const auto installed = std::find_if(out.begin(), out.end(), [&](const auto& p) {
+                    return p.type == patch.type && p.name == patch.name;
+                });
+                if (patch.type == PatchType::DLC && installed != out.end()) {
+                    // Keep one DLC checkbox and its existing disable key. Installed content
+                    // still takes precedence when the same title is opened by the FS service.
+                    if (!patch.version.empty()) {
+                        AppendCommaIfNotEmpty(installed->version, patch.version);
+                    }
+                } else {
+                    out.push_back(std::move(patch));
+                }
+            }
+        }
+    }
     return out;
 }
 

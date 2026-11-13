@@ -2290,7 +2290,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         report_loader.ReadUpdateRaw(update_raw);
         QList<CompatibilityReporting::Addon> mods;
         QList<CompatibilityReporting::Addon> updates;
-        for (const auto& patch : pm.GetPatches(update_raw)) {
+        for (const auto& patch : pm.GetPatches(update_raw, &report_loader)) {
             auto* entries = patch.type == FileSys::PatchType::Mod      ? &mods
                             : patch.type == FileSys::PatchType::Update ? &updates
                                                                        : nullptr;
@@ -2304,8 +2304,10 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
             if (report_loader.ReadDisplayVersion(version) == Loader::ResultStatus::Success &&
                 !version.empty()) {
                 session.game_version = QString::fromStdString(version);
-                updates.push_back(
-                    {QStringLiteral("Loaded NUP package"), session.game_version, true});
+            }
+            // A base-only NUP has no separate update entry, but its version is still useful.
+            if (updates.empty() && !session.game_version.isEmpty()) {
+                updates.push_back({QStringLiteral("Loaded NUP package"), session.game_version, true});
             }
         }
         session.mods = CompatibilityReporting::SummarizeEnabledAddons(mods);

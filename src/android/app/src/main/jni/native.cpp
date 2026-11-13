@@ -1562,7 +1562,7 @@ jobjectArray Java_dev_veshiru_emulator_NativeLibrary_getPatchesForFile(JNIEnv* e
     FileSys::VirtualFile update_raw;
     loader->ReadUpdateRaw(update_raw);
 
-    auto patches = pm.GetPatches(update_raw);
+    auto patches = pm.GetPatches(update_raw, loader.get());
     jobjectArray jpatchArray =
         env->NewObjectArray(patches.size(), Common::Android::GetPatchClass(), nullptr);
     int i = 0;

@@ -588,6 +588,13 @@ public:
                 }
                 for (const auto& content : fs::directory_iterator(title.path(), ec)) {
                     if (content.is_directory(ec) && HasContent(content.path())) {
+                        // dlc/<title_id>/<version>/ is a versioned add-on dump. Preserve the
+                        // version so extraction round-trips and the loader can select newest.
+                        const auto version = ParseDecimal(ToUtf8(content.path().filename()));
+                        if (version && *version > std::numeric_limits<u32>::max()) {
+                            throw PackError(PackResult::InvalidSource,
+                                            "add-on version out of range: " + ToUtf8(content.path()));
+                        }
                         addons.emplace_back(title_name + "/" + ToUtf8(content.path().filename()),
                                             content.path());
                     }
@@ -595,7 +602,9 @@ public:
             }
             std::ranges::sort(addons);
             for (const auto& [name, path] : addons) {
-                AddPackage(KindAddon, path, 0, {}, 0, *ParseTitleId(name.substr(0, 16)));
+                const auto version = ParseDecimal(name.substr(17));
+                AddPackage(KindAddon, path, version ? static_cast<u32>(*version) : 0, {}, 0,
+                           *ParseTitleId(name.substr(0, 16)));
             }
         }
 

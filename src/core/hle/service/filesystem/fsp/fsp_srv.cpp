@@ -514,6 +514,17 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
 
     auto data = romfs_controller->OpenRomFS(title_id, storage_id, FileSys::ContentRecordType::Data);
 
+    // Installed content wins; otherwise serve an add-on carried by the opened NUP. The loader
+    // checks the title relationship and the existing DLC disable key before opening its RomFS.
+    if (!data) {
+        FileSys::VirtualFile carried;
+        if (system.GetAppLoader().ReadAddOnRomFS(title_id, carried) ==
+                Loader::ResultStatus::Success && carried != nullptr) {
+            *out_interface = std::make_shared<IStorage>(system, std::move(carried));
+            R_SUCCEED();
+        }
+    }
+
     if (!data) {
         const auto archive = FileSys::SystemArchive::SynthesizeSystemArchive(title_id);
 

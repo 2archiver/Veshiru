@@ -3,11 +3,14 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
 #include "core/file_sys/nup_container.h"
+#include "core/file_sys/patch_manager.h"
 #include "core/loader/loader.h"
 
 namespace FileSys {
@@ -18,8 +21,8 @@ class NupContainer;
 namespace Loader {
 
 /// Loads a NUP (NX Package) container: loose ExeFS/RomFS trees for a base
-/// program plus its updates in one file. The newest update package is layered
-/// over the base; add-on content packages are recognized but not yet mounted.
+/// program plus its updates in one file. The selected update is layered over the base;
+/// carried add-on content is available through the loader when it is not installed separately.
 class AppLoader_NUP final : public AppLoader {
 public:
     explicit AppLoader_NUP(FileSys::VirtualFile file_);
@@ -50,9 +53,24 @@ public:
     ResultStatus ReadTitle(std::string& title) override;
     ResultStatus ReadControlData(FileSys::NACP& control) override;
     ResultStatus ReadNSOModules(Modules& modules) override;
+    ResultStatus ReadAddOnTitleIds(std::vector<u64>& out_title_ids) override;
+    ResultStatus ReadAddOnRomFS(u64 title_id, FileSys::VirtualFile& out_file) override;
+    ResultStatus ReadCarriedPatches(std::vector<FileSys::Patch>& out_patches) const override;
+
+    /// The update and add-ons carried by this file, using the existing add-on disable keys.
+    std::vector<FileSys::Patch> GetCarriedPatches() const;
+
+    /// An update-only file without a usable base package. A complete merged dump can boot
+    /// alone; a patch-only dump needs a matching base .nup in the same directory.
+    bool IsUpdateOnly() const {
+        return has_program && !nup->FindBasePackage().has_value();
+    }
 
 private:
     std::unique_ptr<FileSys::NupContainer> nup;
+    std::unique_ptr<FileSys::NupContainer> base_nup;
+    std::optional<std::size_t> base_nup_index;
+    std::optional<std::size_t> selected_update_index;
     std::unique_ptr<AppLoader> secondary_loader;
 
     std::unique_ptr<FileSys::NACP> nacp_file;
@@ -61,6 +79,9 @@ private:
     std::string display_title;
     std::string display_version;
     bool has_program{};
+    // Filesystem service threads may request different carried add-ons concurrently.
+    std::map<u64, FileSys::VirtualFile> addon_romfs;
+    std::mutex addon_romfs_mutex;
 };
 
 } // namespace Loader

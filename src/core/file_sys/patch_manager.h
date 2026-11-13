@@ -18,6 +18,10 @@ namespace Core {
 class System;
 }
 
+namespace Loader {
+class AppLoader;
+}
+
 namespace Service::FileSystem {
 class FileSystemController;
 }
@@ -91,8 +95,9 @@ public:
                                          VirtualFile packed_update_raw = nullptr,
                                          bool apply_layeredfs = true) const;
 
-    // Returns a vector of patches
-    [[nodiscard]] std::vector<Patch> GetPatches(VirtualFile update_raw = nullptr) const;
+    // Returns installed patches and, when supplied, updates/DLC carried by the opened file.
+    [[nodiscard]] std::vector<Patch> GetPatches(VirtualFile update_raw = nullptr,
+                                                const Loader::AppLoader* loader = nullptr) const;
 
     // If the game update exists, returns the u32 version field in its Meta-type NCA. If that fails,
     // it will fallback to the Meta-type NCA of the base game. If that fails, the result will be
