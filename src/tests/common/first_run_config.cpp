@@ -199,7 +199,16 @@ TEST_CASE("Absent global config receives the first-run profile and persists it",
                             "use_asynchronous_shaders", "force_max_clock",
                             "texture_cache_memory_limit", "native_async_draws",
                             "native_pipeline_wait_ms", "pin_gpu_threads"}) {
-        CHECK_FALSE(saved.GetBoolValue("Renderer", (std::string{key} + "\\default").c_str(), true));
+        // Reload normalizes the marker: a seeded value that happens to equal the built-in
+        // default is still persisted, but its marker is true so Reset can follow future defaults.
+        const char* value = saved.GetValue("Renderer", key, nullptr);
+        const auto marker = std::string{key} + "\\default";
+        REQUIRE(value != nullptr);
+        REQUIRE(saved.GetValue("Renderer", marker.c_str(), nullptr) != nullptr);
+        const auto setting = Settings::values.linkage.by_key.find(key);
+        REQUIRE(setting != Settings::values.linkage.by_key.end());
+        CHECK(saved.GetBoolValue("Renderer", marker.c_str(), false) ==
+              (std::string{value} == setting->second->DefaultToString()));
     }
     const auto filename = config->GetConfigFilePath();
     config.reset();
@@ -294,13 +303,13 @@ TEST_CASE("Per-game overrides and use-global flags survive the new global profil
             "nvdec_emulation={}\nnvdec_emulation\\default=false\nnvdec_emulation\\use_global=true\n"
             "async_presentation=false\nasync_presentation\\default=false\n"
             "async_presentation\\use_global=false\n",
-            u32(Settings::ScalingFilter::Bilinear), u32(Settings::GpuAccuracy::Low),
+            u32(Settings::ScalingFilter::Fsr3), u32(Settings::GpuAccuracy::Low),
             u32(Settings::NvdecEmulation::Off)));
     for (int i = 0; i < 3; ++i) {
         FileConfig game{std::string{"game"}, Config::ConfigType::PerGameConfig};
         CHECK_FALSE(Settings::values.scaling_filter.UsingGlobal());
-        CHECK(Settings::values.scaling_filter.GetValue() == Settings::ScalingFilter::Bilinear);
-        CHECK(Settings::values.scaling_filter.GetValue(true) == Settings::ScalingFilter::Fsr3);
+        CHECK(Settings::values.scaling_filter.GetValue() == Settings::ScalingFilter::Fsr3);
+        CHECK(Settings::values.scaling_filter.GetValue(true) == Settings::ScalingFilter::Bilinear);
         CHECK_FALSE(Settings::values.gpu_accuracy.UsingGlobal());
         CHECK(Settings::values.gpu_accuracy.GetValue() == Settings::GpuAccuracy::High);
         CHECK(Settings::values.gpu_accuracy.GetValue(true) == Settings::GpuAccuracy::Low);

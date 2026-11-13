@@ -159,7 +159,8 @@ TEST_CASE("NUP ignores optional metadata with wrapping bounds", "[nup][nup-valid
 
 TEST_CASE("NUP rejects directory cycles", "[nup][nup-validation]") {
     SECTION("self reference") {
-        REQUIRE(NupFixture({{0}}).Parse().GetStatus() == Loader::ResultStatus::ErrorNUPBadFormat);
+        REQUIRE(NupFixture(std::vector<std::vector<u32>>{{0}}).Parse().GetStatus() ==
+                Loader::ResultStatus::ErrorNUPBadFormat);
     }
     SECTION("ancestor reference") {
         REQUIRE(NupFixture({{1}, {0}}).Parse().GetStatus() ==

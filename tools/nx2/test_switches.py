@@ -65,7 +65,8 @@ int main(int argc, char** argv) {
             sidecar.unlink()
 
     def test_diagnostics_and_explicit_user_environment(self):
-        supported = ("EDEN_NX2_PRELOAD_ALL_PIPELINES", "EDEN_DKB_FRAME_TRACE",
+        supported = ("EDEN_NX2_PRELOAD_ALL_PIPELINES", "EDEN_NUP_DAMAGED_FALLBACK",
+                     "EDEN_DKB_FRAME_TRACE",
                      "EDEN_DKB_INDIRECT_READBACK", "EDEN_NATIVE_DRAW_CAPTURE",
                      "EDEN_NATIVE_DRAW_DIAGNOSTICS", "EDEN_NATIVE_FRAME_CAPTURE",
                      "EDEN_NATIVE_SHADER_OVERRIDE_DIR", "EDEN_PUNCH_HOLE",

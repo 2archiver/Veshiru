@@ -306,7 +306,8 @@ std::string SanitizeLogMessageImpl(std::string_view message) {
     static const std::regex posix_path{
         R"((^|[\s"'(=])(/(?:home|Users|tmp|var|mnt|media|run|srv|opt|root)/[^\s"'<>]*))"};
     static const std::regex credential{
-        R"((?i)(authorization\s*:\s*bearer\s+|token\s*[:=]\s*|api[_-]?key\s*[:=]\s*|password\s*[:=]\s*|secret\s*[:=]\s*)([^\s,;]+))"};
+        R"((authorization\s*:\s*bearer\s+|token\s*[:=]\s*|api[_-]?key\s*[:=]\s*|password\s*[:=]\s*|secret\s*[:=]\s*)([^\s,;]+))",
+        std::regex::icase};
     static const std::regex url_userinfo{R"((https?://)[^\s/@:]+:[^\s/@]+@)"};
     text = std::regex_replace(text, windows_path, "<path>");
     text = std::regex_replace(text, unc_path, "<path>");
@@ -579,7 +580,13 @@ struct LiveConsoleBackend final : public Backend {
 
     void Loop(std::stop_token stop_token) noexcept {
         Pending pending;
-        while (queue.PopWait(pending, stop_token)) {
+        while (!stop_token.stop_requested()) {
+            if (!queue.TryPop(pending)) {
+                queue.PopWait(pending, stop_token);
+                if (stop_token.stop_requested()) {
+                    break;
+                }
+            }
             Process(pending);
             while (queue.TryPop(pending)) {
                 Process(pending);
