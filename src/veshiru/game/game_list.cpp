@@ -501,7 +501,7 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     if (has_shader_warm) {
         delete_shader_warm = context_menu.addAction(tr("Delete Shader Precache"));
     }
-    QAction* ryujinx = context_menu.addAction(tr("Link to Ryujinx"));
+    QAction* eglantine = context_menu.addAction(tr("Link to Eglantine"));
     context_menu.addSeparator();
     QMenu* remove_menu = context_menu.addMenu(tr("Remove"));
     QAction* remove_update = remove_menu->addAction(tr("Remove Installed Update"));
@@ -585,7 +585,7 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
         {open_transferable_shader_cache, "layers"},
         {prepare_shaders, "cpu"},
         {delete_shader_warm, "trash"},
-        {ryujinx, "link"},
+        {eglantine, "link"},
         {remove_menu->menuAction(), "trash"},
         {play_time_menu->menuAction(), "clock"},
         {extract_nup, "archive"},
@@ -718,8 +718,8 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     connect(properties, &QAction::triggered, this,
             [this, path]() { emit OpenPerGameGeneralRequested(path); });
 
-    connect(ryujinx, &QAction::triggered, this,
-            [this, program_id]() { emit LinkToRyujinxRequested(program_id); });
+    connect(eglantine, &QAction::triggered, this,
+            [this, program_id]() { emit LinkToEglantineRequested(program_id); });
 };
 
 void GameList::AddCustomDirPopup(QMenu& context_menu, QModelIndex selected) {

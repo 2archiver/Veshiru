@@ -52,19 +52,11 @@ enum StringKey {
     MigrationTooltipKeepOld,
     MigrationTooltipClearOld,
     MigrationTooltipLinkOld,
-
-    // ryujinx
-    KvdbNonexistent,
-    KvdbNoHeader,
-    KvdbInvalidMagic,
-    KvdbMisaligned,
-    KvdbNoImens,
-    RyujinxNoSaveId,
 };
 
 // NB: the constexpr check always succeeds (in clangd at least) if size arg < size
 // always triple-check the size arg
-static const constexpr frozen::map<StringKey, frozen::string, 29> strings = {
+static const constexpr frozen::map<StringKey, frozen::string, 23> strings = {
     // 0-4
     {DataManagerSavesTooltip,
      QT_TR_NOOP("Contains game save data. DO NOT REMOVE UNLESS YOU KNOW WHAT YOU'RE DOING!")},
@@ -126,15 +118,6 @@ static const constexpr frozen::map<StringKey, frozen::string, 29> strings = {
     {MigrationTooltipLinkOld,
      QT_TR_NOOP("Creates a filesystem link between the old directory and Veshiru directory.\n"
                 "This is recommended if you want to share data between emulators.")},
-
-    // why am I writing these comments again
-    // 23-28
-    {KvdbNonexistent, QT_TR_NOOP("Ryujinx title database does not exist.")},
-    {KvdbNoHeader, QT_TR_NOOP("Invalid header on Ryujinx title database.")},
-    {KvdbInvalidMagic, QT_TR_NOOP("Invalid magic header on Ryujinx title database.")},
-    {KvdbMisaligned, QT_TR_NOOP("Invalid byte alignment on Ryujinx title database.")},
-    {KvdbNoImens, QT_TR_NOOP("No items found in Ryujinx title database.")},
-    {RyujinxNoSaveId, QT_TR_NOOP("Title %1 not found in Ryujinx title database.")},
 };
 
 static inline const QString Lookup(StringKey key) {

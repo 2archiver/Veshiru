@@ -6199,8 +6199,8 @@ Por favor vá para Configuração -&gt; Sistema -&gt; Rede e selecione.</transla
     </message>
     <message>
         <location filename="../../src/veshiru/game/game_list.cpp" line="461"/>
-        <source>Link to Ryujinx</source>
-        <translation>Vincular ao Ryujinx</translation>
+        <source>Link to Eglantine</source>
+        <translation>Vincular ao Eglantine</translation>
     </message>
     <message>
         <location filename="../../src/veshiru/game/game_list.cpp" line="463"/>
@@ -9619,8 +9619,8 @@ To:
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="41"/>
-        <source>This title is already linked to Ryujinx. Would you like to unlink it?</source>
-        <translation>Título já vinculado ao Ryujinx. Gostaria de desvincular?</translation>
+        <source>This title is already linked to Eglantine. Would you like to unlink it?</source>
+        <translation>Título já vinculado ao Eglantine. Gostaria de desvincular?</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="68"/>
@@ -9645,43 +9645,43 @@ To:
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="84"/>
-        <source>Successfully unlinked Ryujinx save data. Save data has been kept intact.</source>
-        <translation>Dados salvos do Ryujinx desvinculados com sucesso. Dados salvos estão intactos.</translation>
+        <source>Successfully unlinked Eglantine save data. Save data has been kept intact.</source>
+        <translation>Dados salvos do Eglantine desvinculados com sucesso. Dados salvos estão intactos.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="97"/>
-        <source>Could not find Ryujinx installation</source>
-        <translation>Não foi possível encontrar a instalação do Ryujinx.</translation>
+        <source>Could not find Eglantine installation</source>
+        <translation>Não foi possível encontrar a instalação do Eglantine.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="98"/>
-        <source>Could not find a valid Ryujinx installation. This may typically occur if you are using Ryujinx in portable mode.
+        <source>Could not find a valid Eglantine installation. This may typically occur if you are using Eglantine in portable mode.
 
 Would you like to manually select a portable folder to use?</source>
-        <translation>Não foi possível encontrar uma instalação válida do Ryujinx. Isso geralmente ocorre ao usar o Ryujinx no modo portátil.
+        <translation>Não foi possível encontrar uma instalação válida do Eglantine. Isso geralmente ocorre ao usar o Eglantine no modo portátil.
 
 Gostaria de selecionar manualmente uma pasta portátil para usar?</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="105"/>
-        <source>Ryujinx Portable Location</source>
-        <translation>Localização Portátil do Ryujinx</translation>
+        <source>Eglantine Portable Location</source>
+        <translation>Localização Portátil do Eglantine</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="122"/>
-        <source>Not a valid Ryujinx directory</source>
-        <translation>Não é um diretório válido do Ryujinx</translation>
+        <source>Not a valid Eglantine directory</source>
+        <translation>Não é um diretório válido do Eglantine</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="123"/>
-        <source>The specified directory does not contain valid Ryujinx data.</source>
-        <translation>O diretório especificado não contém dados válidos do Ryujinx.</translation>
+        <source>The specified directory does not contain valid Eglantine data.</source>
+        <translation>O diretório especificado não contém dados válidos do Eglantine.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="141"/>
         <location filename="../../src/qt_common/util/fs.cpp" line="145"/>
-        <source>Could not find Ryujinx save data</source>
-        <translation>Não foi possível encontrar os dados salvos do Ryujinx</translation>
+        <source>Could not find Eglantine save data</source>
+        <translation>Não foi possível encontrar os dados salvos do Eglantine</translation>
     </message>
 </context>
 <context>
@@ -10095,33 +10095,33 @@ This is recommended if you want to share data between emulators.</source>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="129"/>
-        <source>Ryujinx title database does not exist.</source>
-        <translation>Base de dados de títulos do Ryujinx não existe.</translation>
+        <source>Eglantine title database does not exist.</source>
+        <translation>Base de dados de títulos do Eglantine não existe.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="130"/>
-        <source>Invalid header on Ryujinx title database.</source>
-        <translation>Cabeçalho inválido na base de dados de títulos do Ryujinx</translation>
+        <source>Invalid header on Eglantine title database.</source>
+        <translation>Cabeçalho inválido na base de dados de títulos do Eglantine</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="131"/>
-        <source>Invalid magic header on Ryujinx title database.</source>
-        <translation>Cabeçalho magic inválido na base de dados de títulos do Ryujinx.</translation>
+        <source>Invalid magic header on Eglantine title database.</source>
+        <translation>Cabeçalho magic inválido na base de dados de títulos do Eglantine.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="132"/>
-        <source>Invalid byte alignment on Ryujinx title database.</source>
-        <translation>Alinhamento de bytes inválido na base de dados de títulos do Ryujinx.</translation>
+        <source>Invalid byte alignment on Eglantine title database.</source>
+        <translation>Alinhamento de bytes inválido na base de dados de títulos do Eglantine.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="133"/>
-        <source>No items found in Ryujinx title database.</source>
-        <translation>Nenhum item encontrado na base de dados de títulos do Ryujinx.</translation>
+        <source>No items found in Eglantine title database.</source>
+        <translation>Nenhum item encontrado na base de dados de títulos do Eglantine.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="134"/>
-        <source>Title %1 not found in Ryujinx title database.</source>
-        <translation>Título %1 não encontrado na base de dados de títulos do Ryujinx.</translation>
+        <source>Title %1 not found in Eglantine title database.</source>
+        <translation>Título %1 não encontrado na base de dados de títulos do Eglantine.</translation>
     </message>
 </context>
 <context>
@@ -10541,43 +10541,43 @@ p, li { white-space: pre-wrap; }
     </message>
 </context>
 <context>
-    <name>RyujinxDialog</name>
+    <name>EglantineDialog</name>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="14"/>
-        <source>Ryujinx Link</source>
-        <translation>Vínculo do Ryujinx</translation>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="14"/>
+        <source>Eglantine Link</source>
+        <translation>Vínculo do Eglantine</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="26"/>
-        <source>Linking save data to Ryujinx lets both Ryujinx and Eden reference the same save files for your games.
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="26"/>
+        <source>Linking save data to Eglantine lets both Eglantine and Eden reference the same save files for your games.
 
-By selecting &quot;From Eden&quot;, previous save data stored in Ryujinx will be deleted, and vice versa for &quot;From Ryujinx&quot;.</source>
-        <translation>Vincular os dados salvos ao Ryujinx permite que tanto o Ryujinx quanto o Eden utilizem os mesmos arquivos de salvamento para seus jogos.
+By selecting &quot;From Eden&quot;, previous save data stored in Eglantine will be deleted, and vice versa for &quot;From Eglantine&quot;.</source>
+        <translation>Vincular os dados salvos ao Eglantine permite que tanto o Eglantine quanto o Eden utilizem os mesmos arquivos de salvamento para seus jogos.
 
-Ao selecionar &quot;Do Eden&quot;, os dados salvos anteriores armazenados no Ryujinx serão excluídos, e vice-versa para &quot;Do Ryujinx&quot;.</translation>
+Ao selecionar &quot;Do Eden&quot;, os dados salvos anteriores armazenados no Eglantine serão excluídos, e vice-versa para &quot;Do Eglantine&quot;.</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="40"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="40"/>
         <source>From Eden</source>
         <translation type="unfinished"/>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="47"/>
-        <source>From Ryujinx</source>
-        <translation>Do Ryujinx</translation>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="47"/>
+        <source>From Eglantine</source>
+        <translation>Do Eglantine</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="54"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="54"/>
         <source>Cancel</source>
         <translation type="unfinished"/>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.cpp" line="37"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="37"/>
         <source>Failed to link save data</source>
         <translation type="unfinished"/>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.cpp" line="38"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="38"/>
         <source>OS returned error: %1</source>
         <translation type="unfinished"/>
     </message>

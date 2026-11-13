@@ -6221,8 +6221,8 @@ Gå till Konfigurera -&gt; System -&gt; Nätverk och gör ett val.</translation>
     </message>
     <message>
         <location filename="../../src/veshiru/game/game_list.cpp" line="461"/>
-        <source>Link to Ryujinx</source>
-        <translation>Länka till Ryujinx</translation>
+        <source>Link to Eglantine</source>
+        <translation>Länka till Eglantine</translation>
     </message>
     <message>
         <location filename="../../src/veshiru/game/game_list.cpp" line="463"/>
@@ -9673,8 +9673,8 @@ Till:
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="41"/>
-        <source>This title is already linked to Ryujinx. Would you like to unlink it?</source>
-        <translation>Denna titel är redan länkad till Ryujinx. Vill du avlänka den?</translation>
+        <source>This title is already linked to Eglantine. Would you like to unlink it?</source>
+        <translation>Denna titel är redan länkad till Eglantine. Vill du avlänka den?</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="68"/>
@@ -9699,43 +9699,43 @@ Till:
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="84"/>
-        <source>Successfully unlinked Ryujinx save data. Save data has been kept intact.</source>
-        <translation>Sparat data i Ryujinx avlänkades. Sparat data har behållits intakt.</translation>
+        <source>Successfully unlinked Eglantine save data. Save data has been kept intact.</source>
+        <translation>Sparat data i Eglantine avlänkades. Sparat data har behållits intakt.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="97"/>
-        <source>Could not find Ryujinx installation</source>
-        <translation>Kunde inte hitta Ryujinx-installationen</translation>
+        <source>Could not find Eglantine installation</source>
+        <translation>Kunde inte hitta Eglantine-installationen</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="98"/>
-        <source>Could not find a valid Ryujinx installation. This may typically occur if you are using Ryujinx in portable mode.
+        <source>Could not find a valid Eglantine installation. This may typically occur if you are using Eglantine in portable mode.
 
 Would you like to manually select a portable folder to use?</source>
-        <translation>Det gick inte att hitta en giltig Ryujinx-installation. Detta kan vanligtvis inträffa om du använder Ryujinx i portabelt läge.
+        <translation>Det gick inte att hitta en giltig Eglantine-installation. Detta kan vanligtvis inträffa om du använder Eglantine i portabelt läge.
 
 Vill du manuellt välja en portabel mapp att använda?</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="105"/>
-        <source>Ryujinx Portable Location</source>
-        <translation>Plats för portabel Ryujinx</translation>
+        <source>Eglantine Portable Location</source>
+        <translation>Plats för portabel Eglantine</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="122"/>
-        <source>Not a valid Ryujinx directory</source>
-        <translation>Inte en giltig Ryujinx-katalog</translation>
+        <source>Not a valid Eglantine directory</source>
+        <translation>Inte en giltig Eglantine-katalog</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="123"/>
-        <source>The specified directory does not contain valid Ryujinx data.</source>
-        <translation>Den angivna katalogen innehåller inte giltig Ryujinx-data.</translation>
+        <source>The specified directory does not contain valid Eglantine data.</source>
+        <translation>Den angivna katalogen innehåller inte giltig Eglantine-data.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="141"/>
         <location filename="../../src/qt_common/util/fs.cpp" line="145"/>
-        <source>Could not find Ryujinx save data</source>
-        <translation>Kunde inte hitta sparat Ryujinx-data</translation>
+        <source>Could not find Eglantine save data</source>
+        <translation>Kunde inte hitta sparat Eglantine-data</translation>
     </message>
 </context>
 <context>
@@ -10157,32 +10157,32 @@ Detta rekommenderas om du vill dela data mellan emulatorer.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="129"/>
-        <source>Ryujinx title database does not exist.</source>
-        <translation>Ryujinx titeldatabas finns inte.</translation>
+        <source>Eglantine title database does not exist.</source>
+        <translation>Eglantine titeldatabas finns inte.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="130"/>
-        <source>Invalid header on Ryujinx title database.</source>
-        <translation>Ogiltigt huvud på Ryujinx titeldatabas.</translation>
+        <source>Invalid header on Eglantine title database.</source>
+        <translation>Ogiltigt huvud på Eglantine titeldatabas.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="131"/>
-        <source>Invalid magic header on Ryujinx title database.</source>
-        <translation>Ogiltig magic header på Ryujinx titeldatabas.</translation>
+        <source>Invalid magic header on Eglantine title database.</source>
+        <translation>Ogiltig magic header på Eglantine titeldatabas.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="132"/>
-        <source>Invalid byte alignment on Ryujinx title database.</source>
-        <translation>Ogiltig byteordning på Ryujinx titeldatabas.</translation>
+        <source>Invalid byte alignment on Eglantine title database.</source>
+        <translation>Ogiltig byteordning på Eglantine titeldatabas.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="133"/>
-        <source>No items found in Ryujinx title database.</source>
-        <translation>Inga objekt hittades i Ryujinx titeldatabas.</translation>
+        <source>No items found in Eglantine title database.</source>
+        <translation>Inga objekt hittades i Eglantine titeldatabas.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="134"/>
-        <source>Title %1 not found in Ryujinx title database.</source>
+        <source>Title %1 not found in Eglantine title database.</source>
         <translation>Titeln %1 hittades inte i Ruijinx titeldatabas.</translation>
     </message>
 </context>
@@ -10603,43 +10603,43 @@ p, li { white-space: pre-wrap; }
     </message>
 </context>
 <context>
-    <name>RyujinxDialog</name>
+    <name>EglantineDialog</name>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="14"/>
-        <source>Ryujinx Link</source>
-        <translation>Länka Ryujinx</translation>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="14"/>
+        <source>Eglantine Link</source>
+        <translation>Länka Eglantine</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="26"/>
-        <source>Linking save data to Ryujinx lets both Ryujinx and Eden reference the same save files for your games.
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="26"/>
+        <source>Linking save data to Eglantine lets both Eglantine and Eden reference the same save files for your games.
 
-By selecting &quot;From Eden&quot;, previous save data stored in Ryujinx will be deleted, and vice versa for &quot;From Ryujinx&quot;.</source>
-        <translation>Genom att länka sparade data till Ryujinx kan både Ryujinx och Eden referera till samma sparade filer för dina spel.
+By selecting &quot;From Eden&quot;, previous save data stored in Eglantine will be deleted, and vice versa for &quot;From Eglantine&quot;.</source>
+        <translation>Genom att länka sparade data till Eglantine kan både Eglantine och Eden referera till samma sparade filer för dina spel.
 
-Om du väljer ”Från Eden” tas tidigare sparade data bort som lagrats i Ryujinx och vice versa för ”Från Ryujinx”.</translation>
+Om du väljer ”Från Eden” tas tidigare sparade data bort som lagrats i Eglantine och vice versa för ”Från Eglantine”.</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="40"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="40"/>
         <source>From Eden</source>
         <translation>Från Eden</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="47"/>
-        <source>From Ryujinx</source>
-        <translation>Från Ryujinx</translation>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="47"/>
+        <source>From Eglantine</source>
+        <translation>Från Eglantine</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="54"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="54"/>
         <source>Cancel</source>
         <translation>Avbryt</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.cpp" line="37"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="37"/>
         <source>Failed to link save data</source>
         <translation>Misslyckades med att länka sparat data</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.cpp" line="38"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="38"/>
         <source>OS returned error: %1</source>
         <translation>OS returnerade fel: %1</translation>
     </message>

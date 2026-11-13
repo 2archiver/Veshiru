@@ -174,13 +174,17 @@ void ServiceFrameworkBase::ReportUnimplementedFunction(HLERequestContext& ctx,
     buf.push_back('}');
 
     system.GetReporter().SaveUnimplementedFunctionReport(ctx, ctx.GetCommand(), function_name, service_name);
-    UNIMPLEMENTED_MSG("Unknown / unimplemented {}", fmt::to_string(buf));
     if (auto_stub) {
-        LOG_WARNING(Service, "Using auto stub fallback (repeats of this command are not logged)");
+        // Switch 2 callers are always auto-stubbed, so this is expected behaviour, not a bug:
+        // log a warning (the report is saved for investigation) instead of tripping the soft
+        // assert, which logged a Critical line on every boot.
+        LOG_WARNING(Service, "Unknown / unimplemented {} (auto-stubbed; report saved)", fmt::to_string(buf));
         IPC::ResponseBuilder rb{ctx, 2 + StubZeroedWords};
         rb.Push(ResultSuccess);
         PushStubZeroes(rb);
+        return;
     }
+    UNIMPLEMENTED_MSG("Unknown / unimplemented {}", fmt::to_string(buf));
 }
 
 void ServiceFrameworkBase::InvokeRequest(HLERequestContext& ctx) {

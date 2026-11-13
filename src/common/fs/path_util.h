@@ -71,8 +71,6 @@ enum EmuPath {
     SuyuConfigDir,
     SuyuCacheDir,
 
-    // used exclusively for save data linking
-    RyujinxDir,
 };
 
 /**

@@ -6214,8 +6214,8 @@ Please go to Configure -&gt; System -&gt; Network and make a selection.</source>
     </message>
     <message>
         <location filename="../../src/veshiru/game/game_list.cpp" line="461"/>
-        <source>Link to Ryujinx</source>
-        <translation>Ryujinx에 연결</translation>
+        <source>Link to Eglantine</source>
+        <translation>Eglantine에 연결</translation>
     </message>
     <message>
         <location filename="../../src/veshiru/game/game_list.cpp" line="463"/>
@@ -9663,8 +9663,8 @@ To:
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="41"/>
-        <source>This title is already linked to Ryujinx. Would you like to unlink it?</source>
-        <translation>이 타이틀은 이미 Ryujinx에 연결되어 있습니다. 연결을 해제하겠습니까?</translation>
+        <source>This title is already linked to Eglantine. Would you like to unlink it?</source>
+        <translation>이 타이틀은 이미 Eglantine에 연결되어 있습니다. 연결을 해제하겠습니까?</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="68"/>
@@ -9689,43 +9689,43 @@ To:
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="84"/>
-        <source>Successfully unlinked Ryujinx save data. Save data has been kept intact.</source>
-        <translation>Ryujinx 저장 데이터 연결이 성공적으로 해제되었습니다. 저장 데이터는 그대로 유지되었습니다.</translation>
+        <source>Successfully unlinked Eglantine save data. Save data has been kept intact.</source>
+        <translation>Eglantine 저장 데이터 연결이 성공적으로 해제되었습니다. 저장 데이터는 그대로 유지되었습니다.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="97"/>
-        <source>Could not find Ryujinx installation</source>
-        <translation>Ryujinx 설치 파일을 찾을 수 없음</translation>
+        <source>Could not find Eglantine installation</source>
+        <translation>Eglantine 설치 파일을 찾을 수 없음</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="98"/>
-        <source>Could not find a valid Ryujinx installation. This may typically occur if you are using Ryujinx in portable mode.
+        <source>Could not find a valid Eglantine installation. This may typically occur if you are using Eglantine in portable mode.
 
 Would you like to manually select a portable folder to use?</source>
-        <translation>유효한 Ryujinx 설치 파일을 찾을 수 없습니다. 이는 일반적으로 Ryujinx를 휴대용 모드로 사용하는 경우에 발생할 수 있습니다.
+        <translation>유효한 Eglantine 설치 파일을 찾을 수 없습니다. 이는 일반적으로 Eglantine를 휴대용 모드로 사용하는 경우에 발생할 수 있습니다.
 
 사용할 휴대용 폴더를 수동으로 선택하겠습니까?</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="105"/>
-        <source>Ryujinx Portable Location</source>
-        <translation>Ryujinx 이동 가능 위치</translation>
+        <source>Eglantine Portable Location</source>
+        <translation>Eglantine 이동 가능 위치</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="122"/>
-        <source>Not a valid Ryujinx directory</source>
-        <translation>유효한 Ryujinx 디렉터리가 아님</translation>
+        <source>Not a valid Eglantine directory</source>
+        <translation>유효한 Eglantine 디렉터리가 아님</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="123"/>
-        <source>The specified directory does not contain valid Ryujinx data.</source>
-        <translation>지정된 디렉터리에 유효한 Ryujinx 데이터가 없습니다.</translation>
+        <source>The specified directory does not contain valid Eglantine data.</source>
+        <translation>지정된 디렉터리에 유효한 Eglantine 데이터가 없습니다.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/util/fs.cpp" line="141"/>
         <location filename="../../src/qt_common/util/fs.cpp" line="145"/>
-        <source>Could not find Ryujinx save data</source>
-        <translation>Ryujinx 저장 데이터를 찾을 수 없음</translation>
+        <source>Could not find Eglantine save data</source>
+        <translation>Eglantine 저장 데이터를 찾을 수 없음</translation>
     </message>
 </context>
 <context>
@@ -10146,33 +10146,33 @@ This is recommended if you want to share data between emulators.</source>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="129"/>
-        <source>Ryujinx title database does not exist.</source>
-        <translation>Ryujinx 타이틀 데이터베이스가 존재하지 않습니다.</translation>
+        <source>Eglantine title database does not exist.</source>
+        <translation>Eglantine 타이틀 데이터베이스가 존재하지 않습니다.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="130"/>
-        <source>Invalid header on Ryujinx title database.</source>
-        <translation>Ryujinx 타이틀 데이터베이스에 잘못된 헤더가 있습니다.</translation>
+        <source>Invalid header on Eglantine title database.</source>
+        <translation>Eglantine 타이틀 데이터베이스에 잘못된 헤더가 있습니다.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="131"/>
-        <source>Invalid magic header on Ryujinx title database.</source>
-        <translation>Ryujinx 타이틀 데이터베이스에 잘못된 매직 헤더가 있습니다.</translation>
+        <source>Invalid magic header on Eglantine title database.</source>
+        <translation>Eglantine 타이틀 데이터베이스에 잘못된 매직 헤더가 있습니다.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="132"/>
-        <source>Invalid byte alignment on Ryujinx title database.</source>
-        <translation>Ryujinx 타이틀 데이터베이스에 잘못된 바이트 정렬이 있습니다.</translation>
+        <source>Invalid byte alignment on Eglantine title database.</source>
+        <translation>Eglantine 타이틀 데이터베이스에 잘못된 바이트 정렬이 있습니다.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="133"/>
-        <source>No items found in Ryujinx title database.</source>
-        <translation>Ryujinx 타이틀 데이터베이스에서 항목을 찾을 수 없습니다.</translation>
+        <source>No items found in Eglantine title database.</source>
+        <translation>Eglantine 타이틀 데이터베이스에서 항목을 찾을 수 없습니다.</translation>
     </message>
     <message>
         <location filename="../../src/qt_common/qt_string_lookup.h" line="134"/>
-        <source>Title %1 not found in Ryujinx title database.</source>
-        <translation>%1 타이틀을 Ryujinx 타이틀 데이터베이스에서 찾을 수 없습니다.</translation>
+        <source>Title %1 not found in Eglantine title database.</source>
+        <translation>%1 타이틀을 Eglantine 타이틀 데이터베이스에서 찾을 수 없습니다.</translation>
     </message>
 </context>
 <context>
@@ -10592,43 +10592,43 @@ p, li { white-space: pre-wrap; }
     </message>
 </context>
 <context>
-    <name>RyujinxDialog</name>
+    <name>EglantineDialog</name>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="14"/>
-        <source>Ryujinx Link</source>
-        <translation>Ryujinx 연동</translation>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="14"/>
+        <source>Eglantine Link</source>
+        <translation>Eglantine 연동</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="26"/>
-        <source>Linking save data to Ryujinx lets both Ryujinx and Eden reference the same save files for your games.
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="26"/>
+        <source>Linking save data to Eglantine lets both Eglantine and Eden reference the same save files for your games.
 
-By selecting &quot;From Eden&quot;, previous save data stored in Ryujinx will be deleted, and vice versa for &quot;From Ryujinx&quot;.</source>
-        <translation>Ryujinx와 Eden에 저장 데이터를 연동하면 Ryujinx와 Eden 모두 동일한 게임 저장 파일을 참조할 수 있습니다.
+By selecting &quot;From Eden&quot;, previous save data stored in Eglantine will be deleted, and vice versa for &quot;From Eglantine&quot;.</source>
+        <translation>Eglantine와 Eden에 저장 데이터를 연동하면 Eglantine와 Eden 모두 동일한 게임 저장 파일을 참조할 수 있습니다.
 
-&quot;Eden에서 가져오기&quot;를 선택하면 Ryujinx에 저장된 이전 저장 데이터가 삭제되고, &quot;Ryujinx에서 가져오기&quot;를 선택하면 그 반대로 Ryujinx에 저장된 이전 저장 데이터가 삭제됩니다.</translation>
+&quot;Eden에서 가져오기&quot;를 선택하면 Eglantine에 저장된 이전 저장 데이터가 삭제되고, &quot;Eglantine에서 가져오기&quot;를 선택하면 그 반대로 Eglantine에 저장된 이전 저장 데이터가 삭제됩니다.</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="40"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="40"/>
         <source>From Eden</source>
         <translation>Eden에서</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="47"/>
-        <source>From Ryujinx</source>
-        <translation>Ryujinx에서</translation>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="47"/>
+        <source>From Eglantine</source>
+        <translation>Eglantine에서</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.ui" line="54"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="54"/>
         <source>Cancel</source>
         <translation>취소</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.cpp" line="37"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="37"/>
         <source>Failed to link save data</source>
         <translation>저장 데이터 연결에 실패했습니다</translation>
     </message>
     <message>
-        <location filename="../../src/veshiru/ryujinx_dialog.cpp" line="38"/>
+        <location filename="../../src/veshiru/eglantine_dialog.cpp" line="38"/>
         <source>OS returned error: %1</source>
         <translation>OS에서 반환된 오류: %1</translation>
     </message>

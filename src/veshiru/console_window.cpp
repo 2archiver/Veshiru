@@ -13,6 +13,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QFileDialog>
+#include <QFont>
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -47,21 +48,23 @@ QPointer<ConsoleWindow> instance;
 
 QString LevelColor(Common::Log::Level level) {
     using Common::Log::Level;
+    // Light-on-dark palette for the console view (it has a dark background, so the old
+    // dark-on-light colors were unreadable).
     switch (level) {
     case Level::Trace:
-        return QStringLiteral("#808080");
+        return QStringLiteral("#9e9e9e");
     case Level::Debug:
-        return QStringLiteral("#00a0a0");
+        return QStringLiteral("#5ad1d1");
     case Level::Info:
-        return QStringLiteral("#008000");
+        return QStringLiteral("#ffffff");
     case Level::Warning:
-        return QStringLiteral("#b08000");
+        return QStringLiteral("#ffd54f");
     case Level::Error:
-        return QStringLiteral("#c00000");
+        return QStringLiteral("#ff7070");
     case Level::Critical:
-        return QStringLiteral("#a000a0");
+        return QStringLiteral("#ff8df2");
     default:
-        return QStringLiteral("#000000");
+        return QStringLiteral("#ffffff");
     }
 }
 
@@ -89,7 +92,7 @@ ConsoleWindow::ConsoleWindow(QWidget* parent) : QMainWindow(parent) {
     setObjectName(QStringLiteral("VeshiruConsole"));
     setWindowTitle(tr("Veshiru Console"));
     setAttribute(Qt::WA_DeleteOnClose);
-    resize(1000, 620);
+    resize(1150, 700);
 
     auto* central = new QWidget(this);
     auto* layout = new QVBoxLayout(central);
@@ -147,7 +150,15 @@ ConsoleWindow::ConsoleWindow(QWidget* parent) : QMainWindow(parent) {
     view->setReadOnly(true);
     view->setLineWrapMode(QPlainTextEdit::NoWrap);
     view->setMaximumBlockCount(10000);
-    view->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    auto console_font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    // Larger, high-contrast text on a near-black background, like a plain terminal console.
+    console_font.setPointSize(12);
+    console_font.setStyleHint(QFont::Monospace);
+    view->setFont(console_font);
+    view->setStyleSheet(QStringLiteral(
+        "QPlainTextEdit { background-color: #121212; color: #f5f5f5; }\n"
+        "QPlainTextEdit:focus { background-color: #121212; }\n"
+        "QPlainTextEdit::selection { background-color: #264f78; color: #ffffff; }"));
     view->setPlaceholderText(tr("Waiting for emulator log entries…"));
     layout->addWidget(view, 1);
 

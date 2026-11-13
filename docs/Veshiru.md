@@ -52,6 +52,16 @@ strategy. The importer verifies copied bytes, keeps the source unchanged, remaps
 path component, and journals interrupted imports. Existing destination data is backed up rather
 than merged. Save data, title IDs, save-size files and compatible shader caches are preserved.
 
+On top of the first-launch import, `Right-click game > Link to Eglantine` transfers a single
+title's saves. Eglantine stores saves in the same `nand/user/save/0000000000000000/<user>/<title>`
+NAND layout, so the transfer copies the data to a sibling staging directory, verifies the copy
+(file list and sizes), moves the replaced directory aside to a timestamped `*.veshiru-backup-*`
+folder instead of deleting it, and finally makes the Veshiru save directory a junction pointing at
+the Eglantine save, so both emulators reference the same files. Junctions are created natively
+(`FSCTL_SET_REPARSE_POINT`) — no `mklink` shell-out — and every step reports its errors to the
+user instead of failing silently. If either directory is already a link, the menu offers to
+unlink (removing the junction and copying the save back) and stop.
+
 ## Live console
 
 `Tools > Console` opens a non-modal Qt window independent of the main window. The common logging
