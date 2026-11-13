@@ -69,6 +69,11 @@ public:
     /// Quick magic check without a full parse.
     static bool IsNupFile(const VirtualFile& file);
 
+    /// Title ID of the base package, read from the package records alone (unverified, without
+    /// parsing or hashing the rest of the table of contents). Useful when scanning a folder of
+    /// containers for an update's companion base.
+    static std::optional<u64> PeekBaseTitleId(const VirtualFile& file);
+
     /// Recursively merges overlay into a copy of base; overlay paths win.
     static VirtualDir MergeShadowDirs(const VirtualDir& base, const VirtualDir& overlay);
 
@@ -161,6 +166,8 @@ private:
     std::vector<VirtualDir> romfs_dir_cache;
 
     std::shared_ptr<NupDecompressCache> cache;
+    /// EDEN_NUP_DAMAGED_FALLBACK=0 disables serving a sound sibling for a damaged .zs member.
+    bool damaged_fallback{true};
 };
 
 } // namespace FileSys

@@ -104,6 +104,12 @@ void CheckFreshProfile() {
     CHECK(values.nvdec_emulation.GetValue() == Settings::NvdecEmulation::Gpu);
     CHECK(values.async_presentation.GetValue());
     CHECK(values.use_asynchronous_shaders.GetValue());
+    CHECK(values.native_async_draws.GetValue() == Settings::NativeAsyncDraws::Bounded);
+    CHECK(values.native_pipeline_wait_ms.GetValue() == 8);
+    CHECK(values.texture_cache_memory_limit.GetValue() == 0);
+#if defined(_WIN32) || defined(__linux__)
+    CHECK(values.pin_gpu_threads.GetValue());
+#endif
 }
 
 void CheckLegacyProfile() {
@@ -190,7 +196,9 @@ TEST_CASE("Absent global config receives the first-run profile and persists it",
                             "gpu_accuracy", "vram_usage_mode", "accelerate_astc",
                             "astc_recompression", "nvdec_emulation", "use_disk_shader_cache",
                             "use_vulkan_driver_pipeline_cache", "async_presentation",
-                            "use_asynchronous_shaders", "force_max_clock"}) {
+                            "use_asynchronous_shaders", "force_max_clock",
+                            "texture_cache_memory_limit", "native_async_draws",
+                            "native_pipeline_wait_ms", "pin_gpu_threads"}) {
         CHECK_FALSE(saved.GetBoolValue("Renderer", (std::string{key} + "\\default").c_str(), true));
     }
     const auto filename = config->GetConfigFilePath();

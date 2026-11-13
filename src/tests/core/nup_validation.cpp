@@ -83,6 +83,24 @@ struct NupFixture {
 
 } // namespace
 
+TEST_CASE("NUP can peek the base title ID without a full parse", "[nup][nup-validation]") {
+    NupFixture fixture;
+    constexpr u64 title_id = 0x0400ABCD00010000ULL;
+    Put(fixture.bytes, PackageOffset, title_id);
+    Put(fixture.bytes, PackageOffset + 0x18, 0, 1); // PackageKind::Base
+    fixture.UpdateHash();
+    const auto file = std::make_shared<FileSys::VectorVfsFile>(fixture.bytes);
+    const auto peeked = FileSys::NupContainer::PeekBaseTitleId(file);
+    REQUIRE(peeked.has_value());
+    CHECK(*peeked == title_id);
+
+    // A damaged TOC hash does not stop the unverified peek, but a bad magic does.
+    fixture.bytes[0] = 0;
+    CHECK_FALSE(FileSys::NupContainer::PeekBaseTitleId(
+                    std::make_shared<FileSys::VectorVfsFile>(fixture.bytes))
+                    .has_value());
+}
+
 TEST_CASE("NUP rejects wrapping table counts", "[nup][nup-validation]") {
     NupFixture fixture;
     SECTION("directory records") {

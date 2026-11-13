@@ -160,16 +160,50 @@ void Config::SetUpIni() {
         seed(Settings::values.async_presentation, ToString(true));
         seed(Settings::values.use_asynchronous_shaders, ToString(true));
         seed(Settings::values.renderer_force_max_clock, ToString(false));
+        seed(Settings::values.texture_cache_memory_limit, ToString(u32(0)));
+        // Lichii/Smiley proven frame-pacing and pipeline defaults for a 4 GB NVIDIA card.
+        seed(Settings::values.dma_accuracy, ToString(u32(Settings::DmaAccuracy::Default)));
+        seed(Settings::values.gpu_fence_behavior, ToString(u32(Settings::GpuFenceBehavior::Default)));
+        seed(Settings::values.native_compute_write_mark,
+             ToString(u32(Settings::NativeComputeWriteMark::Auto)));
+        seed(Settings::values.frame_pacing_mode, ToString(u32(Settings::FramePacingMode::Target_Auto)));
+        seed(Settings::values.sync_memory_operations, ToString(false));
+        seed(Settings::values.native_async_draws, ToString(u32(Settings::NativeAsyncDraws::Bounded)));
+        seed(Settings::values.native_pipeline_wait_ms, ToString(u32(8)));
+        seed(Settings::values.precache_shaders, ToString(u32(Settings::PrecacheShaders::Off)));
+        seed(Settings::values.use_video_framerate, ToString(false));
+        seed(Settings::values.use_reactive_flushing, ToString(true));
+        seed(Settings::values.barrier_feedback_loops, ToString(true));
+        seed(Settings::values.enable_buffer_history, ToString(false));
+#ifndef __APPLE__
+        // MoltenVK renders black screens with extended dynamic state; leave macOS at its default.
+        seed(Settings::values.dyna_state, ToString(u32(Settings::ExtendedDynamicState::EDS2)));
+#endif
+        seed(Settings::values.sample_shading, ToString(u32(0)));
+        seed(Settings::values.vertex_input_dynamic_state, ToString(true));
+        seed(Settings::values.skip_cpu_inner_invalidation, ToString(false));
+        seed(Settings::values.fix_bloom_effects, ToString(false));
+        seed(Settings::values.gpu_unswizzle_enabled, ToString(false));
+#if defined(_WIN32) || defined(__linux__)
+        seed(Settings::values.pin_gpu_threads, ToString(true));
+#endif
         EndGroup();
 
         BeginGroup(Settings::TranslateCategory(Settings::Category::Core));
         seed(Settings::values.use_multi_core, ToString(true));
         seed(Settings::values.use_speed_limit, ToString(true));
         seed(Settings::values.speed_limit, ToString(u16(100)));
+        seed(Settings::values.memory_layout_mode, ToString(u32(Settings::MemoryLayout::Memory_4Gb)));
+        seed(Settings::values.sync_core_speed, ToString(false));
+        EndGroup();
+
+        BeginGroup(Settings::TranslateCategory(Settings::Category::System));
+        seed(Settings::values.gpu_clock, ToString(u32(Settings::GpuClock::Boost)));
         EndGroup();
 
         BeginGroup(Settings::TranslateCategory(Settings::Category::Cpu));
         seed(Settings::values.cpu_accuracy, ToString(u32(Settings::CpuAccuracy::Auto)));
+        seed(Settings::values.use_custom_cpu_ticks, ToString(false));
         EndGroup();
     }
 #endif

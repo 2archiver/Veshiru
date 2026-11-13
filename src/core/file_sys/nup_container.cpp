@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <condition_variable>
 #include <cstddef>
 #include <cstring>
@@ -339,8 +341,19 @@ public:
             // a file, decodes only that far. A read further in decodes the whole member, as the
             // old reader did, so a random reader stalls once per member rather than repeatedly.
             const u64 target = end - decoded <= NearDecode ? end : uncompressed_size;
+            const auto begin = std::chrono::steady_clock::now();
             if (!DecodeTo(*member, end, target)) {
                 return 0;
+            }
+            // Slow decompressions are hitches on the thread that reads the file: log them, to see
+            // what a larger EDEN_NX2_NUP_CACHE_MIB would buy.
+            const double ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
+                    .count();
+            if (static std::atomic<u32> logged{}; ms > 2.0 && logged.fetch_add(1) < 400) {
+                LOG_INFO(Loader, "NUP decompressed {} to {:.1f} of {:.1f} MiB in {:.1f} ms", name,
+                         static_cast<double>(target) / (1024.0 * 1024.0),
+                         static_cast<double>(uncompressed_size) / (1024.0 * 1024.0), ms);
             }
         }
         if (!spilled) {
@@ -529,10 +542,56 @@ bool NupContainer::IsNupFile(const VirtualFile& file) {
     return magic == HeaderMagic;
 }
 
+std::optional<u64> NupContainer::PeekBaseTitleId(const VirtualFile& file) {
+    if (file == nullptr || file->GetSize() < SuperblockSize) {
+        return std::nullopt;
+    }
+    Superblock super{};
+    if (file->ReadObject(&super, 0) != sizeof(Superblock) || super.magic != HeaderMagic) {
+        return std::nullopt;
+    }
+    // A container holds a base, its updates and its add-ons; this bounds the read on a bad file.
+    constexpr u32 MaxPeekedPackages = 1024;
+    const u64 records_size = static_cast<u64>(super.package_count) * PackageRecordSize;
+    if (super.package_count > MaxPeekedPackages || super.toc_offset > file->GetSize() ||
+        super.toc_size < TocHeaderSize || records_size > super.toc_size - TocHeaderSize) {
+        return std::nullopt;
+    }
+    const auto records = file->ReadBytes(static_cast<std::size_t>(records_size),
+                                         static_cast<std::size_t>(super.toc_offset + TocHeaderSize));
+    if (records.size() != records_size) {
+        return std::nullopt;
+    }
+    for (u32 i = 0; i < super.package_count; ++i) {
+        PackageRecord record{};
+        std::memcpy(&record, records.data() + i * PackageRecordSize, sizeof(record));
+        if (record.kind == static_cast<u8>(PackageKind::Base)) {
+            return record.title_id;
+        }
+    }
+    return std::nullopt;
+}
+
 NupContainer::NupContainer(VirtualFile file_, std::size_t memory_cache_cap,
                            std::filesystem::path spill_dir_)
     : file(std::move(file_)), cache(std::make_shared<NupDecompressCache>()) {
+    const char* fallback = std::getenv("EDEN_NUP_DAMAGED_FALLBACK");
+    damaged_fallback = fallback == nullptr || std::string_view{fallback} != "0";
     cache->cap = memory_cache_cap;
+    // EDEN_NX2_NUP_CACHE_MIB=<MiB> (64 or more) keeps more decompressed members on hosts with RAM
+    // to spare, so area changes stop decompressing again what the 512 MiB default evicted.
+    if (memory_cache_cap == DefaultCacheCap) {
+        if (const char* value = std::getenv("EDEN_NX2_NUP_CACHE_MIB");
+            value != nullptr && value[0] != '\0') {
+            const auto mib = static_cast<std::size_t>(std::strtoull(value, nullptr, 10));
+            if (mib >= 64) {
+                cache->cap = mib * 1024 * 1024;
+            }
+            if (static std::atomic_flag logged; !logged.test_and_set()) {
+                LOG_INFO(Loader, "NUP decompression cache: {} MiB", cache->cap / (1024 * 1024));
+            }
+        }
+    }
     cache->spill_dir = spill_dir_.empty()
                            ? Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) / "nup"
                            : std::move(spill_dir_);
@@ -978,7 +1037,8 @@ void NupContainer::BuildDirTree(u32 dir_index, VectorVfsDirectory& out, bool ser
             // A game .zs is already compressed, so the NUP only recompresses one that shrinks,
             // which a zeroed range does: only those members need their header checked.
             const FileNode& member = files[index];
-            if (serve_stand_ins && member.codec == CodecZstd && member.name.ends_with(".zs") &&
+            if (serve_stand_ins && damaged_fallback && member.codec == CodecZstd &&
+                member.name.ends_with(".zs") &&
                 HasZstdMagic(index) == false) {
                 damaged.push_back(index);
             } else {
