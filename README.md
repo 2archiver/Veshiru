@@ -56,10 +56,7 @@ See the [build guide](docs/Build.md), [user documentation](docs/user/README.md),
 
 Keep changes focused and distinguish code-level checks from actual gameplay testing. Performance claims should be backed by identical-settings benchmarks on the target hardware.
 
-## Artwork
-
-Art created by YOB (yobslab). The supplied Veshiru logo, icon and library artwork are in [dist/branding](dist/branding). Windows, Linux and macOS icon resources are generated from that artwork by [Generate-VeshiruIcons.ps1](tools/Generate-VeshiruIcons.ps1).
-
+## 
 ## Credits and license
 
 Veshiru inherits the work of the Eglantine, Lichii, Nemyu, Eden, yuzu and Sudachi projects and their contributors, including Eglantine's original developer Camille LaVey, SmileyTatsu's GTX 1650 ASTC/memory work, zortos293's Lichii compatibility work and UesleiDev's Nemyu NUP/interface work. Original copyright notices and third-party licenses are retained.
