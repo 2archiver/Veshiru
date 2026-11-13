@@ -7,6 +7,14 @@ on:
         description: Publish the binaries as a GitHub release
         type: boolean
         default: true
+      release_tag:
+        description: Tag the release manually (e.g. v1.1.0) instead of the build-N tag. The tag is created at this commit and the release is marked stable.
+        type: string
+        default: ""
+      release_title:
+        description: Title for the manually tagged release (e.g. Veshiru 1.1). Defaults to "Veshiru <tag>".
+        type: string
+        default: ""
   push:
     branches:
       - nx2-experimental
@@ -52,9 +60,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          tag="build-${GITHUB_RUN_NUMBER}"
+          tag="${RELEASE_TAG:-build-${GITHUB_RUN_NUMBER}}"
           if tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null); then
             if [ "$tag_sha" != "$GITHUB_SHA" ]; then
               echo "Release tag $tag points to $tag_sha instead of $GITHUB_SHA"
@@ -282,47 +291,86 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TITLE: ${{ inputs.release_title }}
         run: |
           set -euo pipefail
-          tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/build-${GITHUB_RUN_NUMBER}" --jq '.object.sha')
+          tag="${RELEASE_TAG:-build-${GITHUB_RUN_NUMBER}}"
+          tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$tag" --jq '.object.sha')
           if [ "$tag_sha" != "$GITHUB_SHA" ]; then
-            echo "Release tag build-${GITHUB_RUN_NUMBER} points to $tag_sha instead of $GITHUB_SHA"
+            echo "Release tag $tag points to $tag_sha instead of $GITHUB_SHA"
             exit 1
           fi
-          tag="build-${GITHUB_RUN_NUMBER}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
 
           link() { [[ -e "dist/$2" ]] && echo "[$1](${base}/$2)" || true; }
           test -f dist/veshiru-windows-x86_64.zip
           test -f dist/veshiru-windows-x86_64-pgo.zip
 
-          cat > notes.md <<EOF
-          Automatic build of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}.
+          assets_table() {
+            {
+              echo '| Build Type | Standard | PGO (Recommended) | Notes |'
+              echo '| --- | --- | --- | --- |'
+              echo "| amd64 / x86_64 | $(link zip veshiru-windows-x86_64.zip) | $(link "PGO zip" veshiru-windows-x86_64-pgo.zip) | Both built with clang-cl and ThinLTO; the PGO zip adds a profile trained on Ocarina of Time |"
+            }
+          }
 
-          Veshiru is a Windows-exclusive emulator. Linux and macOS packages are no longer produced.
+          if [ -n "$RELEASE_TAG" ]; then
+            # Manually tagged stable release: the notes come from the matching CHANGELOG section.
+            title="${RELEASE_TITLE:-Veshiru $RELEASE_TAG}"
+            version="${RELEASE_TAG#v}"
+            changelog=$(gh api "repos/${GITHUB_REPOSITORY}/contents/CHANGELOG.md?ref=${GITHUB_SHA}" --jq .content | base64 -d)
+            section=$(awk -v name="$version" '
+              $0 == "## [" name "]" || index($0, "## [" name "] - ") == 1 { found = 1; next }
+              found && /^## / { exit }
+              found { print }
+            ' <<< "$changelog")
+            if [ -z "$(tr -d '[:space:]' <<< "$section")" ]; then
+              echo "CHANGELOG.md has no non-empty [$version] section" >&2
+              exit 1
+            fi
+            {
+              printf '%s\n\n' "$section"
+              echo "Veshiru is a Windows-exclusive emulator: it is built and tested for 64-bit Windows 10 and 11 only."
+              echo
+              echo "Extract the entire zip and run \`veshiru.exe\`, or \`eden-cli.exe\` from a terminal."
+              echo
+              assets_table
+              echo
+              echo "The PGO build is the same program compiled with profile-guided optimization using a profile trained in Veshiru on Ocarina of Time, so other games gain less. Prefer it when your CPU supports it."
+            } > notes.md
+            gh release create "${tag}" dist/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --title "$title" \
+              --notes-file notes.md
+          else
+            {
+              printf 'Automatic build of `%s` at %s.\n\n' "$GITHUB_REF_NAME" "$GITHUB_SHA"
+              echo 'Veshiru is a Windows-exclusive emulator. Linux and macOS packages are no longer produced.'
+              echo
+              echo '## Windows'
+              echo
+              echo 'Windows packages are in-place zip files: extract and run `veshiru.exe`, or `eden-cli.exe` from a terminal.'
+              echo
+              assets_table
+              echo
+              echo 'The PGO build is the same program compiled with profile-guided optimization using a profile trained in Veshiru on Ocarina of Time, so other games gain less. Prefer it when your CPU supports it.'
+            } > notes.md
 
-          ## Windows
-
-          Windows packages are in-place zip files: extract and run \`veshiru.exe\`, or \`eden-cli.exe\` from a terminal.
-
-          | Build Type | Standard | PGO (Recommended) | Notes |
-          | --- | --- | --- | --- |
-          | amd64 / x86_64 | $(link zip veshiru-windows-x86_64.zip) | $(link "PGO zip" veshiru-windows-x86_64-pgo.zip) | Both built with clang-cl and ThinLTO; the PGO zip adds a profile trained on Ocarina of Time |
-
-          The PGO build is the same program compiled with profile-guided optimization using a profile trained in Veshiru on Ocarina of Time, so other games gain less. Prefer it when your CPU supports it.
-          EOF
-
-          gh release create "${tag}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --verify-tag \
-            --prerelease \
-            --title "Veshiru ${GITHUB_REF_NAME} build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
-            --notes-file notes.md
+            gh release create "${tag}" dist/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --prerelease \
+              --title "Veshiru ${GITHUB_REF_NAME} build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
+              --notes-file notes.md
+          fi
 
       # VESHIRU_BUILD_TAG is baked into every binary as build-<run number>, and the update checker
       # compares release tags against it. A release whose tag or title names another run would be
       # skipped or offered wrongly, so fail the run instead of leaving it published.
       - name: Verify the release tag matches the run number
+        if: (github.event_name == 'push' || inputs.publish_release) && !inputs.release_tag
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
