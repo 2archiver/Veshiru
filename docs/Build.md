@@ -1,9 +1,9 @@
-# Building Eglantine
+# Building Veshiru
 
 > [!WARNING]
 > This guide is intended for developers ONLY. If you are not a developer or packager, you are unlikely to receive support.
 
-This is a full-fledged guide to build Eglantine on all supported platforms.
+Veshiru is a Windows-exclusive emulator: Windows 10/11 x86-64 is the supported platform, and only Windows packages are published.
 
 If you already have a development environment set up:
 
@@ -12,7 +12,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G Ninja
 cmake --build build
 ```
 
-On Linux, macOS, and MinGW/MSYS2, make sure to read the [dependencies guide](Deps.md). On Android, read its [dedicated page](build/Android.md).
+On Windows (MSVC or MinGW/MSYS2), make sure to read the [dependencies guide](Deps.md). Android builds are unsupported and are not covered here.
 
 ## Dependencies
 
@@ -23,8 +23,8 @@ First, you must [install some dependencies](Deps.md).
 Next, you will want to clone Eglantine via the terminal:
 
 ```sh
-git clone https://github.com/Djihads80/Eglantine.git
-cd Eglantine
+git clone https://github.com/2archiver/Veshiru.git
+cd Veshiru
 ```
 
 Or use Qt Creator (Create Project -> Import Project -> Git Clone).
@@ -39,7 +39,7 @@ If the configure phase fails, see the `Troubleshooting` section below. Usually, 
 
 ### Option A: Qt Creator
 
-This is the recommended GUI method for Linux, macOS, and Windows.
+This is the recommended GUI method for Windows.
 
 <details>
 <summary>Click to Open</summary>
@@ -79,8 +79,6 @@ Available `<GENERATOR>`:
 
 - MSYS2: `MSYS Makefiles`
 - MSVC: `Ninja` (preferred) or `Visual Studio 17 2022`
-- macOS: `Ninja` (preferred) or `Xcode`
-- Others: `Ninja` (preferred) or `UNIX Makefiles`
 
 Available `<BUILD_TYPE>`:
 
@@ -192,7 +190,7 @@ Simply hit Ctrl+B, or the "hammer" icon in the bottom left. To run, hit the "pla
 
 ### On Command Line
 
-If you are using the `UNIX Makefiles` or `Visual Studio 17 2022` as `<GENERATOR>`, you should also add `--parallel` for faster build times.
+If you are using the `Visual Studio 17 2022` generator, you should also add `--parallel` for faster build times.
 
 ```sh
 cmake --build build
@@ -200,9 +198,7 @@ cmake --build build
 
 Your compiled executable will be in:
 
-- `build/bin/eglantine.exe` for Windows,
-- `build/bin/Eglantine.app/Contents/MacOS/eglantine` for macOS,
-- and `build/bin/eglantine` for others.
+- `build/bin/veshiru.exe` for Windows (the only supported desktop platform).
 
 ## Scripts
 

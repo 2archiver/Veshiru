@@ -21,7 +21,7 @@ git clone --recursive https://git.eden-emu.dev/eden-emu/eden.git
 Eden by default will be cloned into:
 
 * `C:\Users\<user-name>\eden` on Windows
-* `~/eden` on Linux and macOS
+* `~/eden`
 
 ## Building
 
@@ -42,7 +42,7 @@ Eden by default will be cloned into:
 6. To build the optimised build use `./gradlew assembleGenshinSpoofRelWithDebInfo`.
 7. You can pass extra variables to cmake via `-PVESHIRU_ANDROID_ARGS="-D..."`
 
-Remember to have a Java SDK installed if not already, on Debian and similar this is done with `sudo apt install openjdk-17-jdk`.
+Remember to have a Java SDK 17+ installed if not already.
 
 ### Script
 

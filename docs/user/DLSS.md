@@ -76,4 +76,4 @@ Old profiles without these settings load Automatic and M. The Automatic/Native
 values remain compatible with the quality settings in
 [myshadowww's PR #840](https://github.com/2archiver/Veshiru/pull/840), from which the
 Native DLAA sizing and atomic runtime-settings publication were adapted. This
-change does not import that PR's Linux backend or neural rendering.
+change does not import that PR's non-Windows backend or neural rendering.

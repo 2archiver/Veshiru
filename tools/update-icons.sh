@@ -60,7 +60,6 @@ magick "$BASE_LEGACY" -resize 72x72 "$EDEN_ANDROID_RES/mipmap-mdpi/ic_launcher.p
 optipng -o7 "$EDEN_ANDROID_RES"/mipmap-*/ic_launcher.png
 
 # macOS
-# TODO: Update Assets.car too
 
 TMP_PNG="dist/eden-tmp.png"
 

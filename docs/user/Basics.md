@@ -14,7 +14,6 @@ See [the requirements page](https://archive.is/sv83h) for recommended and minimu
 
 The CPU must support FMA for an optimal gameplay experience. The GPU needs to support OpenGL 4.6 ([compatibility list](https://opengl.gpuinfo.org/)), or Vulkan 1.1 ([compatibility list](https://vulkan.gpuinfo.org/)).
 
-If your GPU doesn't support or is just behind by a minor version, see Mesa environment variables below (*nix only).
 
 ## Releases and versions
 
@@ -31,10 +30,7 @@ If your GPU doesn't support or is just behind by a minor version, see Mesa envir
 
 Eden will store configuration files in the following directories:
 
-- **Windows**: `%AppData%\Roaming`.
-- **Android**: Data is stored internally.
-- **Linux, macOS, FreeBSD, Solaris, OpenBSD**: `$XDG_DATA_HOME`, `$XDG_CACHE_HOME`, `$XDG_CONFIG_HOME`.
-- **HaikuOS**: `/boot/home/config/settings/eden`
+- **Windows**: `%APPDATA%\veshiru`.
 
 If a `user` directory is present in the current working directory, that will override all global configuration directories and the emulator will use the `user` directory instead.
 
@@ -52,13 +48,6 @@ eden.exe
 
 Android doesn't have a convenient way to set environment variables.
 
-For other platforms, the recommended method is using a shell script:
-
-```sh
-export __GL_THREADED_OPTIMIZATIONS=1
-export SOME_OTHER_VAR=1
-./eden
-```
 
 Then just running `chmod +x script.sh && source script.sh`.
 

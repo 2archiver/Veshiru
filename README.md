@@ -14,6 +14,8 @@
 
 Veshiru is an experimental, open-source Nintendo Switch 2 emulator written in C++. It is an independent project with its own executable, profile, interface and development direction. It uses verified work from Eglantine, Lichii, Nemyu, Eden, yuzu and Sudachi as engineering references while preserving their contributions and licenses.
 
+Veshiru is a Windows-exclusive emulator: it is developed, built and tested for 64-bit Windows 10 and 11, and only Windows packages are published.
+
 The current development target is a Windows 11 PC with an Intel Core i7-10750H, NVIDIA GTX 1650 4 GB, Intel UHD integrated graphics and 32 GB RAM. Performance decisions are made for that machine first: GTX 1650 Vulkan rendering, bounded VRAM use, asynchronous shader/pipeline work, proven ASTC decode improvements and low-overhead CPU/GPU threading. Veshiru is not affiliated with Nintendo.
 
 ## Downloads and setup
@@ -22,11 +24,11 @@ Download Veshiru only from this repository's [releases page](https://github.com/
 
 ### Existing Eglantine saves and settings
 
-Veshiru uses its own profile: `%APPDATA%\veshiru` on Windows, and the `veshiru` directories under `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and `$XDG_CACHE_HOME` on Linux and macOS. An existing portable `user/` directory still takes priority and is not imported or changed by the wizard.
+Veshiru uses its own profile: `%APPDATA%\veshiru`. An existing portable `user/` directory still takes priority and is not imported or changed by the wizard.
 
 Eglantine build 17 and other Eden-derived builds stored saves under `eden`; later Eglantine, Lichii and Nemyu builds used their own names. On the first non-portable GUI launch, Veshiru detects those profiles and offers an import. **Copy** is the default and leaves the source unchanged. Move retains a recovery backup; Link deliberately shares data. Existing Veshiru data is kept in backup directories rather than merged or deleted. Save bytes, title IDs, save-size files and compatible shader caches are preserved; imported storage paths are remapped to the new profile.
 
-Back up `%APPDATA%\eden` (or the old Unix data/config/cache directories) before importing, and close the source emulator. `veshiru-cmd` refuses to initialize configuration until you import or explicitly choose **Start fresh** in the GUI, so a CLI-first launch cannot silently abandon existing saves.
+Back up `%APPDATA%\eden` before importing, and close the source emulator. `veshiru-cmd` refuses to initialize configuration until you import or explicitly choose **Start fresh** in the GUI, so a CLI-first launch cannot silently abandon existing saves.
 
 ## Live console and diagnostics
 
@@ -52,7 +54,7 @@ Do not upload game files, keys, firmware or private account information.
 
 ## Building and contributing
 
-See the [build guide](docs/Build.md), [user documentation](docs/user/README.md), [coding guidelines](docs/Coding.md) and [Veshiru development notes](docs/Veshiru.md). The GUI build target is `veshiru`; its output is `veshiru.exe` on Windows and `veshiru` on other desktop platforms. The CLI target is `veshiru-cmd`.
+See the [build guide](docs/Build.md), [user documentation](docs/user/README.md), [coding guidelines](docs/Coding.md) and [Veshiru development notes](docs/Veshiru.md). The GUI build target is `veshiru`; its output is `veshiru.exe`, the Windows-exclusive GUI executable. The CLI target is `veshiru-cmd`.
 
 Keep changes focused and distinguish code-level checks from actual gameplay testing. Performance claims should be backed by identical-settings benchmarks on the target hardware.
 

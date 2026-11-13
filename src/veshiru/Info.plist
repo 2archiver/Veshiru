@@ -16,10 +16,6 @@ SPDX-License-Identifier: GPL-2.0-or-later
     <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
     <key>CFBundleGetInfoString</key>
     <string></string>
-    <key>CFBundleIconFile</key>
-    <string>veshiru.icns</string>
-    <key>CFBundleIconName</key>
-    <string>veshiru</string>
     <key>CFBundleIdentifier</key>
     <string>dev.veshiru.emulator</string> <!-- May be required by 3rd party ext -->
     <key>CFBundleInfoDictionaryVersion</key>

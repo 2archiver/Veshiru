@@ -54,8 +54,6 @@ jobs:
             const os = get("Operating system");
             if (os) {
               if (/windows/i.test(os)) labels.add("windows");
-              else if (/linux/i.test(os)) labels.add("linux");
-              else if (/macos/i.test(os)) labels.add("MacOS");
             }
 
             // Regression

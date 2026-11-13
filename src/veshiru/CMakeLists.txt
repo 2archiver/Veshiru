@@ -384,24 +384,8 @@ target_sources(veshiru
         ${LANGUAGES}
         ${THEMES})
 
-# TODO(crueter): Move Assets.car/icon/icns handling to its own Module.
 if (APPLE)
     target_sources(veshiru PRIVATE util/macos_sleep.cpp util/macos_sleep.h)
-
-    # Use the supplied Veshiru artwork for all macOS generators.
-    set(_dist "${CMAKE_SOURCE_DIR}/dist")
-    set(_icons "${_dist}/veshiru.icns")
-    if (CMAKE_GENERATOR MATCHES "Xcode")
-        set_target_properties(veshiru PROPERTIES
-            MACOSX_BUNDLE_ICON_FILE veshiru.icns
-            # Also force xcode to manage signing for us.
-            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED ON
-            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED ON)
-    endif()
-
-    set_source_files_properties(${_icons} PROPERTIES
-        MACOSX_PACKAGE_LOCATION Resources)
-    target_sources(veshiru PRIVATE ${_icons})
 
     set_target_properties(veshiru PROPERTIES MACOSX_BUNDLE TRUE)
     set_target_properties(veshiru PROPERTIES MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist)

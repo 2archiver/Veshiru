@@ -26,8 +26,6 @@ KEEP = [
      "docs/nx2/debug-mcp.md"),
     (r"earlier versions of Eden and Yuzu", "compat", "interop: a bug in the separate yuzu emulator that users "
      "migrating from it can hit", "docs/user/Orphaned.md"),
-    (r"Nintendo Switch - Yuzu", "compat", "interop: Steam ROM Manager's community preset for the yuzu emulator",
-     "docs/user/SteamROM.md"),
     (r"ikuzen/yuzu-hdr-multiplayer-dedicated", "compat", "interop: third-party Docker image name",
      "docs/user/ServerHosting.md"),
     (r"https://git\.eden-emu\.dev/\S*?/src/yuzu/\S*?\.cpp", "compat",

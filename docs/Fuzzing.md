@@ -1,6 +1,6 @@
 # Fuzzing the game-file parsers
 
-`-DVESHIRU_FUZZERS=ON` builds three libFuzzer harnesses in `src/fuzz/` and compiles the whole build with AddressSanitizer and UndefinedBehaviorSanitizer. It needs clang with its compiler-rt runtimes (`libclang-rt-<version>-dev` on Ubuntu). Use a separate build directory, since every object is instrumented.
+`-DVESHIRU_FUZZERS=ON` builds three libFuzzer harnesses in `src/fuzz/` and compiles the whole build with AddressSanitizer and UndefinedBehaviorSanitizer. It needs clang with its compiler-rt runtimes. Use a separate build directory, since every object is instrumented.
 
 | Harness | Input |
 |---|---|

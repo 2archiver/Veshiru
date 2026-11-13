@@ -1,3 +1,4 @@
+# Regenerates the Windows icon set (dist/veshiru.ico, dist/veshiru.png) from the master artwork.
 param([string]$Source = "$PSScriptRoot/../dist/branding/veshiru_icon.png")
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -19,11 +20,6 @@ function Get-IconPng([int]$size) {
         return ,$stream.ToArray()
     } finally { $stream.Dispose(); $graphics.Dispose(); $bitmap.Dispose() }
 }
-function Write-BigEndian32($stream, [uint32]$value) {
-    $bytes = [BitConverter]::GetBytes($value)
-    [Array]::Reverse($bytes)
-    $stream.Write($bytes, 0, 4)
-}
 try {
     $sizes = @(16, 24, 32, 48, 64, 128, 256)
     $frames = @($sizes | ForEach-Object { ,(Get-IconPng $_) })
@@ -43,20 +39,4 @@ try {
     } finally { $writer.Dispose(); $stream.Dispose() }
     $png = Get-IconPng 256
     [IO.File]::WriteAllBytes("$dist/veshiru.png", $png)
-    $types = @('ic07', 'ic08', 'ic09', 'ic10')
-    $frames = @(128, 256, 512, 1024 | ForEach-Object { ,(Get-IconPng $_) })
-    $stream = [IO.File]::Create("$dist/veshiru.icns")
-    try {
-        $magic = [Text.Encoding]::ASCII.GetBytes('icns')
-        $stream.Write($magic, 0, 4)
-        $length = 8
-        foreach ($frame in $frames) { $length += 8 + $frame.Length }
-        Write-BigEndian32 $stream $length
-        for ($i = 0; $i -lt $types.Count; $i++) {
-            $type = [Text.Encoding]::ASCII.GetBytes($types[$i])
-            $stream.Write($type, 0, 4)
-            Write-BigEndian32 $stream (8 + $frames[$i].Length)
-            $stream.Write($frames[$i], 0, $frames[$i].Length)
-        }
-    } finally { $stream.Dispose() }
 } finally { $sourceImage.Dispose() }

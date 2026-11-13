@@ -35,7 +35,7 @@ That depends entirely on what your goal is and your level of technical ability, 
     1. This option will require you to be comfortable with accessing your router's configuration, altering firewall rules, and troubleshooting when things (inevitably) don't work out perfectly on the first try.  Use this option if you want to control the room entirely, are concerned about latency issues, or just want to run something for your friends. See the *Hosting a Multiplayer Room* section for next steps*.*
 
 ### Can Other Platforms Play Together?
-Yes - the platform you choose to run the emulator on does not matter.  Steam Deck users can play with Windows users, Android users can play with MacOS users, etc.  Furthermore different emulators can play together as well (Eden/Citron/Ryubing, etc.) - but be you may want to all go to the same one if you are having issues.
+Different emulators can play together as well (Eden/Citron/Ryubing, etc.) - but you may want to all go to the same one if you are having issues.
 
 ### What Pitfalls Should I Look Out For?
 While it would be nice if everything always worked perfectly - that is not reality.  Here are some things you should watch out for when attempting to play multiplayer.
@@ -239,19 +239,6 @@ Use this guide when you need to determine the connection information for the Pub
     #}
     ```
     
-    #### CURL Command [MacOS/Linux Users] **Requires jq*
-    
-    ```bash
-    # Calls the API to get the address and port information
-    curl -s "https://api.ynet-fun.xyz/lobby" | jq '.rooms[] | select(.name == "<NAME>") | {address, port}'
-    
-    # Example Output
-    #{
-    #  "address": "118.208.233.90",
-    #  "port": 5001
-    #}
-    ```
-    
 4. Copy the Server Address and Port.
 
 ---
@@ -302,13 +289,6 @@ This guide will assume you are the one hosting the game and go over things *Pars
 ## Metaserver troubleshooting
 
 If you can't connect to the metaserver, it's likely your ISP is blocking the requests.
-
-### Linux and Steamdeck
-
-Most Linux systems and Steamdeck should allow to modify the base `/etc/hosts` file, this should fix the DNS lookup issue; hence add the following to said file:
-```
-28.165.181.135 api.ynet-fun.xyz api.ynet-fun.xyz
-```
 
 ### Zapret
 

@@ -43,9 +43,6 @@ These options control dependencies.
   - UNIX may be better off appending `-flto=thin` to compiler args
 - `USE_FASTER_LINKER` (OFF) Check if a faster linker is available
   - Not recommended outside of Linux
-- `VESHIRU_INSTALL_UDEV_RULES` (OFF) Install udev rules to enable hidraw access
-  - Needed for gyroscopes
-  - Only available on Linux
 - `ENABLE_DEBUG_TOOLS` (OFF) Enables debugging and development tools, see [tools](../tools/README.md).
 - `ENABLE_WERROR` (ON) Enables warnings as errors (-Werror).
 - `VESHIRU_FUZZERS` (OFF) Builds the libFuzzer harnesses for the game-file parsers and instruments the whole build with ASan and UBSan, see [Fuzzing](./Fuzzing.md).
@@ -62,7 +59,7 @@ These options control executables and build flavors.
   - Automatically set if `VESHIRU_USE_BUNDLED_QT` is on for non-Linux
 - `ENABLE_UPDATE_CHECKER` (OFF) Enable update checking functionality
   - `VESHIRU_BUILD_TAG` (empty) Published `build-N` tag. Builds without it never check for updates.
-  - `VESHIRU_BUILD_PLATFORM` (empty) Release asset platform and variant, such as `linux-x86_64-pgo`. CI sets this from its build matrix.
+  - `VESHIRU_BUILD_PLATFORM` (empty) Release asset platform and variant, such as `windows-x86_64-pgo`. CI sets this from its build matrix.
 - `VESHIRU_DISABLE_LLVM` (OFF) Do not attempt to link to the LLVM demangler
   - Really only useful for CI or distribution builds
 
