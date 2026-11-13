@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/settings_subscreen_navigation"
+    app:startDestination="@id/profileManagerFragment">
+
+    <fragment
+        android:id="@+id/profileManagerFragment"
+        android:name="dev.veshiru.emulator.fragments.ProfileManagerFragment"
+        android:label="ProfileManagerFragment">
+        <action
+            android:id="@+id/action_profileManagerFragment_to_newUserDialog"
+            app:destination="@id/newUserDialogFragment" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/newUserDialogFragment"
+        android:name="dev.veshiru.emulator.fragments.EditUserDialogFragment"
+        android:label="NewUserDialogFragment" />
+
+    <fragment
+        android:id="@+id/driverManagerFragment"
+        android:name="dev.veshiru.emulator.fragments.DriverManagerFragment"
+        android:label="DriverManagerFragment">
+        <argument
+            android:name="game"
+            app:argType="dev.veshiru.emulator.model.Game"
+            app:nullable="true"
+            android:defaultValue="@null" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/driverFetcherFragment"
+        android:name="dev.veshiru.emulator.fragments.DriverFetcherFragment"
+        android:label="fragment_driver_fetcher"
+        tools:layout="@layout/fragment_driver_fetcher" />
+
+    <fragment
+        android:id="@+id/freedrenoSettingsFragment"
+        android:name="dev.veshiru.emulator.fragments.FreedrenoSettingsFragment"
+        android:label="@string/freedreno_settings_title">
+        <argument
+            android:name="game"
+            app:argType="dev.veshiru.emulator.model.Game"
+            app:nullable="true"
+            android:defaultValue="@null" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/losslessManagerFragment"
+        android:name="dev.veshiru.emulator.fragments.LosslessManagerFragment"
+        android:label="@string/lossless_scaling"
+        tools:layout="@layout/fragment_lossless_manager" />
+
+    <fragment
+        android:id="@+id/appletLauncherFragment"
+        android:name="dev.veshiru.emulator.fragments.AppletLauncherFragment"
+        android:label="AppletLauncherFragment">
+        <action
+            android:id="@+id/action_appletLauncherFragment_to_cabinetLauncherDialogFragment"
+            app:destination="@id/cabinetLauncherDialogFragment" />
+    </fragment>
+
+    <dialog
+        android:id="@+id/cabinetLauncherDialogFragment"
+        android:name="dev.veshiru.emulator.fragments.CabinetLauncherDialogFragment"
+        android:label="CabinetLauncherDialogFragment" />
+
+    <fragment
+        android:id="@+id/aboutFragment"
+        android:name="dev.veshiru.emulator.fragments.AboutFragment"
+        android:label="AboutFragment" />
+
+    <fragment
+        android:id="@+id/licensesFragment"
+        android:name="dev.veshiru.emulator.fragments.LicensesFragment"
+        android:label="LicensesFragment" />
+
+    <fragment
+        android:id="@+id/gameInfoFragment"
+        android:name="dev.veshiru.emulator.fragments.GameInfoFragment"
+        android:label="GameInfoFragment">
+        <argument
+            android:name="game"
+            app:argType="dev.veshiru.emulator.model.Game" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/addonsFragment"
+        android:name="dev.veshiru.emulator.fragments.AddonsFragment"
+        android:label="AddonsFragment">
+        <argument
+            android:name="game"
+            app:argType="dev.veshiru.emulator.model.Game" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/installableFragment"
+        android:name="dev.veshiru.emulator.fragments.InstallableFragment"
+        android:label="InstallableFragment" />
+
+    <fragment
+        android:id="@+id/gameFoldersFragment"
+        android:name="dev.veshiru.emulator.fragments.GameFoldersFragment"
+        android:label="GameFoldersFragment" />
+
+    <activity
+        android:id="@+id/emulationActivity"
+        android:name="dev.veshiru.emulator.activities.EmulationActivity"
+        android:label="EmulationActivity">
+        <argument
+            android:name="game"
+            app:argType="dev.veshiru.emulator.model.Game"
+            app:nullable="true"
+            android:defaultValue="@null" />
+        <argument
+            android:name="custom"
+            app:argType="boolean"
+            android:defaultValue="false" />
+    </activity>
+
+    <action
+        android:id="@+id/action_global_emulationActivity"
+        app:destination="@id/emulationActivity"
+        app:launchSingleTop="true" />
+
+    <activity
+        android:id="@+id/settingsSubscreenActivity"
+        android:name="dev.veshiru.emulator.features.settings.ui.SettingsSubscreenActivity"
+        android:label="SettingsSubscreenActivity">
+        <argument
+            android:name="destination"
+            app:argType="dev.veshiru.emulator.features.settings.ui.SettingsSubscreen" />
+        <argument
+            android:name="game"
+            app:argType="dev.veshiru.emulator.model.Game"
+            app:nullable="true"
+            android:defaultValue="@null" />
+    </activity>
+
+    <action
+        android:id="@+id/action_global_settingsSubscreenActivity"
+        app:destination="@id/settingsSubscreenActivity" />
+</navigation>

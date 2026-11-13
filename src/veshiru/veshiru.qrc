@@ -1,0 +1,11 @@
+<!--
+SPDX-License-Identifier: GPL-2.0-or-later
+-->
+
+<RCC>
+    <qresource prefix="/img">
+        <file alias="veshiru.ico">../../dist/veshiru.ico</file>
+        <file alias="veshiru_wordmark.png">../../dist/veshiru_wordmark.png</file>
+        <file alias="veshiru_wordmark@2x.png">../../dist/veshiru_wordmark@2x.png</file>
+    </qresource>
+</RCC>
