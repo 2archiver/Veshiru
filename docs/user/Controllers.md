@@ -4,16 +4,6 @@ Most of the controls should work out of the box. If not, use a joystick calibrat
 
 - https://github.com/dkosmari/calibrate-joystick
 
-## Using external controllers on the Steamdeck
-
-In desktop mode ignore your Pro controller/XBOX controller external controller and use **Steam Virtual Gamepad 0 as Player 1**. If you have multiple external controllers set **Player 2 to Steam Virtual Gamepad 1**. Steam app must not be closed on desktop mode.
-
-Here's the annoying part of it. When waking up the steam deck from sleep try not to touch any button on the Steamdeck and turn on your external controller. Then open the Eden.AppImage. If you're lucky you can get your external controller to be position 0 and also Steam Virtual Gamepad 0 in desktop mode. If not that is ok too unless you need to configure player 1 to have gyro. You might need to repeat this to get your external controller as Steam Virtual Gamepad 0 so you can config Player 1 having gyro. You might be able to config player 1 to have gyro with the Steamdeck itself. Or you can also config player 1, 2, 3, etc, to have gyro somehow. Make sure they are all using Virtual Gamepads though.
-
-Turn off controller then go to gaming mode. Try not to touch any buttons on the physical Steamdeck. When in gaming mode turn on the external controller. If lucky it will be assigned as Steam Virtual Gamepad 0. If not just use steam Gamemode feature to rearrange controller positions order.
-
-Basically the Steamdeck or the external controller is fighting for position 0 and it depends on what is touched first after waking from sleep.
-
 ## Configuring Controller Profiles
 
 Use this guide for when you want to configure specific controller settings to be reused.

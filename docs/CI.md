@@ -1,4 +1,6 @@
-# Eglantine CI and release guide
+# Veshiru CI and release guide
+
+Veshiru is a Windows-exclusive emulator. CI builds and publishes Windows packages only; Linux and macOS are not supported and produce no artifacts.
 
 This document describes the split GitHub Actions pipeline added with this change. It is not yet a live workflow until the files have been merged to the required branches and the repository settings below have been applied.
 
@@ -54,11 +56,11 @@ The CI duplicate check refuses to publish a tag that already exists. It does **n
 Open Actions → `ci` → Run workflow. Select the branch to build and choose:
 
 - **kind**: `branch` for a test build, or `daily` for a forced daily build of `nx2` only.
-- **platforms**: `all`, `linux`, `windows`, or `macos`. A single-platform run produces a partial release with only that platform's assets.
-- **pgo**: `none` or `both`. For manual runs, `none` is the default. `both` adds PGO variants where supported (Linux x86_64/ARM64 and Windows x86_64); macOS has no PGO variant.
+- **platforms**: Windows is the only platform. There is no platform selector anymore.
+- **pgo**: `none` or `windows`. For manual runs, `none` is the default; `windows` adds the PGO variant for Windows x86_64.
 - **publish**: enabled by default. Disable it to keep the build as workflow artifacts without creating/updating a GitHub release.
 
-For automatic `nx2` version releases and scheduled daily builds, the workflow requests both PGO variants by default. Label-triggered PR builds default to non-PGO to keep test builds quicker.
+For automatic `nx2` version releases and scheduled daily builds, the workflow requests the Windows PGO variant by default. Label-triggered PR builds default to non-PGO to keep test builds quicker.
 
 A manual `daily` run is restricted to the `nx2` ref. It forces a fresh daily build for that date; with `publish: true`, it replaces the existing `daily-YYYYMMDD` release for the same day.
 
@@ -78,18 +80,15 @@ Both the scheme-preparation job and the publishing job check out CI helper scrip
 
 | Platform            | Default output               | Optional PGO output    |
 | ------------------- | ---------------------------- | ---------------------- |
-| Linux x86_64        | AppImage and `.tar.gz`       | AppImage and `.tar.gz` |
-| Linux aarch64       | AppImage and `.tar.gz`       | AppImage and `.tar.gz` |
 | Windows x86_64      | clang-cl + ThinLTO `.zip`    | clang-cl + ThinLTO + PGO `.zip` |
-| macOS Apple Silicon | App bundle `.zip` and `.dmg` | Not built              |
 
-The existing build steps use the repository's current CMake targets (`veshiru` and `veshiru-cmd`) and package the produced `eglantine` and `eden-cli` binaries. Linux AppImages require glibc 2.39 or newer. Linux tarballs hold the same files as the AppImage, unpacked, with `veshiru` and `eden-cli` links at the top. The standard Windows build uses clang-cl from a pinned LLVM release (`tools/windows/install-llvm.ps1`, shared with the Windows build-check job) in Release mode with ThinLTO, against the MSVC headers, runtime and SDK. MSVC itself still builds the project for development but is not used for releases. Windows archives contain the deployed runtime dependencies. macOS artifacts are ad-hoc signed, not notarized; Gatekeeper may require the user to approve the app on first launch.
+The existing build steps use the repository's current CMake targets (`veshiru` and `veshiru-cmd`) and package the produced `veshiru` and `eden-cli` binaries. The standard Windows build uses clang-cl from a pinned LLVM release (`tools/windows/install-llvm.ps1`, shared with the Windows build-check job) in Release mode with ThinLTO, against the MSVC headers, runtime and SDK. MSVC itself still builds the project for development but is not used for releases. Windows archives contain the deployed runtime dependencies.
 
 Build artifacts are retained for seven days. Published GitHub Release assets remain available until a release is deleted. Daily releases are pruned to approximately the seven most recent; branch releases are rolling and are cleaned up when no longer needed.
 
 ## Windows PGO profile
 
-`windows-x86_64-pgo` is the `windows-x86_64` build plus `-fprofile-use=veshiru-windows.profdata`. The profile is an LLVM indexed IR profile from clang-cl, so its function names use the MSVC ABI. Linux's `eglantine.profdata` uses Itanium names, and clang-cl cannot use it. The committed profile comes from about six minutes of Ocarina of Time gameplay. Code that run never reached gets no profile data, so other games gain less.
+`windows-x86_64-pgo` is the `windows-x86_64` build plus `-fprofile-use=veshiru-windows.profdata`. The profile is an LLVM indexed IR profile from clang-cl, so its function names use the MSVC ABI. The old Linux PGO profile is removed; Windows builds use only `veshiru-windows.profdata`. The committed profile comes from about six minutes of Ocarina of Time gameplay. Code that run never reached gets no profile data, so other games gain less.
 
 A profile older than the source only produces warnings. Functions whose code changed since training lose their profile data and are compiled as in the ThinLTO build. Retrain when those warnings cover code that matters, or when the LLVM version changes. clang-cl reads only the indexed format its own LLVM writes, so use the version that `tools/windows/install-llvm.ps1` installs.
 
@@ -104,10 +103,10 @@ To retrain:
 
 | Kind              | Tag                    | Release title                            | GitHub Release flag                |
 | ----------------- | ---------------------- | ---------------------------------------- | ---------------------------------- |
-| Stable            | `vX.Y.Z`               | `Eglantine vX.Y.Z`                       | Not a pre-release; marked latest   |
-| Release candidate | `vX.Y.Z-rcN`           | `Eglantine vX.Y.Z-rcN`                   | Pre-release                        |
-| Daily             | `daily-YYYYMMDD`       | `Eglantine Build DD/MM/YYYY`             | Pre-release; replaces same-day tag |
-| Branch / PR       | `branch-<slug>-<hash>` | `Eglantine Branch: <PR title or branch>` | Pre-release; rolling               |
+| Stable            | `vX.Y.Z`               | `Veshiru vX.Y.Z`                         | Not a pre-release; marked latest   |
+| Release candidate | `vX.Y.Z-rcN`           | `Veshiru vX.Y.Z-rcN`                     | Pre-release                        |
+| Daily             | `daily-YYYYMMDD`       | `Veshiru Build DD/MM/YYYY`               | Pre-release; replaces same-day tag |
+| Branch / PR       | `branch-<slug>-<hash>` | `Veshiru Branch: <PR title or branch>`   | Pre-release; rolling               |
 
 Only stable and RC publications send the optional Discord notification. Daily and branch releases do not.
 
@@ -124,5 +123,4 @@ Stable and RC builds get `GIT-RELEASE`, so CMake marks them as release builds. D
 - **The version push is skipped:** check the `VERSION` syntax and whether `vX.Y.Z[-rcN]` already exists as a tag/release. A duplicate is skipped, not rebuilt.
 - **Release notes step fails:** ensure the matching `## [X.Y.Z]` section in `CHANGELOG.md` contains at least one non-blank entry.
 - **Bump workflow cannot create a PR:** enable “Allow GitHub Actions to create and approve pull requests”, or create the release PR manually.
-- **Mac app fails on an older OS:** check the effective minimum OS of Homebrew dylibs. The project's CMake deployment target is 15.0, but dependencies built on a newer runner can raise the effective runtime requirement.
 - **A branch pre-release remains after cleanup:** run Actions → `cleanup-branch` → Run workflow to sweep orphaned branch releases.

@@ -127,22 +127,6 @@ While stock shaders offer a basic subset of options for most users, programs suc
 
 ## Driver specifics
 
-### Mesa environment variable hacks
-
-The software requires a certain version of Vulkan and a certain version of OpenGL to work - otherwise it will refuse to load, this can be easily bypassed by setting an environment variable: `MESA_GL_VERSION_OVERRIDE=4.6 MESA_GLSL_VERSION_OVERRIDE=460` (OpenGL) and `MESA_VK_VERSION_OVERRIDE=1.3` (Vulkan), for more information see [Environment variables for Mesa](https://web.archive.org/web/20250000000000*/https://docs.mesa3d.org/envvars.html).
-
-### NVIDIA OpenGL environment variables
-
-Unstable multithreaded optimisations are offered by the stock proprietary NVIDIA driver on X11 platforms. Setting `__GL_THREADED_OPTIMIZATIONS` to `1` would enable such optimisations. This mainly benefits the OpenGL backend. For more information see [Environment Variables for X11 NVIDIA](https://web.archive.org/web/20250115162518/https://download.nvidia.com/XFree86/Linux-x86_64/435.17/README/openglenvvariables.html).
-
-### swrast/LLVMpipe crashes under high load
-
-The OpenGL backend would invoke behaviour that would result in swarst/LLVMpipe writing an invalid SSA IR (on old versions of Mesa), and then proceeding to crash. The solution is using a script found in [tools/llvmpipe-run.sh](../../tools/llvmpipe-run.sh).
-
-### HaikuOS compatibility
-
-HaikuOS bundles a Mesa library that doesn't support full core OpenGL 4.6 (required by the emulator). This leads to HaikuOS being one of the few computer platforms where Vulkan is the only available option for users. If OpenGL is desired, Mesa has to be built manually from source. For debugging purposes `lavapipe` is recommended over the GPU driver; there is in-kernel support for NVIDIA cards through.
-
 ### Fixes for Windows 10 and above having "Device loss"
 
 Run the following batch script *inside* the Eden folder:

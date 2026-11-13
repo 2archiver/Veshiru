@@ -101,7 +101,7 @@ the game keeps its own pass whenever DLSS is off, unavailable or fails to start.
 - FSR 4 on Linux (RADV, off by default): "Use FSR 4 (fsr4-vk community Vulkan port) in place of
   FSR 3.1" feeds the same inputs to [fsr4-vk](https://github.com/Astyyyyy/fsr4-vk) (GPL-3.0), a
   community Vulkan port of FSR 4.1.1 built from AMD's weights and shaders. It is not AMD's
-  official FSR 4. The release workflow builds it with `tools/fsr4-vk/build.sh`, which pins the
+  official FSR 4. The Linux release workflow used to build it with `tools/fsr4-vk/build.sh` (Linux packages are no longer built), which pins the
   fsr4-vk commit and the SHA-256 of AMD's signed `amd_fidelityfx_upscaler_dx12.dll` of FidelityFX
   SDK 2.3.0 it extracts them from (listed under MIT in the SDK's `license.md`). Both x86-64 Linux
   packages carry `usr/lib/amd_fidelityfx_upscaler_vk.so` and, in `usr/share/licenses/fsr4-vk`,

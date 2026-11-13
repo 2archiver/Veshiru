@@ -23,8 +23,6 @@ Neither is available while a game runs.
 
 ## General
 
-- `General/Force X11 as Graphics Backend`: Wayland on *NIX has prominent issues that are unlikely to be resolved; the kind that are "not our fault, it's Wayland issue", this "temporary" hack forces X11 as the backend, regardless of the desktop manager's default.
-- `General/Enable Gamemode`: This only does anything when you have Feral Interactive's Gamemode library installed somewhere, if you do, this will help boost FPS by telling the OS to explicitly prioritize *this* application for "gaming" - only for *NIX systems.
 - `Hotkeys`: Deceptively to remove a hotkey you must right click and a menu will appear to remove that specific hotkey.
 - `UI/Language`: Changes language *of the interface* NOT the emulated program!
 - `Debug/Enable Auto Stub`: May help to "fix" some games by just lying and saying that everything they do returns "success" instead of outright crashing for any function/service that is NOT implemented.

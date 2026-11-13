@@ -288,7 +288,6 @@ option(VESHIRU_TESTS "Compile tests" "${BUILD_TESTING}")
 
 # Install udev rules on Linux (mainly for gyros)
 # Only acts on joysticks and nothing else.
-cmake_dependent_option(VESHIRU_INSTALL_UDEV_RULES "Install udev rules for gyro access" OFF "LINUX" OFF)
 
 option(VESHIRU_DOWNLOAD_ANDROID_VVL "Download validation layer binary for android" ON)
 
@@ -763,29 +762,3 @@ endif()
 # Installation instructions
 # =========================
 
-# Install freedesktop.org metadata files, following those specifications:
-# https://specifications.freedesktop.org/desktop-entry-spec/desktop-entry-spec-latest.html
-# https://specifications.freedesktop.org/icon-theme-spec/icon-theme-spec-latest.html
-# https://specifications.freedesktop.org/shared-mime-info-spec/shared-mime-info-spec-latest.html
-# https://www.freedesktop.org/software/appstream/docs/
-
-# TODO: Icon/install handling n such should be put into dist/CMakeLists.txt
-if(ENABLE_QT AND UNIX AND NOT APPLE)
-    install(FILES "dist/dev.veshiru.emulator.desktop"
-        DESTINATION "share/applications")
-    install(FILES "dist/veshiru.png"
-        DESTINATION "share/icons/hicolor/256x256/apps"
-        RENAME "dev.veshiru.emulator.png")
-
-    install(FILES "dist/dev.veshiru.emulator.xml"
-        DESTINATION "share/mime/packages")
-    install(FILES "dist/dev.veshiru.emulator.metainfo.xml"
-        DESTINATION "share/metainfo")
-endif()
-
-if (VESHIRU_INSTALL_UDEV_RULES)
-    include(GNUInstallDirs)
-
-    install(FILES "dist/72-eden-input.rules"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/udev/rules.d")
-endif()

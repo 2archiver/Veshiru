@@ -11,8 +11,6 @@ A copy of this handbook is [available online](https://git.eden-emu.dev/eden-emu/
 - **[The Basics](Basics.md)**
 - **[Quickstart](./QuickStart.md)**
     - **[Windows](./QuickStart.md#windows)**
-    - **[Steamdeck](./QuickStart.md#steamdeck)**
-    - **[macOS](./QuickStart.md#macos)**
 - **[Settings](./Settings.md)**
 - **[Controllers](./Controllers.md)**
     - **[Controller profiles](./Controllers.md#configuring-controller-profiles)**
@@ -31,7 +29,6 @@ A copy of this handbook is [available online](https://git.eden-emu.dev/eden-emu/
 
 ## 3rd-party Integration
 
-- **[Configuring Steam ROM Manager](./SteamROM.md)**
 - **[Server hosting](./ServerHosting.md)**
 - **[Syncthing Guide](./SyncthingGuide.md)**
 - **[Third Party](./ThirdParty.md)**

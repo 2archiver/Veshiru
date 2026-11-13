@@ -11,7 +11,6 @@ If your bug is related to a graphical issue -- e.g. mismatched colors, vertex ex
 Graphics Debugging is found in General -> Debug on desktop, and Advanced Settings -> Debug on Android. Android users are all set; however, desktop users may need to install the Vulkan Validation Layers:
 
 - Windows: Install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home)
-- Linux, BSD, etc: Install `vulkan-validation-layers`, `vulkan-layers`, or similar from your package manager. It should be located in e.g. `/usr/lib64/libVkLayer_khronos_validation.so`
 
 Once Graphics Debugging is enabled, run the problematic game again and continue. Note that the game may run extremely slow on weak hardware.
 
@@ -30,13 +29,7 @@ Ignoring SIGSEGV when debugging in host:
 
 ### gdb
 
-You must have GDB installed for aarch64 to debug the target. Install it through your package manager, e.g.:
-
-- On Arch:
-  - `sudo pacman -Syu aarch64-linux-gnu-gdb`
-- On Gentoo:
-  - `sudo emerge --ask crossdev`
-  - `sudo crossdev -t aarch64-unknown-linux-gnu --ex-gdb`
+You must have a GDB that understands aarch64 for the guest. On Windows, use the aarch64 cross GDB that ships with MSYS2 (`pacman -Syu mingw-w64-x86_64-gdb-multiarch`) or a dedicated aarch64 toolchain.
 
 Run `./build/bin/eden-cli -c <path to your config file (see logs where you run Eden normally to see where it is)> -d -g <path to game>`, or `Enable GDB Stub` at General > Debug, then hook up an aarch64-gdb:
 
@@ -63,11 +56,10 @@ Type `c` (for continue) and then if it crashes just do a `bt` (backtrace) and `l
 - `br <expr>`: Set breakpoint at `<expr>`.
 - `delete`: Deletes all breakpoints.
 - `catch throw`: Breakpoint at throw. Can also use `br __cxa_throw`
-- `br _mesa_error`: Break on mesa errors (set environment variable `MESA_DEBUG=1` beforehand), see [MESA_DEBUG](https://mesa-docs.readthedocs.io/en/latest/debugging.html).
 
 Expressions can be `variable_names` or `1234` (numbers) or `*var` (dereference of a pointer) or `*(1 + var)` (computed expression).
 
-For more information type `info gdb` and read [the man page](https://man7.org/linux/man-pages/man1/gdb.1.html).
+For more information type `info gdb` or consult the GDB documentation.
 
 # RenderDoc
 

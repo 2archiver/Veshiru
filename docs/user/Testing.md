@@ -6,7 +6,7 @@ Even before an issue occurs, it is best practice to keep the same settings and d
 
 Try not to test PRs which are for documentation or extremely trivial changes (like a PR that changes the app icon), unless you really want to; generally avoid any PRs marked `[docs]`.
 
-If a PR specifies it is for a given platform (i.e `linux`) then just test on Linux. If it says `NCE` then test on Android and Linux ARM64 (Raspberry Pi and such). macOS fixes may also affect Asahi, test that if you can too.
+If a PR specifies it is for a given platform, then just test on that platform. Veshiru is a Windows-exclusive emulator, so PRs are expected to build and run on Windows.
 
 You may also build artifacts yourself, be aware that the resulting builds are NOT the same as those from CI, because of package versioning and build environment differences. One famous example is FFmpeg randomly breaking on many Arch distros due to packaging differences.
 

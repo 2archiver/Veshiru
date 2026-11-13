@@ -21,7 +21,7 @@ The first-class target is:
 
 Fresh global profiles therefore seed Vulkan, native resolution, no extra AA, GPU ASTC decode with
 BC3 recompression, disk/driver pipeline caches, asynchronous shaders/presentation, bounded native
-draws, EDS2 where supported, GPU thread pinning on Windows/Linux and a conservative VRAM mode with
+draws, EDS2 where supported, GPU thread pinning on Windows and a conservative VRAM mode with
 a configurable texture-cache limit. Imported profiles and per-game overrides are not rewritten.
 
 The texture-cache limit (`texture_cache_memory_limit`, Advanced Graphics, MiB, per-game capable)
@@ -77,14 +77,14 @@ carried add-ons. Installed content still takes precedence.
 
 ## Build and test
 
-The authoritative desktop build is CI (`.github/workflows/build-check.yml`): Linux GCC and Windows
+The authoritative desktop build is CI (`.github/workflows/build-check.yml`): Windows
 clang-cl with Qt 6.8.3, tests enabled. Release binaries use
 `.github/workflows/release-binaries.yml`; the Windows PGO build uses `veshiru-windows.profdata`.
 
 Useful local checks that do not require the full Qt/Vulkan stack:
 
 ```sh
-CXX=g++ python3 tools/nx2/test_switches.py
+python3 tools/nx2/test_switches.py
 python3 tools/nx2/test_cache_metrics.py
 python3 tools/nx2/test_cache_bench.py
 ```
