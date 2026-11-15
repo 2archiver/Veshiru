@@ -200,6 +200,37 @@ jobs:
           tools/ci/ctest-annotate.sh build test-output.txt rerun
           exit 1
 
+      # A Qt test can die before its buffered output reaches ctest, which then only says
+      # "Failed". Run it directly to see its stdout/stderr and its raw exit code.
+      - name: Diagnose failing tests
+        if: failure() && steps.tests.outcome == 'failure'
+        shell: bash
+        run: |
+          log=build/Testing/Temporary/LastTest.log
+          [ -f "$log" ] || exit 0
+          exe=$(grep -m1 '^Command: ' "$log" | sed 's/^Command: //; s/"//g')
+          directory=$(grep -m1 '^Directory: ' "$log" | sed 's/^Directory: //')
+          [ -n "$exe" ] || exit 0
+
+          echo "### Direct run of the failing test" >> "$GITHUB_STEP_SUMMARY"
+          cd "${directory:-build}" 2>/dev/null || exit 0
+          set +e
+          out=$("$exe" -v2 2>&1)
+          code=$?
+          set -e
+          {
+            echo '```'
+            echo "exit code: $code"
+            printf '%s\n' "$out" | tail -60
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::error title=Test exit code::exit code: $code"
+          printf '%s\n' "$out" | tail -25 | cut -c1-400 | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error title=Test output::$(printf '%s' "$line" | tr -d '\r')"
+          done
+          exit 0
+
       - name: Save dependencies and compiler objects
         if: always()
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
