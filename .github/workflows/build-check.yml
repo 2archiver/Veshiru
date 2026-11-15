@@ -147,20 +147,30 @@ jobs:
           cmake --build build --parallel 2>&1 | tee build-output.txt
           ccache --show-stats -v
 
-      # A Windows-only project cannot reproduce this build elsewhere, so the first real
-      # diagnostics are surfaced as annotations, where they are readable from the checks API
-      # and the pull request without downloading a multi-megabyte job log.
+      # A Windows-only project cannot reproduce this build elsewhere, so the errors are surfaced
+      # as annotations (readable from the checks API and the pull request) and the captured
+      # compiler output is uploaded for download, since a job log of a clang-cl build is large and
+      # is not always retrievable.
       - name: Summarise build errors
         if: failure() && steps.build.outcome == 'failure'
         shell: bash
         run: |
           echo "### Build errors" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          grep -nE " error: |fatal error|error [A-Z]+[0-9]+|undefined reference|LNK[0-9]+" build-output.txt \
-            | head -40 | tee -a "$GITHUB_STEP_SUMMARY" | while IFS= read -r line; do
+          grep -nE " error: |fatal error|undefined reference|LNK[0-9]+|note: in instantiation" \
+            build-output.txt | head -60 | tee -a "$GITHUB_STEP_SUMMARY" | while IFS= read -r line; do
               echo "::error::${line}"
             done
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build output
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-output-${{ github.sha }}
+          path: build-output.txt
+          retention-days: 3
+          if-no-files-found: warn
 
       # nxformat is linked statically: veshiru.exe must not need an nxformat.dll, which Windows
       # may refuse to load (Smart App Control, code integrity policies) or that may be missing.
