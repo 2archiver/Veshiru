@@ -27,15 +27,22 @@ jobs:
     steps:
       - name: Skip builds for documentation-only pull requests
         id: files
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
+          # Fail open: a listing that cannot be read must never skip the build, so only a
+          # successfully fetched, non-empty list of purely documentation paths disables it.
           build=true
           if [ -n "$PR" ]; then
-            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
-            if ! printf '%s\n' "$files" | grep -qvE '^(docs/.*|.*\.md)$'; then
-              build=false
+            if files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
+                 --jq '.[].filename'); then
+              if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/.*|.*\.md)$'; then
+                build=false
+              fi
+            else
+              echo "::warning::Could not list the pull request's files; building anyway"
             fi
           fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
