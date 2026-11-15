@@ -138,12 +138,29 @@ jobs:
       # The install script pins clang-cl by checksum, so it identifies the compiler without hashing
       # the binary on every call.
       - name: Build production and tests
+        id: build
         env:
           CCACHE_COMPILERCHECK: string:${{ hashFiles('tools/windows/install-llvm.ps1') }}
         run: |
           ccache --zero-stats
-          cmake --build build --parallel
+          set -o pipefail
+          cmake --build build --parallel 2>&1 | tee build-output.txt
           ccache --show-stats -v
+
+      # A Windows-only project cannot reproduce this build elsewhere, so the first real
+      # diagnostics are surfaced as annotations, where they are readable from the checks API
+      # and the pull request without downloading a multi-megabyte job log.
+      - name: Summarise build errors
+        if: failure() && steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "### Build errors" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -nE " error: |fatal error|error [A-Z]+[0-9]+|undefined reference|LNK[0-9]+" build-output.txt \
+            | head -40 | tee -a "$GITHUB_STEP_SUMMARY" | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       # nxformat is linked statically: veshiru.exe must not need an nxformat.dll, which Windows
       # may refuse to load (Smart App Control, code integrity policies) or that may be missing.
