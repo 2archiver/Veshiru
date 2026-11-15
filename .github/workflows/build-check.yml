@@ -186,19 +186,19 @@ jobs:
 
       - name: Run tests
         id: tests
-        run: ctest --test-dir build --output-on-failure --no-tests=error --parallel "$NUMBER_OF_PROCESSORS"
+        shell: bash
+        # tee keeps the output around for the summary step; pipefail keeps ctest's status.
+        run: |
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            --parallel "$NUMBER_OF_PROCESSORS" 2>&1 | tee test-output.txt
 
       # Surface which tests failed (and their assertion text) without downloading a full log.
       - name: Summarise test failures
         if: failure() && steps.tests.outcome == 'failure'
         shell: bash
         run: |
-          echo "### Test failures" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          ctest --test-dir build --rerun-failed --output-on-failure 2>&1 |
-            tail -120 | tee -a "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          ctest --test-dir build -N 2>&1 | head -40 >> "$GITHUB_STEP_SUMMARY"
+          tools/ci/ctest-annotate.sh build test-output.txt
+          exit 1
 
       - name: Save dependencies and compiler objects
         if: always()
