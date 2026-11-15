@@ -56,7 +56,7 @@ static QPixmap GetDefaultIcon(u32 size) {
         icon.fill(Qt::transparent);
         return icon;
     }
-    // Veshiru Dark draws a game without art as a tile with a controller glyph.
+    // Veshiru Blue draws a game without art as a tile with a controller glyph.
     const int side = static_cast<int>(size);
     QImage icon(side, side, QImage::Format_ARGB32_Premultiplied);
     icon.fill(Qt::transparent);
@@ -92,7 +92,7 @@ static QPixmap RoundedIcon(const QPixmap& picture) {
 
 static QPixmap ThemeIcon(const char* name) {
     if (IsVeshiruTheme()) {
-        // Veshiru Dark keeps folder rows compact with the 16 px line icons from its set.
+        // Veshiru Blue keeps folder rows compact with the 16 px line icons from its set.
         const std::string_view icon{name};
         const char* veshiru_name = icon == "sd_card"    ? "sd"
                                   : icon == "chip"     ? "cpu"

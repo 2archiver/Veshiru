@@ -14,7 +14,7 @@ class WhatsNewDialog : public QDialog {
 
 public:
     /// Raise this when the dialog's content changes, so it shows once more after the update.
-    static constexpr u32 Version = 1;
+    static constexpr u32 Version = 2;
 
     explicit WhatsNewDialog(QWidget* parent);
     ~WhatsNewDialog() override;

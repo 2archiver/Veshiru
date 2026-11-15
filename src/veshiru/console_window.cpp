@@ -48,23 +48,24 @@ QPointer<ConsoleWindow> instance;
 
 QString LevelColor(Common::Log::Level level) {
     using Common::Log::Level;
-    // Light-on-dark palette for the console view (it has a dark background, so the old
-    // dark-on-light colors were unreadable).
+    // Severity colours on the Deep Current console surface. Trace/Debug stay muted so ordinary
+    // output recedes, info is the primary text colour and warnings/errors keep their own hue
+    // instead of the blue accent, so severity remains readable at a glance.
     switch (level) {
     case Level::Trace:
-        return QStringLiteral("#9e9e9e");
+        return QStringLiteral("#55708c");
     case Level::Debug:
-        return QStringLiteral("#5ad1d1");
+        return QStringLiteral("#849cb6");
     case Level::Info:
-        return QStringLiteral("#ffffff");
+        return QStringLiteral("#eaf4ff");
     case Level::Warning:
-        return QStringLiteral("#ffd54f");
+        return QStringLiteral("#f2b84b");
     case Level::Error:
-        return QStringLiteral("#ff7070");
+        return QStringLiteral("#ff647c");
     case Level::Critical:
-        return QStringLiteral("#ff8df2");
+        return QStringLiteral("#ff9ecb");
     default:
-        return QStringLiteral("#ffffff");
+        return QStringLiteral("#eaf4ff");
     }
 }
 
@@ -156,9 +157,10 @@ ConsoleWindow::ConsoleWindow(QWidget* parent) : QMainWindow(parent) {
     console_font.setStyleHint(QFont::Monospace);
     view->setFont(console_font);
     view->setStyleSheet(QStringLiteral(
-        "QPlainTextEdit { background-color: #121212; color: #f5f5f5; }\n"
-        "QPlainTextEdit:focus { background-color: #121212; }\n"
-        "QPlainTextEdit::selection { background-color: #264f78; color: #ffffff; }"));
+        "QPlainTextEdit { background-color: #050c16; color: #eaf4ff;"
+        " border: 1px solid #1d3b58; border-radius: 8px; padding: 6px; }\n"
+        "QPlainTextEdit:focus { border-color: #42d9f5; }\n"
+        "QPlainTextEdit::selection { background-color: #1e5fa8; color: #ffffff; }"));
     view->setPlaceholderText(tr("Waiting for emulator log entries…"));
     layout->addWidget(view, 1);
 
@@ -365,9 +367,17 @@ void ConsoleWindow::ExportDiagnostics() {
     ok &= add_sanitized_log(QStringLiteral("logs/") + QString::fromUtf8(LOG_FILE) +
                                 QStringLiteral(".old.txt"),
                             log_dir / (std::string{LOG_FILE} + ".old.txt"));
-    ok &= add_sanitized_log(QStringLiteral("logs/eden_log_2.txt"), log_dir / "eden_log_2.txt");
-    ok &= add_sanitized_log(QStringLiteral("logs/eden_log_2.txt.old.txt"),
-                            log_dir / "eden_log_2.txt.old.txt");
+    // The fallback name logging.cpp derives: the stem with "_2" before the extension.
+    const std::string original{LOG_FILE};
+    const auto dot = original.rfind('.');
+    const auto rotated_second = dot == std::string::npos
+                                    ? original + "_2"
+                                    : original.substr(0, dot) + "_2" + original.substr(dot);
+    ok &= add_sanitized_log(QStringLiteral("logs/") + QString::fromStdString(rotated_second),
+                            log_dir / rotated_second);
+    ok &= add_sanitized_log(QStringLiteral("logs/") + QString::fromStdString(rotated_second) +
+                                QStringLiteral(".old.txt"),
+                            log_dir / (rotated_second + ".old.txt"));
     zip.close();
 
     if (!ok) {

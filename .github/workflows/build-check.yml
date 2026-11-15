@@ -2,9 +2,9 @@ name: build-check
 
 on:
   pull_request:
-    branches: [nx2, arena/79aa9b92-veshiru]
+    branches: [main]
   push:
-    branches: [nx2, arena/79aa9b92-veshiru]
+    branches: [main]
   workflow_dispatch:
 
 permissions:

@@ -291,7 +291,7 @@ endif()
 
 if (VESHIRU_ROOM_STANDALONE)
     add_subdirectory(veshiru_room_standalone)
-    set_target_properties(veshiru-room PROPERTIES OUTPUT_NAME "eden-room")
+    set_target_properties(veshiru-room PROPERTIES OUTPUT_NAME "veshiru-room")
 endif()
 
 if (VESHIRU_STATIC_ROOM)
@@ -316,7 +316,7 @@ endif()
 
 if (VESHIRU_CMD)
     add_subdirectory(veshiru_cmd)
-    set_target_properties(veshiru-cmd PROPERTIES OUTPUT_NAME "eden-cli")
+    set_target_properties(veshiru-cmd PROPERTIES OUTPUT_NAME "veshiru-cmd")
 endif()
 
 if (ENABLE_QT)

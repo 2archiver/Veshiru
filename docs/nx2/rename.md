@@ -49,7 +49,7 @@ The CMake options are `VESHIRU_*` (`VESHIRU_TESTS`, `VESHIRU_CMD`, `VESHIRU_USE_
 `CMakeModules/LegacyOptions.cmake` carries an old `-DYUZU_*` value, from the command line or
 an existing cache, to the new name and removes the old entry, so existing build directories
 and scripts keep their settings. The targets are `veshiru` (output `veshiru`), `veshiru-cmd`
-(output `eden-cli`), `veshiru-room` and `veshiru_room_standalone` (output `eden-room`).
+(output `veshiru-cmd`), `veshiru-room` and `veshiru_room_standalone` (output `veshiru-room`).
 
 ## After an upstream sync
 
@@ -83,7 +83,7 @@ then merge nx2.
 | Old | New | Output |
 |---|---|---|
 | `yuzu` | `veshiru` | `veshiru` (`veshiru.exe`) |
-| `yuzu-cmd` | `veshiru-cmd` | `eden-cli` |
+| `yuzu-cmd` | `veshiru-cmd` | `veshiru-cmd` |
 | `yuzu-room` | `veshiru-room` | `eden-room` |
 | `yuzu_room_standalone` | `veshiru_room_standalone` | `eden-room` |
 | `yuzu-android` | `veshiru-android` | `libveshiru-android.so` |

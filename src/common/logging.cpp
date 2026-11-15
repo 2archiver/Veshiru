@@ -426,7 +426,7 @@ struct FileBackend final : public Backend {
             std::filesystem::rename(path, old_path, ec);
             return !ec;
         };
-        // If the log can't be moved, write this session to a second log (eden_log_2.txt) so that
+        // If the log can't be moved, write this session to a second log (<name>_2.txt) so that
         // the previous session is kept and this one still gets the full size limit. If that one
         // can't be moved either, append to it.
         auto path = filename;

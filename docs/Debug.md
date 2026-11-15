@@ -31,7 +31,7 @@ Ignoring SIGSEGV when debugging in host:
 
 You must have a GDB that understands aarch64 for the guest. On Windows, use the aarch64 cross GDB that ships with MSYS2 (`pacman -Syu mingw-w64-x86_64-gdb-multiarch`) or a dedicated aarch64 toolchain.
 
-Run `./build/bin/eden-cli -c <path to your config file (see logs where you run Eden normally to see where it is)> -d -g <path to game>`, or `Enable GDB Stub` at General > Debug, then hook up an aarch64-gdb:
+Run `./build/bin/veshiru-cmd -c <path to your config file (see logs where you run Eden normally to see where it is)> -d -g <path to game>`, or `Enable GDB Stub` at General > Debug, then hook up an aarch64-gdb:
 
 - `target remote localhost:6543`
 
