@@ -25,7 +25,7 @@ mapfile -t FAILED < <(
 )
 
 # Assertion / exception lines. Catch2 and QTest both use these shapes.
-DETAIL_RE=': FAILED:|with expansion|REQUIRE\(|CHECK\(|CHECK_FALSE\(|INFO\(|ERROR:|Assertion|signal [0-9]|terminate called|uncaught exception|no tests were found|Test #[0-9]+:.*\*\*\*'
+DETAIL_RE=': FAILED:|with expansion|FAIL!|Compared values|^[[:space:]]+(Actual|Expected)|REQUIRE\(|CHECK\(|CHECK_FALSE\(|INFO\(|ERROR:|Assertion|Loc:|signal [0-9]|terminate called|uncaught exception|no tests were found|Test #[0-9]+:.*\*\*\*'
 
 # Per-test detail lines, keyed by the "Start <n>: <name>" markers ctest emits.
 parse_detail() {
@@ -46,6 +46,20 @@ parse_detail() {
 }
 
 DETAIL=$(parse_detail | head -200 || true)
+
+if [ -z "$DETAIL" ]; then
+  # No recognisable assertion line (QTest, a crash, a timeout...). Fall back to the raw lines
+  # following each "Start <n>: <name>" marker so the failure is still identifiable.
+  DETAIL=$(awk '
+    /^[[:space:]]*Start[[:space:]]+[0-9]+: / {
+      name = $0
+      sub(/^[[:space:]]*Start[[:space:]]+[0-9]+:[[:space:]]*/, "", name)
+      current = name; shown = 0; next
+    }
+    current != "" && shown < 25 && $0 !~ /^[[:space:]]*[0-9]+\/[0-9]+ Test/ { print current "\t" $0; shown++ }
+    /^[[:space:]]*[0-9]+\/[0-9]+ Test[[:space:]]+#/ { current = "" }
+  ' "$OUT_FILE" | head -60 || true)
+fi
 
 emit() { printf '%s\n' "$1" >>"$GITHUB_STEP_SUMMARY"; }
 
