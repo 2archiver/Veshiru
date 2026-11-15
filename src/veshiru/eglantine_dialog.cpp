@@ -344,7 +344,7 @@ void EglantineDialog::FromVeshiru() {
     QString message = tr("Save data has been linked.\nVeshiru and Eglantine now reference the "
                          "same save files.");
     if (!backup_note.isEmpty()) {
-        message += "\n\n" + backup_note;
+        message += QStringLiteral("\n\n") + backup_note;
     }
     QMessageBox::information(this, tr("Save data linked"), message);
     accept();
