@@ -143,4 +143,20 @@ if [ "$RERUN" = rerun ]; then
   fi
 fi
 
+# ctest's own log holds the captured stream and, importantly, any "system error" line when the
+# process could not start at all (a missing DLL prints nothing and simply exits).
+LAST_LOG="$BUILD_DIR/Testing/Temporary/LastTest.log"
+if [ -f "$LAST_LOG" ]; then
+  LOG_TAIL=$(grep -vE '^(UpdateCTestConfiguration|Parse Config file)' "$LAST_LOG" | tail -70 || true)
+  annotate_block "ctest LastTest.log" "$LOG_TAIL"
+  {
+    echo ""
+    echo "#### ctest LastTest.log"
+    echo ""
+    echo '```'
+    printf '%s\n' "$LOG_TAIL"
+    echo '```'
+  } >>"$GITHUB_STEP_SUMMARY"
+fi
+
 echo "Summarised ${#FAILED[@]} failing test(s); detail lines: $(printf '%s' "$DETAIL" | grep -c . || true)"
