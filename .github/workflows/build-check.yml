@@ -185,7 +185,20 @@ jobs:
           fi
 
       - name: Run tests
+        id: tests
         run: ctest --test-dir build --output-on-failure --no-tests=error --parallel "$NUMBER_OF_PROCESSORS"
+
+      # Surface which tests failed (and their assertion text) without downloading a full log.
+      - name: Summarise test failures
+        if: failure() && steps.tests.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "### Test failures" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ctest --test-dir build --rerun-failed --output-on-failure 2>&1 |
+            tail -120 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ctest --test-dir build -N 2>&1 | head -40 >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save dependencies and compiler objects
         if: always()
