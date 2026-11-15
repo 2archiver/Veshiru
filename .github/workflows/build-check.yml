@@ -197,7 +197,7 @@ jobs:
         if: failure() && steps.tests.outcome == 'failure'
         shell: bash
         run: |
-          tools/ci/ctest-annotate.sh build test-output.txt
+          tools/ci/ctest-annotate.sh build test-output.txt rerun
           exit 1
 
       - name: Save dependencies and compiler objects

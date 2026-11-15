@@ -6,11 +6,14 @@
 # failure here: one ::error:: per failing test plus the assertion text, and the whole
 # picture in the job step summary.
 #
-# Usage: tools/ci/ctest-annotate.sh <build-dir> <output-file>
+# Usage: tools/ci/ctest-annotate.sh <build-dir> <output-file> [rerun]
+#   rerun  also re-run the failing tests verbosely and annotate that output; ctest sometimes
+#          reports a failure without having captured the test's own output.
 set -u -o pipefail
 
 BUILD_DIR=${1:-build}
 OUT_FILE=${2:-test-output.txt}
+RERUN=${3:-}
 
 if [ ! -s "$OUT_FILE" ]; then
   echo "::warning::no test output was captured at $OUT_FILE"
@@ -121,6 +124,23 @@ fi
 
 if [ "$BUDGET" -gt 0 ]; then
   annotate_block "Test output (tail)" "$(tail -25 "$OUT_FILE")"
+fi
+
+# A test can fail without ctest capturing anything it printed (an abort before output, a plugin
+# that refuses to load offscreen, ...). Re-running it verbosely is the only way to see why.
+if [ "$RERUN" = rerun ]; then
+  RERUN_OUT=$(ctest --test-dir "$BUILD_DIR" --rerun-failed -V 2>&1 | tail -60 || true)
+  if [ -n "$RERUN_OUT" ]; then
+    annotate_block "Verbose rerun of the failing test" "$RERUN_OUT"
+    {
+      echo ""
+      echo "#### Verbose rerun"
+      echo ""
+      echo '```'
+      printf '%s\n' "$RERUN_OUT"
+      echo '```'
+    } >>"$GITHUB_STEP_SUMMARY"
+  fi
 fi
 
 echo "Summarised ${#FAILED[@]} failing test(s); detail lines: $(printf '%s' "$DETAIL" | grep -c . || true)"
