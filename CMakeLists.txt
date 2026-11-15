@@ -298,7 +298,7 @@ option(NIGHTLY_BUILD "Use Nightly qualifiers in the update checker and build met
 cmake_dependent_option(VESHIRU_ROOM "Enable dedicated room functionality" ON "NOT ANDROID" OFF)
 cmake_dependent_option(VESHIRU_ROOM_STANDALONE "Enable standalone room executable" ON "VESHIRU_ROOM" OFF)
 
-cmake_dependent_option(VESHIRU_CMD "Compile the eden-cli executable" ON "NOT ANDROID" OFF)
+cmake_dependent_option(VESHIRU_CMD "Compile the veshiru-cmd executable" ON "NOT ANDROID" OFF)
 
 cmake_dependent_option(VESHIRU_CRASH_DUMPS "Compile crash dump (Minidump) support" OFF "WIN32 OR LINUX" OFF)
 

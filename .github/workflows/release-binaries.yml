@@ -17,7 +17,7 @@ on:
         default: ""
   push:
     branches:
-      - nx2-experimental
+      - main
     # A binary only changes when build inputs change; docs-only pushes skip the build.
     paths:
       - "src/**"
@@ -239,7 +239,7 @@ jobs:
       - name: Package Windows binary
         shell: pwsh
         run: |
-          foreach ($exe in 'veshiru.exe', 'eden-cli.exe') {
+          foreach ($exe in 'veshiru.exe', 'veshiru-cmd.exe') {
             if (-not (Test-Path "build/release/bin/$exe")) {
               throw "build/release/bin/$exe was not produced"
             }
@@ -257,8 +257,7 @@ jobs:
           retention-days: 7
 
   # Publishes every binary as a GitHub pre-release once every build succeeded: on pushes to
-  # nx2-experimental, and on manual runs unless "Publish the binaries as a GitHub release" is
-  # unticked.
+  # main, and on manual runs unless "Publish the binaries as a GitHub release" is unticked.
   release:
     name: Publish release
     needs: build
@@ -267,6 +266,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
       - name: Download binaries
         uses: actions/download-artifact@v7
         with:
@@ -277,15 +281,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir dist
+          # The checkout already contains a dist/ directory (themes, icons, installer), so the
+          # release output goes to release-dist/ to keep gh release create's glob to the archives.
+          mkdir release-dist
           # Asset names drop the commit sha: the release tag already identifies the build, and
           # stable names let the notes table link to them.
           strip_sha() { sed "s/-${GITHUB_SHA}//" <<< "$1"; }
           for artifact in artifacts/*/; do
-            name=$(basename "$artifact")
-            (cd "$artifact" && zip -qr "${GITHUB_WORKSPACE}/dist/$(strip_sha "$name").zip" .)
+            name=$(strip_sha "$(basename "$artifact")")
+            archive="${name}.zip"
+            (cd "$artifact" && zip -qr "${GITHUB_WORKSPACE}/release-dist/${archive}" .)
           done
-          ls -la dist
+
+          # The in-app update checker builds its asset URL as veshiru-<platform>[-pgo].zip from the
+          # platform string compiled into the binary, so the archives keep those names on stable
+          # releases too; renaming them here would silently disable updates.
+          (cd release-dist && sha256sum -- *.zip > SHA256SUMS.txt)
+          ls -la release-dist
 
       - name: Create release
         shell: bash
@@ -303,9 +315,9 @@ jobs:
           fi
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
 
-          link() { [[ -e "dist/$2" ]] && echo "[$1](${base}/$2)" || true; }
-          test -f dist/veshiru-windows-x86_64.zip
-          test -f dist/veshiru-windows-x86_64-pgo.zip
+          link() { [[ -e "release-dist/$2" ]] && echo "[$1](${base}/$2)" || true; }
+          test -f release-dist/veshiru-windows-x86_64.zip
+          test -f release-dist/veshiru-windows-x86_64-pgo.zip
 
           assets_table() {
             {
@@ -333,13 +345,13 @@ jobs:
               printf '%s\n\n' "$section"
               echo "Veshiru is a Windows-exclusive emulator: it is built and tested for 64-bit Windows 10 and 11 only."
               echo
-              echo "Extract the entire zip and run \`veshiru.exe\`, or \`eden-cli.exe\` from a terminal."
+              echo "Extract the entire zip and run \`veshiru.exe\`, or \`veshiru-cmd.exe\` from a terminal."
               echo
               assets_table
               echo
               echo "The PGO build is the same program compiled with profile-guided optimization using a profile trained in Veshiru on Ocarina of Time, so other games gain less. Prefer it when your CPU supports it."
             } > notes.md
-            gh release create "${tag}" dist/* \
+            gh release create "${tag}" release-dist/* \
               --repo "${GITHUB_REPOSITORY}" \
               --verify-tag \
               --title "$title" \
@@ -351,14 +363,14 @@ jobs:
               echo
               echo '## Windows'
               echo
-              echo 'Windows packages are in-place zip files: extract and run `veshiru.exe`, or `eden-cli.exe` from a terminal.'
+              echo 'Windows packages are in-place zip files: extract and run `veshiru.exe`, or `veshiru-cmd.exe` from a terminal.'
               echo
               assets_table
               echo
               echo 'The PGO build is the same program compiled with profile-guided optimization using a profile trained in Veshiru on Ocarina of Time, so other games gain less. Prefer it when your CPU supports it.'
             } > notes.md
 
-            gh release create "${tag}" dist/* \
+            gh release create "${tag}" release-dist/* \
               --repo "${GITHUB_REPOSITORY}" \
               --verify-tag \
               --prerelease \

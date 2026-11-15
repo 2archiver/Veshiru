@@ -15,7 +15,7 @@
 [[nodiscard]] QFont GetMonospaceFont();
 
 /// A menu icon from the Veshiru icon set, white on the highlighted row. Other themes keep menus
-/// without icons, so this returns a null icon unless Veshiru Dark is active.
+/// without icons, so this returns a null icon unless Veshiru Blue is active.
 [[nodiscard]] QIcon MenuIcon(const char* name);
 
 /**

@@ -59,7 +59,7 @@ case "$mode" in
     tag="daily-$day"
     refspec="$tag"
     version="$day-${sha:0:7}"
-    title="Eglantine Build $(date -u +%d/%m/%Y)"
+    title="Veshiru Build $(date -u +%d/%m/%Y)"
     latest=$(daily_tags | head -n1 || true)
     prev_tag=$(daily_tags | grep -vxF "$tag" | head -n1 || true)
     if [[ "$force" == false && -n "$latest" ]] &&
@@ -72,7 +72,7 @@ case "$mode" in
     tag="v$base"
     refspec="$tag"
     version="$tag"
-    title="Eglantine $tag"
+    title="Veshiru $tag"
     nightly=false
     if [[ "$base" == *-rc* ]]; then
       kind=rc
@@ -107,7 +107,7 @@ case "$mode" in
     tag="branch-$slug"
     refspec="$slug"
     version="$slug-${sha:0:7}"
-    title="Eglantine Branch: ${pr_title:-$branch}"
+    title="Veshiru Branch: ${pr_title:-$branch}"
     ;;
 
   *)

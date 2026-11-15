@@ -84,9 +84,10 @@ WhatsNewDialog::WhatsNewDialog(QWidget* parent) : QDialog(parent) {
     header->addLayout(titles, 1);
     body->addLayout(header);
 
-    body->addWidget(Item(QStringLiteral("wand"), tr("Veshiru Dark theme"),
-                         tr("A darker theme with the Veshiru pink accent. The old themes are still "
-                            "in Configure > General > UI.")));
+    body->addWidget(Item(QStringLiteral("wand"), tr("Veshiru Blue interface"),
+                         tr("A new deep-navy interface with an electric-blue accent and cyan "
+                            "highlights. It is the default and stays selected after a restart; the "
+                            "older themes remain in Configure > General > UI.")));
     body->addWidget(Item(QStringLiteral("sliders"), tr("Settings that fit your screen"),
                          tr("Configure and game Properties open at a size that fits your screen, "
                             "can be resized, and every tab scrolls, so nothing is cut off at "

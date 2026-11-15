@@ -18,6 +18,13 @@ Veshiru is a Windows-exclusive emulator: it is developed, built and tested for 6
 
 The current development target is a Windows 11 PC with an Intel Core i7-10750H, NVIDIA GTX 1650 4 GB, Intel UHD integrated graphics and 32 GB RAM. Performance decisions are made for that machine first: GTX 1650 Vulkan rendering, bounded VRAM use, asynchronous shader/pipeline work, proven ASTC decode improvements and low-overhead CPU/GPU threading. Veshiru is not affiliated with Nintendo.
 
+## Interface
+
+Veshiru uses its own **Veshiru Blue** interface: deep-navy surfaces, an electric-blue primary
+accent and cyan highlights, applied to the main window, game list, settings, dialogs and the live
+console. It is the default for new and existing installations, and the older themes remain
+available in **Configure > General > UI**.
+
 ## Downloads and setup
 
 Download Veshiru only from this repository's [releases page](https://github.com/2archiver/Veshiru/releases). On Windows, extract the entire build archive and run **veshiru.exe**. Only use games, updates, firmware and keys you have legally obtained from your own console. Games, keys and firmware are not included.
@@ -34,7 +41,7 @@ Back up `%APPDATA%\eden` before importing, and close the source emulator. `veshi
 
 **Tools > Console** (`Ctrl+Shift+C`) opens an independent, non-modal live log window. It supports Trace/Debug/Info/Warning/Error/Critical levels, CPU/GPU/HLE/FS/Audio/Networking/Performance/Compatibility filters, search, copy, `.log` export, clear, auto-scroll and display pause. Pausing the display does not pause emulation or log capture.
 
-The console backend is asynchronous and bounded, starts only while the window is open, rate-limits repeated messages and redacts personal paths/credential-like values. **Export diagnostics** creates a sanitized zip with logs, build information and hardware/graphics details. It does not include game files, saves, firmware, keys or personal documents. Veshiru does not add telemetry or automatic log uploads.
+The console backend is asynchronous and bounded, starts only while the window is open, rate-limits repeated messages and redacts personal paths/credential-like values. Logs are written to `veshiru_log.txt` in the emulator's `log` directory. **Export diagnostics** creates a sanitized zip with logs, build information and hardware/graphics details. It does not include game files, saves, firmware, keys or personal documents. Veshiru does not add telemetry or automatic log uploads.
 
 ## NUP support
 
@@ -54,7 +61,7 @@ Do not upload game files, keys, firmware or private account information.
 
 ## Building and contributing
 
-See the [build guide](docs/Build.md), [user documentation](docs/user/README.md), [coding guidelines](docs/Coding.md) and [Veshiru development notes](docs/Veshiru.md). The GUI build target is `veshiru`; its output is `veshiru.exe`, the Windows-exclusive GUI executable. The CLI target is `veshiru-cmd`.
+See the [build guide](docs/Build.md), [user documentation](docs/user/README.md), [coding guidelines](docs/Coding.md) and [Veshiru development notes](docs/Veshiru.md). The GUI build target is `veshiru`; its output is `veshiru.exe`, the Windows-exclusive GUI executable. The CLI target is `veshiru-cmd`; its output is `veshiru-cmd.exe`.
 
 Keep changes focused and distinguish code-level checks from actual gameplay testing. Performance claims should be backed by identical-settings benchmarks on the target hardware.
 

@@ -12,6 +12,27 @@
 #include <fmt/format.h>
 #include <windows.h>
 #include <winioctl.h>
+
+// winioctl.h does not declare REPARSE_DATA_BUFFER: it lives in ntifs.h, which is part of the WDK
+// and is not available in a normal Windows SDK build. Declare the mount-point layout that
+// FSCTL_SET_REPARSE_POINT expects; the field order and the 8-byte header match the documented
+// REPARSE_DATA_BUFFER for IO_REPARSE_TAG_MOUNT_POINT.
+typedef struct _VESHIRU_MOUNT_POINT_REPARSE_BUFFER {
+    USHORT SubstituteNameOffset;
+    USHORT SubstituteNameLength;
+    USHORT PrintNameOffset;
+    USHORT PrintNameLength;
+    WCHAR PathBuffer[1];
+} VESHIRU_MOUNT_POINT_REPARSE_BUFFER;
+
+typedef struct _VESHIRU_REPARSE_DATA_BUFFER {
+    ULONG ReparseTag;
+    USHORT ReparseDataLength;
+    USHORT Reserved;
+    union {
+        VESHIRU_MOUNT_POINT_REPARSE_BUFFER MountPointReparseBuffer;
+    };
+} VESHIRU_REPARSE_DATA_BUFFER;
 #endif
 
 #include "common/logging.h"
@@ -59,7 +80,7 @@ bool CreateJunction(const fs::path& link, const fs::path& target) {
 
     // REPARSE_DATA_BUFFER layout for IO_REPARSE_TAG_MOUNT_POINT.
     std::vector<char> buffer(buffer_bytes);
-    auto* reparse = reinterpret_cast<REPARSE_DATA_BUFFER*>(buffer.data());
+    auto* reparse = reinterpret_cast<VESHIRU_REPARSE_DATA_BUFFER*>(buffer.data());
     reparse->ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
     reparse->ReparseDataLength = static_cast<USHORT>(reparse_data_bytes);
     reparse->Reserved = 0;

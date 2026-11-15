@@ -47,7 +47,7 @@ fullscreen.
 
 Windows Auto HDR applies to SDR output of DirectX 11 and 12 games and leaves an HDR swapchain
 alone. If you keep HDR output Off on an HDR desktop and Auto HDR engages for the emulator, turn
-Auto HDR off for `veshiru.exe` / `eden-cli.exe` in Settings > System > Display > Graphics, so SDR
+Auto HDR off for `veshiru.exe` / `veshiru-cmd.exe` in Settings > System > Display > Graphics, so SDR
 frames are shown as SDR.
 
 ### Anti-aliasing

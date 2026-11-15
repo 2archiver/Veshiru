@@ -42,8 +42,10 @@ TEST_CASE("Veshiru updates compare build numbers, not tag strings", "[updater]")
 
 TEST_CASE("Veshiru ignores dev builds and malformed release tags", "[updater]") {
     const std::string tag =
-        GENERATE("", "nx2", "v0.2.0", "abc123-nx2", "nx2-build-71", "build-", "build-0", "build--1",
-                 "build-+71", "build-71junk", "build- 71", "build-18446744073709551616");
+        // "v0.2.0" is deliberately absent: a version tag is now a valid stable release tag.
+        GENERATE("", "nx2", "abc123-nx2", "nx2-build-71", "build-", "build-0", "build--1",
+                 "build-+71", "build-71junk", "build- 71", "build-18446744073709551616", "v1.2",
+                 "v1.2.0-rc1", "v", "v1.", "vA.B.C", "v1.2.3.4", "1.2.0");
     const auto releases = std::array{MakeRelease("build-71", "veshiru-windows-x86_64.zip")};
     CHECK_FALSE(UpdateChecker::SelectUpdate(releases, tag, "windows-x86_64"));
     auto invalid = releases;
@@ -51,6 +53,45 @@ TEST_CASE("Veshiru ignores dev builds and malformed release tags", "[updater]") 
     invalid[0].assets = {"https://github.com/2archiver/Veshiru/releases/download/" + tag +
                          "/veshiru-windows-x86_64.zip"};
     CHECK_FALSE(UpdateChecker::SelectUpdate(invalid, "build-70", "windows-x86_64"));
+}
+
+TEST_CASE("Veshiru offers newer stable releases to an installed stable release", "[updater]") {
+    const auto releases = std::array{
+        MakeRelease("build-900", "veshiru-windows-x86_64.zip"),
+        MakeRelease("v1.3.0", "veshiru-windows-x86_64.zip"),
+        MakeRelease("v1.2.1", "veshiru-windows-x86_64.zip"),
+        MakeRelease("v1.3.0-rc1", "veshiru-windows-x86_64.zip"),
+    };
+    const auto update = UpdateChecker::SelectUpdate(releases, "v1.2.0", "windows-x86_64");
+    REQUIRE(update);
+    CHECK(update->tag == "v1.3.0");
+
+    // A stable install is not offered a build-N pre-release, and never a downgrade.
+    CHECK_FALSE(UpdateChecker::SelectUpdate(releases, "v1.3.0", "windows-x86_64"));
+    CHECK_FALSE(UpdateChecker::SelectUpdate(releases, "v1.4.0", "windows-x86_64"));
+    // A build-N install keeps using build numbers only.
+    const auto build_update = UpdateChecker::SelectUpdate(releases, "build-800", "windows-x86_64");
+    REQUIRE(build_update);
+    CHECK(build_update->tag == "build-900");
+    // A version-tagged release without this platform's asset is not offered.
+    const auto wrong_platform = std::array{
+        MakeRelease("v1.3.0", "veshiru-linux-x86_64.AppImage")};
+    CHECK_FALSE(UpdateChecker::SelectUpdate(wrong_platform, "v1.2.0", "windows-x86_64"));
+}
+
+TEST_CASE("Veshiru compares stable versions numerically, not as strings", "[updater]") {
+    const auto releases = std::array{
+        MakeRelease("v1.10.0", "veshiru-windows-x86_64.zip"),
+        MakeRelease("v1.9.0", "veshiru-windows-x86_64.zip"),
+    };
+    const auto update = UpdateChecker::SelectUpdate(releases, "v1.9.0", "windows-x86_64");
+    REQUIRE(update);
+    CHECK(update->tag == "v1.10.0");
+    const auto patch = std::array{MakeRelease("v1.2.10", "veshiru-windows-x86_64.zip"),
+                                  MakeRelease("v1.2.9", "veshiru-windows-x86_64.zip")};
+    const auto patch_update = UpdateChecker::SelectUpdate(patch, "v1.2.9", "windows-x86_64");
+    REQUIRE(patch_update);
+    CHECK(patch_update->tag == "v1.2.10");
 }
 
 TEST_CASE("Veshiru selects only the matching platform and PGO variant", "[updater]") {

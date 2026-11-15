@@ -82,7 +82,7 @@ Both the scheme-preparation job and the publishing job check out CI helper scrip
 | ------------------- | ---------------------------- | ---------------------- |
 | Windows x86_64      | clang-cl + ThinLTO `.zip`    | clang-cl + ThinLTO + PGO `.zip` |
 
-The existing build steps use the repository's current CMake targets (`veshiru` and `veshiru-cmd`) and package the produced `veshiru` and `eden-cli` binaries. The standard Windows build uses clang-cl from a pinned LLVM release (`tools/windows/install-llvm.ps1`, shared with the Windows build-check job) in Release mode with ThinLTO, against the MSVC headers, runtime and SDK. MSVC itself still builds the project for development but is not used for releases. Windows archives contain the deployed runtime dependencies.
+The existing build steps use the repository's current CMake targets (`veshiru` and `veshiru-cmd`) and package the produced `veshiru` and `veshiru-cmd` binaries. The standard Windows build uses clang-cl from a pinned LLVM release (`tools/windows/install-llvm.ps1`, shared with the Windows build-check job) in Release mode with ThinLTO, against the MSVC headers, runtime and SDK. MSVC itself still builds the project for development but is not used for releases. Windows archives contain the deployed runtime dependencies.
 
 Build artifacts are retained for seven days. Published GitHub Release assets remain available until a release is deleted. Daily releases are pruned to approximately the seven most recent; branch releases are rolling and are cleaned up when no longer needed.
 

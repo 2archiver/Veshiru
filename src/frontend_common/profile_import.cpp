@@ -57,7 +57,7 @@ void CheckLegacyProfileBeforeConfig() {
     if (NeedsLegacyProfileImport()) {
         throw std::runtime_error("Legacy emulator data or an unfinished import was found. "
                                  "Open the Veshiru GUI to import it or explicitly start fresh "
-                                 "before using eden-cli. No configuration was created.");
+                                 "before using veshiru-cmd. No configuration was created.");
     }
 }
 

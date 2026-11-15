@@ -1,4 +1,4 @@
-# Eden Build Documentation
+# Veshiru build documentation
 
 Are you just a casual user? Take a look at our [User Handbook](./user) then!
 
@@ -28,6 +28,8 @@ This contains documentation created by developers, build instructions, guideline
 ## Contributing
 
 - **[Coding guidelines](./Coding.md)**
+- **[Veshiru development notes](./Veshiru.md)**
+- **[Upstream audit for 1.2.0](./UpstreamAudit-1.2.0.md)**
 - **[Contributing](../CONTRIBUTING.md)**
 
 ## Externals

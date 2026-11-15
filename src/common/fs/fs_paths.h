@@ -43,6 +43,9 @@
 #define SUYU_DIR "suyu"
 
 // Veshiru-specific files
-#define LOG_FILE "eden_log.txt"
+// The log lives inside Veshiru's own profile directory (%APPDATA%\veshiru\log), so its name
+// carries the Veshiru identity. Nothing reads the previous "eden_log.txt" name automatically;
+// an existing profile's old logs are simply left in place alongside the new ones.
+#define LOG_FILE "veshiru_log.txt"
 #define LOSSLESS_DLL_FILE "Lossless.dll"
 #define LOSSLESS_CACHE_FILE "lsfg_spirv.cache"

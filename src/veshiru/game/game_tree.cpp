@@ -19,7 +19,7 @@
 
 namespace {
 
-// Draws the name column the way Veshiru Dark lays it out: a game's title over a muted
+// Draws the name column the way Veshiru Blue lays it out: a game's title over a muted
 // monospace second line with a star for favourites, and a folder's game count after its path.
 class VeshiruNameDelegate final : public QStyledItemDelegate {
 public:

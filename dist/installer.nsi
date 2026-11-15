@@ -13,6 +13,11 @@
   !error "ARCH must be defined"
 !endif
 
+; The platform slug used by the release archives, e.g. windows-x86_64.
+!ifndef PLATFORM
+  !define PLATFORM "windows-${ARCH}"
+!endif
+
 !ifndef VARIANT
   !error "VARIANT must be defined"
 !endif
@@ -29,7 +34,9 @@ ManifestDPIAware true
 !define BINARY_SOURCE_DIR "..\bin"
 
 Name "${PRODUCT_NAME}"
-OutFile "${PRODUCT_NAME}-Windows-${PRODUCT_VERSION}-${ARCH}-${VARIANT}-installer.exe"
+; Matches the archive names the release workflow publishes (veshiru-windows-x86_64[-pgo].zip),
+; so an installer built next to an archive shares its platform slug and variant.
+OutFile "${PRODUCT_NAME}-${PLATFORM}-${VARIANT}-installer.exe"
 SetCompressor /SOLID lzma
 InstallDir "$LOCALAPPDATA\$(^Name)" 
 ShowInstDetails show
@@ -162,7 +169,7 @@ Section Uninstall
 
   ; Be a bit careful to not delete files a user may have put into the install directory.
   Delete "$INSTDIR\veshiru.exe"
-  Delete "$INSTDIR\eden-cli.exe"
+  Delete "$INSTDIR\veshiru-cmd.exe"
   Delete "$INSTDIR\uninst.exe"
   Delete "$INSTDIR\LICENSE.txt"
   Delete "$INSTDIR\README.md"

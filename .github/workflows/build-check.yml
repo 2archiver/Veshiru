@@ -2,9 +2,9 @@ name: build-check
 
 on:
   pull_request:
-    branches: [nx2, arena/79aa9b92-veshiru]
+    branches: [main]
   push:
-    branches: [nx2, arena/79aa9b92-veshiru]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -27,15 +27,22 @@ jobs:
     steps:
       - name: Skip builds for documentation-only pull requests
         id: files
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
+          # Fail open: a listing that cannot be read must never skip the build, so only a
+          # successfully fetched, non-empty list of purely documentation paths disables it.
           build=true
           if [ -n "$PR" ]; then
-            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
-            if ! printf '%s\n' "$files" | grep -qvE '^(docs/.*|.*\.md)$'; then
-              build=false
+            if files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
+                 --jq '.[].filename'); then
+              if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/.*|.*\.md)$'; then
+                build=false
+              fi
+            else
+              echo "::warning::Could not list the pull request's files; building anyway"
             fi
           fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
@@ -131,12 +138,39 @@ jobs:
       # The install script pins clang-cl by checksum, so it identifies the compiler without hashing
       # the binary on every call.
       - name: Build production and tests
+        id: build
         env:
           CCACHE_COMPILERCHECK: string:${{ hashFiles('tools/windows/install-llvm.ps1') }}
         run: |
           ccache --zero-stats
-          cmake --build build --parallel
+          set -o pipefail
+          cmake --build build --parallel 2>&1 | tee build-output.txt
           ccache --show-stats -v
+
+      # A Windows-only project cannot reproduce this build elsewhere, so the errors are surfaced
+      # as annotations (readable from the checks API and the pull request) and the captured
+      # compiler output is uploaded for download, since a job log of a clang-cl build is large and
+      # is not always retrievable.
+      - name: Summarise build errors
+        if: failure() && steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "### Build errors" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -nE " error: |fatal error|undefined reference|LNK[0-9]+|note: in instantiation" \
+            build-output.txt | head -60 | tee -a "$GITHUB_STEP_SUMMARY" | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build output
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-output-${{ github.sha }}
+          path: build-output.txt
+          retention-days: 3
+          if-no-files-found: warn
 
       # nxformat is linked statically: veshiru.exe must not need an nxformat.dll, which Windows
       # may refuse to load (Smart App Control, code integrity policies) or that may be missing.
@@ -151,7 +185,63 @@ jobs:
           fi
 
       - name: Run tests
-        run: ctest --test-dir build --output-on-failure --no-tests=error --parallel "$NUMBER_OF_PROCESSORS"
+        id: tests
+        shell: bash
+        # tee keeps the output around for the summary step; pipefail keeps ctest's status.
+        run: |
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            --parallel "$NUMBER_OF_PROCESSORS" 2>&1 | tee test-output.txt
+
+      # Surface which tests failed (and their assertion text) without downloading a full log.
+      - name: Summarise test failures
+        if: failure() && steps.tests.outcome == 'failure'
+        shell: bash
+        run: |
+          tools/ci/ctest-annotate.sh build test-output.txt rerun
+          exit 1
+
+      # compatibility_report fails with an empty Output section and exit code 1. A GUI-subsystem
+      # binary sends Qt's warnings to OutputDebugString, where ctest cannot see them, so re-run it
+      # with QT_ASSUME_STDERR_HAS_CONSOLE to force them onto stderr, and QT_DEBUG_PLUGINS to show
+      # which platform plugin it picks. The PE subsystem tells us whether that is the reason.
+      - name: Diagnose failing tests
+        if: failure() && steps.tests.outcome == 'failure'
+        shell: bash
+        run: |
+          log=build/Testing/Temporary/LastTest.log
+          [ -f "$log" ] || exit 0
+          exe=$(grep -m1 '^Command: ' "$log" | sed 's/^Command: //; s/"//g')
+          directory=$(grep -m1 '^Directory: ' "$log" | sed 's/^Directory: //')
+          [ -n "$exe" ] || exit 0
+          cd "${directory:-build}" 2>/dev/null || exit 0
+
+          echo "### Direct run of the failing test" >> "$GITHUB_STEP_SUMMARY"
+          subsystem=$(MSYS_NO_PATHCONV=1 dumpbin //headers "$exe" 2>/dev/null |
+            grep -i 'subsystem' | head -3 || true)
+          {
+            echo '```'
+            echo "exe: $exe"
+            echo "Subsystem: ${subsystem:-unknown}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Test subsystem::${subsystem:-unknown}"
+
+          set +e
+          out=$(QT_ASSUME_STDERR_HAS_CONSOLE=1 QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=offscreen \
+                "$exe" -v1 -platform offscreen 2>&1)
+          code=$?
+          set -e
+          {
+            echo "#### Forced-stderr run (exit code: $code)"
+            echo '```'
+            printf '%s\n' "$out" | tail -80
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Test exit code::exit code: $code"
+          printf '%s\n' "$out" | tail -25 | cut -c1-380 | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error title=Test output::$(printf '%s' "$line" | tr -d '\r')"
+          done
+          exit 0
 
       - name: Save dependencies and compiler objects
         if: always()

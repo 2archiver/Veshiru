@@ -1,8 +1,8 @@
 # User Handbook - Command Line
 
-There are two main applications, an SDL-based app (`eden-cli`) and a Qt based app (`eden`); both accept the same command line arguments.
+There are two main applications, an SDL-based app (`veshiru-cmd`) and a Qt based app (`veshiru`); both accept the same command line arguments.
 
-- `./eden <path>`: Running with a single argument and nothing else, will make the emulator look for the given file and load it, this behavior is similar to `eden-cli`; allows dragging and dropping games into the application.
+- `./veshiru <path>`: Running with a single argument and nothing else, will make the emulator look for the given file and load it, this behavior is similar to `veshiru-cmd`; allows dragging and dropping games into the application.
 - `--debug/-d`: Enter debug mode, allow gdb stub at port `1234`
 - `--config/-c`: Specify alternate configuration file.
 - `--fullscreen/-f`: Use fullscreen.
@@ -22,10 +22,10 @@ Only the Qt frontend supports the following arguments:
 - `-qlaunch`: Launch QLaunch.
 - `-hlaunch`: Launch homebrew launcher `nx-hbloader`.
     - Requires a copy of Atmosphere to be extracted onto `sdmc`.
-    - This is a shorthand for `<eden folder>/sdmc/atmosphere/hbl.nsp`.
+    - This is a shorthand for `<veshiru folder>/sdmc/atmosphere/hbl.nsp`.
 - `-setup`: Launch setup applet.
 
-`eden` (provided with `--room`), and `eden-room` supports the following options as well:
+`veshiru` (provided with `--room`), and `veshiru-room` supports the following options as well:
 
 - `-n/--room-name`: The name of the room.
 - `-d/--room-description`: The room description.

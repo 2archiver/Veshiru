@@ -65,7 +65,7 @@ These options control executables and build flavors.
 
 **Desktop only**:
 
-- `VESHIRU_CMD` (ON) Compile the SDL-based frontend (eden-cli)
+- `VESHIRU_CMD` (ON) Compile the SDL-based frontend (veshiru-cmd)
 - `VESHIRU_ROOM` (OFF) Compile dedicated room functionality into the main executable
 - `VESHIRU_ROOM_STANDALONE` (OFF) Compile a separate executable for room functionality
 - `VESHIRU_STATIC_ROOM` (OFF) Compile the room executable *only* as a static, portable executable

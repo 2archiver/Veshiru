@@ -3,7 +3,7 @@
 
 add_executable(veshiru_room_standalone veshiru_room_standalone.cpp)
 
-set_target_properties(veshiru_room_standalone PROPERTIES OUTPUT_NAME "eden-room")
+set_target_properties(veshiru_room_standalone PROPERTIES OUTPUT_NAME "veshiru-room")
 
 target_link_libraries(veshiru_room_standalone PRIVATE veshiru-room)
 

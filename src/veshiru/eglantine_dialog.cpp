@@ -134,7 +134,7 @@ bool HandleAlreadyLinked(const std::filesystem::path& veshiru_dir,
     } catch (const std::exception& e) {
         QMessageBox::critical(parent, QObject::tr("Failed to unlink"),
                               QObject::tr("Could not remove the link at:\n\t%1\n\n%2")
-                                  .arg(QString::fromStdString(linked.string()), e.what()));
+                                  .arg(QString::fromStdString(linked.string()), QString::fromUtf8(e.what())));
         return true;
     }
 
@@ -146,7 +146,7 @@ bool HandleAlreadyLinked(const std::filesystem::path& veshiru_dir,
                               QObject::tr("The link was removed, but the save data could not be "
                                           "copied back to:\n\t%1\n\n%2\n\nThe original data is "
                                           "still intact at:\n\t%3")
-                                  .arg(QString::fromStdString(linked.string()), e.what(),
+                                  .arg(QString::fromStdString(linked.string()), QString::fromUtf8(e.what()),
                                        QString::fromStdString(orig.string())));
         return true;
     }
@@ -335,7 +335,8 @@ void EglantineDialog::FromVeshiru() {
         LOG_ERROR(Common_Filesystem, "Save transfer Veshiru -> Eglantine failed: {}", e.what());
         QApplication::restoreOverrideCursor();
         QMessageBox::critical(this, tr("Failed to link save data"),
-                              tr("The save data could not be transferred.\n\n%1").arg(e.what()));
+                              tr("The save data could not be transferred.\n\n%1")
+                                  .arg(QString::fromUtf8(e.what())));
         return;
     }
     QApplication::restoreOverrideCursor();
@@ -343,7 +344,7 @@ void EglantineDialog::FromVeshiru() {
     QString message = tr("Save data has been linked.\nVeshiru and Eglantine now reference the "
                          "same save files.");
     if (!backup_note.isEmpty()) {
-        message += "\n\n" + backup_note;
+        message += QStringLiteral("\n\n") + backup_note;
     }
     QMessageBox::information(this, tr("Save data linked"), message);
     accept();
@@ -384,7 +385,8 @@ void EglantineDialog::FromEglantine() {
         LOG_ERROR(Common_Filesystem, "Save transfer Eglantine -> Veshiru failed: {}", e.what());
         QApplication::restoreOverrideCursor();
         QMessageBox::critical(this, tr("Failed to link save data"),
-                              tr("The save data could not be transferred.\n\n%1").arg(e.what()));
+                              tr("The save data could not be transferred.\n\n%1")
+                                  .arg(QString::fromUtf8(e.what())));
         return;
     }
     QApplication::restoreOverrideCursor();

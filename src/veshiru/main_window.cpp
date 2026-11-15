@@ -423,7 +423,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     default_theme_paths = QIcon::themeSearchPaths();
 
-    // The first launch after an interface update switches to Veshiru Dark and explains what moved.
+    // The first launch after an interface update switches to Veshiru Blue and explains what moved.
     const bool whats_new_pending =
         UISettings::values.whats_new_version.GetValue() < WhatsNewDialog::Version;
     if (whats_new_pending) {
@@ -5928,7 +5928,7 @@ static void AdjustLinkColor() {
     QPalette new_pal(qApp->palette());
 
     if (UISettings::values.theme == "veshiru")
-        new_pal.setColor(QPalette::Link, QColor(0xf4, 0x5a, 0x85));
+        new_pal.setColor(QPalette::Link, QColor(0x42, 0xd9, 0xf5));
     else if (UISettings::IsDarkTheme())
         new_pal.setColor(QPalette::Link, QColor(0, 190, 255, 255));
     else
@@ -5938,35 +5938,37 @@ static void AdjustLinkColor() {
         qApp->setPalette(new_pal);
 }
 
-// Veshiru Dark styles most widgets through its stylesheet; the palette covers what Qt draws
-// without one: item view text, disabled text, links and the native parts of dialogs.
+// Veshiru Deep Current styles most widgets through its stylesheet; the palette covers what Qt
+// draws without one: item view text, disabled text, links and the native parts of dialogs.
+// These values mirror the token sheet at the top of dist/qt_themes/veshiru/style.qss and must
+// stay in step with it, or native-drawn parts will not match the stylesheet surfaces.
 static QPalette VeshiruPalette() {
     QPalette palette;
-    const QColor window(0x17, 0x18, 0x1b);
-    const QColor surface(0x20, 0x21, 0x25);
-    const QColor text(0xec, 0xec, 0xef);
-    const QColor disabled(0x55, 0x57, 0x5d);
-    const QColor accent(0xf0, 0x38, 0x6b);
+    const QColor window(0x07, 0x11, 0x1f);
+    const QColor surface(0x0b, 0x1b, 0x2d);
+    const QColor text(0xea, 0xf4, 0xff);
+    const QColor disabled(0x41, 0x56, 0x6e);
+    const QColor accent(0x25, 0x8b, 0xff);
     palette.setColor(QPalette::Window, window);
     palette.setColor(QPalette::WindowText, text);
     palette.setColor(QPalette::Base, window);
-    palette.setColor(QPalette::AlternateBase, QColor(0x1b, 0x1c, 0x20));
-    palette.setColor(QPalette::ToolTipBase, QColor(0x23, 0x24, 0x29));
+    palette.setColor(QPalette::AlternateBase, QColor(0x0b, 0x1b, 0x2d));
+    palette.setColor(QPalette::ToolTipBase, QColor(0x10, 0x25, 0x3b));
     palette.setColor(QPalette::ToolTipText, text);
-    palette.setColor(QPalette::PlaceholderText, QColor(0x6f, 0x71, 0x78));
+    palette.setColor(QPalette::PlaceholderText, QColor(0x55, 0x70, 0x8c));
     palette.setColor(QPalette::Text, text);
     palette.setColor(QPalette::Button, surface);
     palette.setColor(QPalette::ButtonText, text);
     palette.setColor(QPalette::BrightText, Qt::white);
-    palette.setColor(QPalette::Light, QColor(0x34, 0x36, 0x3c));
-    palette.setColor(QPalette::Midlight, QColor(0x2a, 0x2c, 0x31));
-    palette.setColor(QPalette::Mid, QColor(0x23, 0x24, 0x29));
-    palette.setColor(QPalette::Dark, QColor(0x14, 0x15, 0x18));
+    palette.setColor(QPalette::Light, QColor(0x2a, 0x55, 0x80));
+    palette.setColor(QPalette::Midlight, QColor(0x1d, 0x3b, 0x58));
+    palette.setColor(QPalette::Mid, QColor(0x13, 0x2d, 0x46));
+    palette.setColor(QPalette::Dark, QColor(0x05, 0x0c, 0x16));
     palette.setColor(QPalette::Shadow, Qt::black);
     palette.setColor(QPalette::Highlight, accent);
     palette.setColor(QPalette::HighlightedText, Qt::white);
-    palette.setColor(QPalette::Link, QColor(0xf4, 0x5a, 0x85));
-    palette.setColor(QPalette::LinkVisited, QColor(0xd4, 0x2c, 0x5a));
+    palette.setColor(QPalette::Link, QColor(0x42, 0xd9, 0xf5));
+    palette.setColor(QPalette::LinkVisited, QColor(0x3b, 0xa7, 0xff));
     palette.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
     palette.setColor(QPalette::Disabled, QPalette::Text, disabled);
     palette.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
