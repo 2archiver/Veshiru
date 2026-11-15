@@ -200,8 +200,10 @@ jobs:
           tools/ci/ctest-annotate.sh build test-output.txt rerun
           exit 1
 
-      # A Qt test can die before its buffered output reaches ctest, which then only says
-      # "Failed". Run it directly to see its stdout/stderr and its raw exit code.
+      # compatibility_report fails with an empty Output section and exit code 1. A GUI-subsystem
+      # binary sends Qt's warnings to OutputDebugString, where ctest cannot see them, so re-run it
+      # with QT_ASSUME_STDERR_HAS_CONSOLE to force them onto stderr, and QT_DEBUG_PLUGINS to show
+      # which platform plugin it picks. The PE subsystem tells us whether that is the reason.
       - name: Diagnose failing tests
         if: failure() && steps.tests.outcome == 'failure'
         shell: bash
@@ -211,22 +213,32 @@ jobs:
           exe=$(grep -m1 '^Command: ' "$log" | sed 's/^Command: //; s/"//g')
           directory=$(grep -m1 '^Directory: ' "$log" | sed 's/^Directory: //')
           [ -n "$exe" ] || exit 0
+          cd "${directory:-build}" 2>/dev/null || exit 0
 
           echo "### Direct run of the failing test" >> "$GITHUB_STEP_SUMMARY"
-          cd "${directory:-build}" 2>/dev/null || exit 0
+          subsystem=$(MSYS_NO_PATHCONV=1 dumpbin //headers "$exe" 2>/dev/null |
+            grep -i 'subsystem' | head -3 || true)
+          {
+            echo '```'
+            echo "exe: $exe"
+            echo "Subsystem: ${subsystem:-unknown}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Test subsystem::${subsystem:-unknown}"
+
           set +e
-          out=$("$exe" -v2 2>&1)
+          out=$(QT_ASSUME_STDERR_HAS_CONSOLE=1 QT_DEBUG_PLUGINS=1 QT_QPA_PLATFORM=offscreen \
+                "$exe" -v1 -platform offscreen 2>&1)
           code=$?
           set -e
           {
+            echo "#### Forced-stderr run (exit code: $code)"
             echo '```'
-            echo "exit code: $code"
-            printf '%s\n' "$out" | tail -60
+            printf '%s\n' "$out" | tail -80
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-
           echo "::error title=Test exit code::exit code: $code"
-          printf '%s\n' "$out" | tail -25 | cut -c1-400 | while IFS= read -r line; do
+          printf '%s\n' "$out" | tail -25 | cut -c1-380 | while IFS= read -r line; do
             [ -n "$line" ] && echo "::error title=Test output::$(printf '%s' "$line" | tr -d '\r')"
           done
           exit 0
