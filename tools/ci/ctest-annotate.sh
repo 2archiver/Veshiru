@@ -97,8 +97,9 @@ emit() { printf '%s\n' "$1" >>"$GITHUB_STEP_SUMMARY"; }
   echo '```'
 } >>"$GITHUB_STEP_SUMMARY"
 
-# Annotations are capped at 10 per step, so spend them: names first, then details
-# round-robin across the failing tests rather than all from the first one.
+# Annotations are capped at 10 per step, so spend them: names first, then the digest, then a raw
+# tail of the output. The raw tail is unconditional on purpose: it is the only channel that keeps
+# working when the log and artifacts cannot be downloaded.
 BUDGET=10
 for t in "${FAILED[@]}"; do
   [ "$BUDGET" -le 0 ] && break
@@ -106,22 +107,20 @@ for t in "${FAILED[@]}"; do
   BUDGET=$((BUDGET - 1))
 done
 
-if [ -n "$DETAIL" ] && [ "$BUDGET" -gt 0 ]; then
-  # Round-robin over the tests named in DETAIL so a second failing test is not starved.
-  printf '%s\n' "$DETAIL" |
-    awk -F'\t' -v budget="$BUDGET" '
-      { key = $1; n = ++count[key]; line[key, n] = $2; if (n > max) max = n; order[key] = 1 }
-      END {
-        emitted = 0
-        for (round = 1; round <= max && emitted < budget; round++)
-          for (k in order) {
-            if (round in line_seen) {}
-            if ((k, round) in line && emitted < budget) {
-              printf "::error title=%s::%s\n", k, substr(line[k, round], 1, 380)
-              emitted++
-            }
-          }
-      }'
+annotate_block() {
+  # $1 title, $2 body. Multi-line annotation messages are allowed; keep the body bounded.
+  local title=$1 body=$2
+  body=$(printf '%s\n' "$body" | cut -c1-3000)
+  printf '::error title=%s::%s\n' "$title" "${body//$'\n'/%0A}"
+}
+
+if [ -n "$DETAIL" ] && [ "$BUDGET" -gt 1 ]; then
+  annotate_block "Test details" "$(printf '%s\n' "$DETAIL" | sed 's/\t/ -- /' | head -15)"
+  BUDGET=$((BUDGET - 1))
 fi
 
-echo "Summarised ${#FAILED[@]} failing test(s); detail lines: $(printf '%s\n' "$DETAIL" | grep -c . || true)"
+if [ "$BUDGET" -gt 0 ]; then
+  annotate_block "Test output (tail)" "$(tail -25 "$OUT_FILE")"
+fi
+
+echo "Summarised ${#FAILED[@]} failing test(s); detail lines: $(printf '%s' "$DETAIL" | grep -c . || true)"
