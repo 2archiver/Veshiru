@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Summarise a failed ctest run.
 #
-# The Windows runner's raw log is not always reachable from outside (job log download and
-# artifact download can both fail), but check-run annotations are. So publish the useful
-# part of the failure here: one ::error:: per failing test plus the assertion text, and the
-# same content in the job step summary.
+# The Windows runner's raw log cannot be downloaded from outside, and neither can its
+# artifacts, but check-run annotations are readable. So publish the useful part of the
+# failure here: one ::error:: per failing test plus the assertion text, and the whole
+# picture in the job step summary.
 #
 # Usage: tools/ci/ctest-annotate.sh <build-dir> <output-file>
 set -u -o pipefail
@@ -17,65 +17,64 @@ if [ ! -s "$OUT_FILE" ]; then
   exit 0
 fi
 
-# ctest prints "The following tests FAILED:" then lines like "  3 - filename (Failed)".
+# ctest prints "The following tests FAILED:" then "  3 - name (Failed)".
 mapfile -t FAILED < <(
   sed -n '/The following tests FAILED:/,$p' "$OUT_FILE" |
     grep -oE '^[[:space:]]*[0-9]+ - .*' |
-    sed -E 's/^[[:space:]]*[0-9]+ - //; s/[[:space:]]+\((Failed|Timeout|SEGFAULT|Subprocess aborted|Exception)\)$//'
+    sed -E 's/^[[:space:]]*[0-9]+ - //; s/[[:space:]]+\((Failed|Timeout|SEGFAULT|Subprocess aborted|Exception|Not Run)\)$//'
 )
+
+# Assertion / exception lines. Catch2 and QTest both use these shapes.
+DETAIL_RE=': FAILED:|with expansion|REQUIRE\(|CHECK\(|CHECK_FALSE\(|INFO\(|ERROR:|Assertion|signal [0-9]|terminate called|uncaught exception|no tests were found|Test #[0-9]+:.*\*\*\*'
+
+# Per-test detail lines, keyed by the "Start <n>: <name>" markers ctest emits.
+parse_detail() {
+  awk -v re="$DETAIL_RE" '
+    /^[[:space:]]*[0-9]+\/[0-9]+ Test[[:space:]]+#[0-9]+:/ { next }
+    /^[[:space:]]*[0-9]+:[[:space:]]/ { next }
+    /^[[:space:]]*Start[[:space:]]+[0-9]+: / {
+      name = $0
+      sub(/^[[:space:]]*Start[[:space:]]+[0-9]+:[[:space:]]*/, "", name)
+      current = name
+      next
+    }
+    # "with expansion:" is only useful together with the line that follows it.
+    carry == 1 { print (current == "" ? "unknown" : current) "\t" $0; carry = 0; next }
+    /with expansion:/ { carry = 1; print (current == "" ? "unknown" : current) "\t" $0; next }
+    $0 ~ re { print (current == "" ? "unknown" : current) "\t" $0 }
+  ' "$OUT_FILE"
+}
+
+DETAIL=$(parse_detail | head -200 || true)
 
 emit() { printf '%s\n' "$1" >>"$GITHUB_STEP_SUMMARY"; }
 
 {
   echo "### Test failures"
+  echo ""
   if [ "${#FAILED[@]}" -gt 0 ]; then
-    echo ""
     echo "**${#FAILED[@]} failing test(s):**"
     echo ""
     for t in "${FAILED[@]}"; do echo "- \`$t\`"; done
-    echo ""
   else
-    echo ""
-    echo "ctest did not report a failing-test list; see output below."
+    echo "ctest did not report a failing-test list; see the output below."
   fi
-} >>"$GITHUB_STEP_SUMMARY"
+  echo ""
 
-if [ "${#FAILED[@]}" -gt 0 ]; then
-  for t in "${FAILED[@]}"; do
-    echo "::error title=Test failed::${t}"
-  done
-fi
-
-# Include the assertion / exception lines. These are what a human needs first.
-DETAIL=$(grep -E 'REQUIRE|CHECK|error:|Assertion|signal|exception|terminate called|what\(\)' \
-  "$OUT_FILE" | head -60 || true)
-if [ -n "$DETAIL" ]; then
-  {
+  if [ -n "$DETAIL" ]; then
     echo "#### Assertion and error lines"
     echo ""
     echo '```'
-    printf '%s\n' "$DETAIL"
+    printf '%s\n' "$DETAIL" | sed 's/\t/ -- /' 
     echo '```'
-  } >>"$GITHUB_STEP_SUMMARY"
-  # Annotations are capped (10 per step), so only the first few go on the check run.
-  printf '%s\n' "$DETAIL" |
-    head -8 |
-    while IFS= read -r line; do
-      echo "::error title=Test detail::$(printf '%s' "$line" | cut -c1-400)"
-    done
-fi
+    echo ""
+  fi
 
-# Then a bounded tail of the full output for context.
-{
-  echo ""
   echo "#### Captured output (tail)"
   echo ""
   echo '```'
-  tail -100 "$OUT_FILE"
+  tail -150 "$OUT_FILE"
   echo '```'
-} >>"$GITHUB_STEP_SUMMARY"
-
-{
   echo ""
   echo "#### Test inventory"
   echo ""
@@ -84,4 +83,31 @@ fi
   echo '```'
 } >>"$GITHUB_STEP_SUMMARY"
 
-echo "Summarised ${#FAILED[@]} failing test(s) into the job summary."
+# Annotations are capped at 10 per step, so spend them: names first, then details
+# round-robin across the failing tests rather than all from the first one.
+BUDGET=10
+for t in "${FAILED[@]}"; do
+  [ "$BUDGET" -le 0 ] && break
+  echo "::error title=Failing test::${t}"
+  BUDGET=$((BUDGET - 1))
+done
+
+if [ -n "$DETAIL" ] && [ "$BUDGET" -gt 0 ]; then
+  # Round-robin over the tests named in DETAIL so a second failing test is not starved.
+  printf '%s\n' "$DETAIL" |
+    awk -F'\t' -v budget="$BUDGET" '
+      { key = $1; n = ++count[key]; line[key, n] = $2; if (n > max) max = n; order[key] = 1 }
+      END {
+        emitted = 0
+        for (round = 1; round <= max && emitted < budget; round++)
+          for (k in order) {
+            if (round in line_seen) {}
+            if ((k, round) in line && emitted < budget) {
+              printf "::error title=%s::%s\n", k, substr(line[k, round], 1, 380)
+              emitted++
+            }
+          }
+      }'
+fi
+
+echo "Summarised ${#FAILED[@]} failing test(s); detail lines: $(printf '%s\n' "$DETAIL" | grep -c . || true)"

@@ -186,8 +186,10 @@ TEST_CASE("Install replaces files, adds new ones and keeps the old ones as a bac
     CHECK(Read(backup / "Qt6Core.dll") == "old qt");
     CHECK_FALSE(fs::exists(backup / "user"));
     CHECK(Files(install / "user") == std::set<std::string>{"config/qt-config.ini"});
+    // The manifest is written from a std::set<fs::path>, so its order is that of path::compare:
+    // ordinal, hence uppercase before lowercase, and 'plugins/...' before 'veshiru...'.
     CHECK(Read(install / "install-manifest.txt") ==
-          "Qt6Core.dll\nveshiru.exe\nplugins/b.dll\n");
+          "Qt6Core.dll\nplugins/b.dll\nveshiru.exe\n");
     CHECK_FALSE(fs::exists(install / ".update-backup.tmp"));
 }
 
