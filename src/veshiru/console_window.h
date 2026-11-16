@@ -37,8 +37,8 @@ private:
     void Clear();
     void Copy() const;
     void Save();
-    void ExportDiagnostics();
     void UpdateStatus();
+    [[nodiscard]] bool HasActiveFilter() const;
     [[nodiscard]] bool PassesFilter(const Common::Log::ConsoleEntry& entry) const;
     void AppendEntries(const std::vector<Common::Log::ConsoleEntry>& entries);
     [[nodiscard]] QString FormatPlain(const Common::Log::ConsoleEntry& entry) const;

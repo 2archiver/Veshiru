@@ -15,5 +15,6 @@ std::filesystem::path RemapImportedPath(const std::filesystem::path& value,
 void RemapImportedConfig(const std::filesystem::path& config_directory,
                          const std::filesystem::path& source,
                          const std::filesystem::path& destination);
+void RemapImportedShaderCache(const std::filesystem::path& shader_directory);
 
 } // namespace FrontendCommon

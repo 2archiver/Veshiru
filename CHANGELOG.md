@@ -6,6 +6,64 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-16
+
+### Frame Generation & Vulkan Rendering
+
+- **Open-Frame-Gen (`Frame Generation > Open-Frame-Gen (Neural Optical Flow)`)**: added a native
+  Vulkan compute implementation of the MIT-licensed `Open-Frame-Gen` `NanoModel` optical-flow
+  U-Net alongside LS1 (`Lossless Scaling`). Runs six precompiled SPIR-V compute passes with
+  embedded BatchNorm-folded FP16 weights (~88K parameters), Squeeze-and-Excitation channel
+  attention, bidirectional occlusion-masked warping and RCAS sharpening — no Python, CUDA or
+  TensorRT dependencies required.
+- **Native asynchronous shader/pipeline compilation & Switch 2 GPU compatibility**: integrated
+  upstream Lichii (`#948`–`#1907`) and Eglantine (`65f5650aa9`, `09cc3d1dc9`) Vulkan, Maxwell/Ampere
+  shader lowering, `SET_SCISSOR` stride, `RenderTargetState` layout synchronization, `R16G16B16A16_SFLOAT`
+  HDR swapchain preservation (Mario Kart World), staging-buffer bounded trimming, sparse/null image
+  safety and `ShaderCacheV2` pipeline remapping while preserving Veshiru's 3-stage front/back GPU
+  thread split.
+
+### High-Resolution Game List Artwork
+
+- **Persistent HD artwork sidecar cache**: fetched game icons are now stored lossless at full
+  resolution (up to 512x512 PNG) under `%APPDATA%\veshiru\cache\game_list\artwork\<title_id>.png`
+  instead of only writing 256x256 JPEG overrides, and are rendered crisp on Windows HiDPI displays
+  via `devicePixelRatioF()`.
+- **Accurate Switch 1 & Switch 2 artwork lookup**: `IconSearch` now resolves Nintendo CDN icons by
+  16-hex Title ID first before falling back to an edition-aware scored title matcher (`Nintendo Switch 2 Edition`,
+  Deluxe/Demo/Region disambiguation), silently auto-fetches missing icons in the background, and
+  adds **Refresh Game Artwork** to the game-list context menu.
+- **Full-resolution NUP container icons**: `AppLoader_NUP` now returns raw PNG/JPEG container icon
+  bytes before falling back to a 256x256 downscale.
+
+### Performance, NUP Streaming & Host Memory
+
+- **Balanced multi-game Windows PGO profile (`veshiru-windows.profdata`)**: replaced the single-game
+  Ocarina of Time profile with a normalized multi-game LLVM 22 `clang-cl` profile spanning Switch 1
+  and Switch 2 titles (`77,537` symbols, `23,103` hot functions), added `-DVESHIRU_PGO_GENERATE=<dir>`
+  in CMake, and added `tools/windows/merge-pgo-profiles.ps1` for weighted multi-session retraining.
+- **NUP streaming & 24+ GiB host RAM tuning**: increased NUP zstd decode chunking from 64 KiB to
+  512 KiB, auto-scaled the default host-RAM NUP decompression cache to 1.5 GiB on systems with
+  `>= 24 GiB` RAM (overridable via `VESHIRU_NUP_CACHE_MIB`), and deferred guest physical-memory
+  zero-page sweeps during active gameplay when host RAM is abundant.
+
+### Security, Updater, Migration & Diagnostics
+
+- **Verified updates & build-tag tracking**: auto-detected `vX.Y.Z` tags in `GenerateSCMRev.cmake`
+  when `VESHIRU_BUILD_TAG` is unset, passed `release_tag` into `VESHIRU_BUILD_TAG` on tagged CI
+  releases, allowed `build-N` installations to upgrade cleanly to newer `vX.Y.Z` stable releases,
+  enforced mandatory SHA-256 verification against `SHA256SUMS.txt` before extracting updates, and
+  excluded `veshiru-updater.exe` from PGO runtime instrumentation.
+- **Save transfer & profile migration safety**: guarded `MainWindow` configuration/migration/NUP
+  actions while emulation is running, switched `ReadSymlinkTarget` on Windows to native
+  `FSCTL_GET_REPARSE_POINT`, verified byte-level SHA-256 digests during **Link to Eglantine** save
+  transfers (staging unlinks before removing junctions), and remapped imported `ShaderCacheV2`
+  archives (`pipeline_v2.bin` / `<title_id>.vkch`) across profile migrations.
+- **Console & log reliability**: added case-insensitive Windows/POSIX path and credential token
+  redaction, periodic 1-second dirty flushing + crash-path flushing for `veshiru_log.txt`, `.log`
+  export filter defaults in **Tools > Console**, startup version/GPU/VRAM logging, NCZ block-header
+  decompression bounds checks, and pinned SHA-256 verification across CI tool/dependency downloads.
+
 ## [1.2.0] - 2026-11-16
 
 ### New blue Veshiru interface

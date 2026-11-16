@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <filesystem>
+#include <set>
 #include <utility>
 
 #include <QAbstractItemView>
@@ -25,8 +27,10 @@
 #include <QVariantAnimation>
 #include <qlayoutitem.h>
 
+#include "common/artwork_cache.h"
 #include "common/common_types.h"
 #include "common/fs/fs_util.h"
+#include "common/fs/path_util.h"
 #include "core/core.h"
 #include "core/file_sys/nup_writer.h"
 #ifdef VESHIRU_NX_TOOLS
@@ -47,6 +51,7 @@
 #include "veshiru/main_window.h"
 #include "veshiru/shader_warm_dialog.h"
 #include "veshiru/util/controller_navigation.h"
+#include "veshiru/util/icon_search.h"
 #include "veshiru/util/util.h"
 
 GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvider* provider_,
@@ -364,6 +369,8 @@ void GameList::OnPopulatingCompleted(const QStringList& watch_list) {
         OnTextChanged(search_field->filterText());
     }
 
+    AutoFetchMissingArtwork();
+
     emit PopulatingCompleted();
 }
 
@@ -564,6 +571,11 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
         shortcut_menu->addAction(tr("Add to Applications Menu"));
 #endif
     context_menu.addSeparator();
+    QAction* refresh_artwork = nullptr;
+    if (program_id != 0 && (is_nup_archive || is_loose_dump ||
+                            !Common::ArtworkCache::ReadCachedArtwork(program_id).empty())) {
+        refresh_artwork = context_menu.addAction(tr("Refresh Game Artwork"));
+    }
     QAction* edit_nup = nullptr;
     if (is_nup_archive) {
         edit_nup = context_menu.addAction(tr("Edit NUP Metadata..."));
@@ -576,7 +588,7 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
                 [this, program_id] { emit ReportCompatibilityRequested(program_id); });
     }
 
-    const std::array<std::pair<QAction*, const char*>, 20> icons{{
+    const std::array<std::pair<QAction*, const char*>, 21> icons{{
         {favorite, "star"},
         {start_game, "play"},
         {start_game_global, "play"},
@@ -595,6 +607,7 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
         {convert_nup, "archive"},
         {convert_nx, "archive"},
         {edit_nx_metadata, "edit"},
+        {refresh_artwork, "image"},
         {edit_nup, "edit"},
         {properties, "sliders"},
     }};
@@ -637,6 +650,10 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     if (delete_shader_warm) {
         connect(delete_shader_warm, &QAction::triggered, this,
                 [this, program_id]() { emit DeleteShaderWarmRequested(program_id); });
+    }
+    if (refresh_artwork) {
+        connect(refresh_artwork, &QAction::triggered, this,
+                [this, program_id, path]() { RefreshGameArtwork(program_id, path); });
     }
     connect(remove_all_content, &QAction::triggered, this, [this, program_id]() {
         emit RemoveInstalledEntryRequested(program_id, QtCommon::Game::InstalledEntryType::Game);
@@ -799,6 +816,139 @@ void GameList::AddFavoritesPopup(QMenu& context_menu) {
             0, item_model->invisibleRootItem()->child(0)->rowCount());
         tree_view->setRowHidden(0, item_model->invisibleRootItem()->index(), true);
     });
+}
+
+void GameList::ApplyArtworkToModel(u64 program_id, const QByteArray& png,
+                                   const QString& resolved_title) {
+    const u64 target_base = Common::ArtworkCache::BaseProgramId(program_id);
+    if (target_base == 0 || png.isEmpty()) {
+        return;
+    }
+    // Also remove any stale pre-rendered game_list JPEG cache for this Title ID so future scans
+    // use the fresh sidecar HD PNG.
+    std::error_code ec;
+    std::filesystem::remove(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) / "game_list" /
+                                fmt::format("{:016X}.jpeg", target_base),
+                            ec);
+
+    const auto visit_parent = [&](QStandardItem* parent) {
+        if (parent == nullptr) {
+            return;
+        }
+        for (int r = 0; r < parent->rowCount(); ++r) {
+            auto* child = parent->child(r, 0);
+            if (child == nullptr || child->type() != static_cast<int>(GameListItemType::Game)) {
+                continue;
+            }
+            const u64 row_tid = Common::ArtworkCache::BaseProgramId(
+                child->data(GameListItemPath::ProgramIdRole).toULongLong());
+            if (row_tid == target_base) {
+                static_cast<GameListItemPath*>(child)->ApplyArtwork(png, resolved_title);
+            }
+        }
+    };
+    auto* root = item_model->invisibleRootItem();
+    visit_parent(root);
+    for (int i = 0; i < root->rowCount(); ++i) {
+        visit_parent(root->child(i, 0));
+    }
+    if (m_currentView && m_currentView->viewport()) {
+        m_currentView->viewport()->update();
+    }
+}
+
+void GameList::AutoFetchMissingArtwork() {
+    std::set<u64> queued;
+    const auto scan_parent = [&](QStandardItem* parent) {
+        if (parent == nullptr) {
+            return;
+        }
+        for (int r = 0; r < parent->rowCount(); ++r) {
+            auto* child = parent->child(r, 0);
+            if (child == nullptr || child->type() != static_cast<int>(GameListItemType::Game)) {
+                continue;
+            }
+            if (child->data(GameListItemPath::HasIconRole).toBool()) {
+                continue;
+            }
+            const u64 tid = Common::ArtworkCache::BaseProgramId(
+                child->data(GameListItemPath::ProgramIdRole).toULongLong());
+            if (tid == 0 || queued.contains(tid)) {
+                continue;
+            }
+            // Only auto-fetch for NUP containers or loose dumps missing embedded icons; never
+            // overwrite valid embedded icons or modify any .nup binary.
+            const QString file_type = child->data(GameListItemPath::FileTypeRole).toString();
+            const QString full_path = child->data(GameListItemPath::FullPathRole).toString();
+            const bool eligible =
+                file_type.compare(QStringLiteral("NUP"), Qt::CaseInsensitive) == 0 ||
+                QFileInfo(full_path).fileName() == QStringLiteral("main");
+            if (!eligible || !Common::ArtworkCache::ShouldAutoFetchArtwork(tid)) {
+                continue;
+            }
+            queued.insert(tid);
+            if (queued.size() > 8) {
+                return;
+            }
+            QString query_title = child->data(GameListItemPath::TitleRole).toString();
+            if (query_title.isEmpty() || query_title == QStringLiteral(" ")) {
+                query_title = QFileInfo(full_path).completeBaseName();
+            }
+            IconSearch::FetchSilentAsync(
+                tid, query_title, this,
+                [this, tid](QByteArray png, QString resolved_title) {
+                    ApplyArtworkToModel(tid, png, resolved_title);
+                });
+        }
+    };
+    auto* root = item_model->invisibleRootItem();
+    scan_parent(root);
+    for (int i = 0; i < root->rowCount(); ++i) {
+        scan_parent(root->child(i, 0));
+    }
+}
+
+void GameList::RefreshGameArtwork(u64 program_id, const std::string& path) {
+    if (program_id == 0) {
+        return;
+    }
+    if (!manual_icon_search) {
+        manual_icon_search = new IconSearch(this);
+        connect(manual_icon_search, &IconSearch::IconSelected, this,
+                [this](const QByteArray& png, const QString& resolved_title) {
+                    if (manual_icon_program_id != 0) {
+                        ApplyArtworkToModel(manual_icon_program_id, png, resolved_title);
+                    }
+                });
+    }
+    if (manual_icon_search->IsRunning()) {
+        return;
+    }
+    manual_icon_program_id = program_id;
+
+    // Look up the current display title from the model if non-empty; otherwise clean filename.
+    QString query;
+    const u64 target_base = Common::ArtworkCache::BaseProgramId(program_id);
+    auto* root = item_model->invisibleRootItem();
+    for (int i = 0; i < root->rowCount() && query.isEmpty(); ++i) {
+        auto* parent = root->child(i, 0);
+        if (!parent) {
+            continue;
+        }
+        for (int r = 0; r < parent->rowCount(); ++r) {
+            auto* child = parent->child(r, 0);
+            if (child && child->type() == static_cast<int>(GameListItemType::Game) &&
+                Common::ArtworkCache::BaseProgramId(
+                    child->data(GameListItemPath::ProgramIdRole).toULongLong()) == target_base) {
+                query = child->data(GameListItemPath::TitleRole).toString().trimmed();
+                break;
+            }
+        }
+    }
+    if (query.isEmpty()) {
+        query = QFileInfo(QString::fromStdString(path)).completeBaseName();
+    }
+    manual_icon_search->Start(query, program_id);
 }
 
 void GameList::changeEvent(QEvent* event) {

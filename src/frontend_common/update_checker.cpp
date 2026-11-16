@@ -93,6 +93,23 @@ std::optional<Common::Net::Release> SelectUpdate(std::span<const Common::Net::Re
                 selected = &release;
             }
         }
+        if (selected) {
+            return *selected;
+        }
+        // Bridge legacy build-N installations onto non-prerelease stable vX.Y.Z releases once no
+        // newer build-N pre-release exists.
+        std::array<u64, 3> newest_stable{};
+        for (const auto& release : releases) {
+            if (release.prerelease) {
+                continue;
+            }
+            const auto version = ParseVersionTag(release.tag);
+            if (version && (!selected || IsNewerStable(*version, newest_stable)) &&
+                !release.GetPlatformAssets(platform, package).empty()) {
+                newest_stable = *version;
+                selected = &release;
+            }
+        }
         return selected ? std::make_optional(*selected) : std::nullopt;
     }
 

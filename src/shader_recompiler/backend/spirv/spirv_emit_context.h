@@ -8,6 +8,8 @@
 #include <array>
 #include <bit>
 #include <optional>
+#include <unordered_map>
+#include <vector>
 
 #include <sirit/sirit.h>
 #include "common/container/unordered_map.h"
@@ -354,18 +356,26 @@ public:
 
     Id write_storage_cas_loop_func{};
 
-    Id load_global_func_u32{};
-    Id load_global_func_u32x2{};
-    Id load_global_func_u32x4{};
-    Id write_global_func_u32{};
-    Id write_global_func_u32x2{};
-    Id write_global_func_u32x4{};
     // 32-bit global atomics on untracked addresses, routed to the storage buffer holding them.
     enum class GlobalAtomic : size_t {
         IAdd, SMin, UMin, SMax, UMax, Inc, Dec, And, Or, Xor, Exchange, AddF32, Count,
     };
-    std::array<Id, static_cast<size_t>(GlobalAtomic::Count)> global_atomic_funcs{};
-    Id atomic_cas_global_func_u32{};
+    /// The functions that route global memory accesses among some of the bound storage buffers
+    struct GlobalMemoryFunctions {
+        Id load_u32{};
+        Id load_u32x2{};
+        Id load_u32x4{};
+        Id write_u32{};
+        Id write_u32x2{};
+        Id write_u32x4{};
+        std::array<Id, static_cast<size_t>(GlobalAtomic::Count)> atomics{};
+        Id compare_exchange_u32{};
+    };
+    /// The first routes among every bound storage buffer, the others among
+    /// IR::Program::global_memory_routes
+    std::vector<GlobalMemoryFunctions> global_memory_functions;
+    std::unordered_map<const IR::Inst*, u32> global_memory_route;
+    [[nodiscard]] const GlobalMemoryFunctions& GlobalMemoryFunctionsOf(const IR::Inst& inst) const;
 
     bool need_input_position_indirect{};
     Id input_position{};
@@ -391,6 +401,9 @@ public:
     /// memory from this word (A, B and C/D tiles of 16x16 fp16, 128 words each).
     std::optional<u32> tensor_scratch_word;
     Id tensor_subgroup_id{};
+    /// The software matrix functions round to fp16 with a native conversion, which needs the
+    /// entry point's fp16 round-to-nearest-even and denorm preserve modes.
+    bool native_half_rounding{};
     std::vector<Id> interfaces;
     std::vector<std::pair<u32, spv::Op>> opcode_rewrites;
 

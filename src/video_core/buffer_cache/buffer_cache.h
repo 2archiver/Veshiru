@@ -22,6 +22,7 @@
 #include "common/range_sets.inc"
 #include "video_core/buffer_cache/buffer_cache_base.h"
 #include "video_core/buffer_cache/multi_range_refresh.h"
+#include "video_core/buffer_cache/storage_buffer_size.h"
 #include "video_core/buffer_cache/uniform_stream_reuse.h"
 #include "video_core/gpu_split.h"
 #include "video_core/guest_memory.h"
@@ -1404,7 +1405,6 @@ void BufferCache<P>::NoteLandedBytes(ReadCheck& check, const Common::RangeSet<DA
 
 template <class P>
 void BufferCache<P>::ClearDownload(DAddr device_addr, u64 size) {
-    Nx2ForgetKeptWords(device_addr, size);
     if (const std::optional<u64> waited = FinishReadDownloads(device_addr, size)) {
         VideoCore::AsyncReadback::CountClearLanding(*waited);
     }
@@ -1493,9 +1493,11 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     for (const auto& pair : tmp_intervals) {
         gpu_modified_ranges.Add(pair.first, pair.second);
         NoteReadBackWrite(pair.first, pair.second);
-        if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
-            Nx2NoteListWrite(buffer_b, pair.first, pair.second);
-        }
+    }
+    // The copy rewrites all of the destination, not only the bytes that came from GPU-written
+    // source data: a command list page's copy taken before it no longer holds the page.
+    if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+        Nx2NoteListWrite(buffer_b, *cpu_dest_address, amount);
     }
     const auto& copy = copies[0];
     src_buffer.MarkUsage(copy.src_offset, copy.size);
@@ -1533,9 +1535,15 @@ bool BufferCache<P>::DMAClear(GPUVAddr dst_address, u64 amount, u32 value) {
 
     const BufferId buffer = FindBuffer(*cpu_dst_address, static_cast<u32>(size), false);
     Buffer& dest_buffer = slot_buffers[buffer];
+    // As DMACopy: the CPU's bytes on these pages reach the buffer first. A command list page is
+    // copied from the buffer whole after the clear (Nx2CopyListPages).
+    SynchronizeBuffer(dest_buffer, *cpu_dst_address, static_cast<u32>(size));
     const u32 offset = dest_buffer.Offset(*cpu_dst_address);
     runtime.ClearBuffer(dest_buffer, offset, size, value);
     dest_buffer.MarkUsage(offset, size);
+    if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+        Nx2NoteListWrite(buffer, *cpu_dst_address, size);
+    }
     return true;
 }
 
@@ -1858,10 +1866,13 @@ bool BufferCache<P>::BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, 
         }
         ssbo_addr = holder + indirect_offset;
     }
+    // NVN graphics descriptors carry a size; bare native pointers and tables do not.
+    const bool native_pointer =
+        (maxwell3d->GetNativeMacroEngine().native_turing &&
+         !IsNvnGraphicsStorageDescriptor(stage, cbuf_index, cbuf_offset, indirect_offset)) ||
+        indirect_offset != ~0U;
     channel_state->storage_buffers[stage][ssbo_index] =
-        StorageBufferBinding(ssbo_addr, cbuf_index, is_written,
-                             maxwell3d->GetNativeMacroEngine().native_turing ||
-                                 indirect_offset != ~0U,
+        StorageBufferBinding(ssbo_addr, cbuf_index, is_written, native_pointer,
                              indirect_offset != ~0U);
     if (indirect_offset != ~0U) {
         TraceTablePointer(false, stage, ssbo_index, cbuf_index, cbuf_offset, indirect_offset, holder,
@@ -1978,7 +1989,7 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
             const std::array<u32, 3> block{qmd.block_dim_x.Value(), qmd.block_dim_y.Value(),
                                            qmd.block_dim_z.Value()};
             std::optional<std::array<u32, 3>> grid;
-            if (!kepler_compute->GetIndirectComputeAddress() && !kepler_compute->GetKeptGrid()) {
+            if (!kepler_compute->GetIndirectComputeAddress()) {
                 grid = std::array<u32, 3>{qmd.grid_dim_x.Value(), qmd.grid_dim_y.Value(),
                                           qmd.grid_dim_z.Value()};
             }
@@ -3270,7 +3281,6 @@ void BufferCache<P>::UpdateComputeTextureBuffers() {
 
 template <class P>
 void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u32 size, bool needs_sync) {
-    Nx2ForgetKeptWords(device_addr, size);
     if constexpr (!IS_OPENGL) {
         if (needs_sync) {
             Buffer& buffer = slot_buffers[buffer_id];
@@ -3511,7 +3521,6 @@ void BufferCache<P>::Nx2FlushListPages(std::span<const DAddr> pages) {
 
 template <class P>
 void BufferCache<P>::Nx2NoteListHostWrite(DAddr device_addr, u64 size) {
-    Nx2ForgetKeptWords(device_addr, size);
     if constexpr (!IS_OPENGL) {
         if (size == 0 || !Tegra::g_nx2_has_command_list_pages.load(std::memory_order_relaxed)) {
             return;

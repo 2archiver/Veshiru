@@ -76,6 +76,10 @@
     },
     "ffmpeg-ci": {
         "ci": true,
+        "hashes": {
+            "linux-amd64": "ed75db658d749e71923e8e4476eced3533f5291cdfe010c05a10cf42f877012b",
+            "windows-amd64": "12d23634e609137e134cfd24148c9e27ed8a4104010f010b4cd92b68b1000367"
+        },
         "name": "ffmpeg",
         "package": "FFmpeg",
         "repo": "crueter-ci/FFmpeg",
@@ -83,6 +87,10 @@
     },
     "ffmpeg-ci-av1": {
         "ci": true,
+        "hashes": {
+            "linux-amd64": "d30fdc4263026d0e061fd388011112fb8a48b1ccdda8965b83739d59e9034093",
+            "windows-amd64": "64ae38b5b12ffdde1f76724f5d0ab591399d45d1744edd7e87a1acd6a33ac33b"
+        },
         "name": "ffmpeg",
         "package": "FFmpeg",
         "repo": "Takoroka/ffmpeg-av1",
@@ -90,6 +98,9 @@
     },
     "ffmpeg-ci-av1-mingw": {
         "ci": true,
+        "hashes": {
+            "mingw-amd64": "cae874cc37554b711356a0320c9dd38ce8640e66d092f12bbf44dab3f353a313"
+        },
         "name": "ffmpeg",
         "package": "FFmpeg",
         "repo": "Djihads80/Eglantine",
@@ -201,6 +212,10 @@
     },
     "openssl-ci": {
         "ci": true,
+        "hashes": {
+            "linux-amd64": "50735fdb37b9c9bd01aea76ee3654aee0708baac0e8a9e75e1ad039216d383fe",
+            "windows-amd64": "91b20d47a27068143aa480771d7a63d8e373b75122fbce0acdb5ff33399cd431"
+        },
         "name": "openssl",
         "package": "OpenSSL",
         "repo": "crueter-ci/OpenSSL",
@@ -267,6 +282,10 @@
     },
     "sdl3-ci": {
         "ci": true,
+        "hashes": {
+            "linux-amd64": "afbf561fad1fa8fe57e8197960820d7b303b0ebf30ac6cc5013826a1d21bae2f",
+            "windows-amd64": "5fda52c5e6cff7850331b49b75e79f1fbacaef4f051065db1e19638adb021026"
+        },
         "name": "SDL3",
         "package": "SDL3",
         "repo": "crueter-ci/SDL3",
@@ -290,6 +309,10 @@
     },
     "sirit-ci": {
         "ci": true,
+        "hashes": {
+            "linux-amd64": "09ce5a79cedfaccbd75a12a2952ea702091d44518e92456f328859442b80e35b",
+            "windows-amd64": "be5da3abf90689b6642d760fcd3a75f0776af848d491fc5df6ea1d95ca318f18"
+        },
         "name": "sirit",
         "package": "sirit",
         "repo": "eden-emulator/sirit",

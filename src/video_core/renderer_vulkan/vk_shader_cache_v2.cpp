@@ -57,6 +57,31 @@ LegacyCacheMigration MigrateLegacyPipelineCache(const std::filesystem::path& dir
     if (std::filesystem::exists(log, error) || error) {
         return result;
     }
+    // Adopt an imported v2 shader cache from Lichii or Eglantine when Veshiru's v2 cache does not
+    // exist yet (covers Copy, Move, and Link profile migrations).
+    for (const std::string_view legacy_name : {"lichii-cache.v2.bin", "eglantine-cache.v2.bin"}) {
+        const auto legacy_log = directory / legacy_name;
+        if (std::filesystem::is_regular_file(legacy_log, error) && !error) {
+            std::filesystem::copy_file(legacy_log, log,
+                                       std::filesystem::copy_options::skip_existing, error);
+            if (!error) {
+                for (const std::string_view legacy_driver :
+                     {"lichii-cache.v2.driver.bin", "eglantine-cache.v2.driver.bin"}) {
+                    const auto src_driver = directory / legacy_driver;
+                    const auto dst_driver = directory / ShaderCacheV2::DriverFileName;
+                    if (std::filesystem::is_regular_file(src_driver, error) &&
+                        !std::filesystem::exists(dst_driver, error)) {
+                        std::filesystem::copy_file(
+                            src_driver, dst_driver,
+                            std::filesystem::copy_options::skip_existing, error);
+                        break;
+                    }
+                }
+                return result;
+            }
+            error.clear();
+        }
+    }
     std::array<u32, 1 + VideoCommon::CompatibleVulkanPipelineCacheVersions.size()> versions{
         VideoCommon::VulkanPipelineCacheVersion};
     std::ranges::copy(VideoCommon::CompatibleVulkanPipelineCacheVersions, versions.begin() + 1);

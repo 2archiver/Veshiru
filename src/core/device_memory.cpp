@@ -43,10 +43,19 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     using namespace std::chrono_literals;
     Common::SetCurrentThreadName("ZeroTrim");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
-    constexpr size_t Busy = size_t{64} << 20;
+    const u64 host_ram_bytes = Common::GetMemInfo().TotalPhysicalMemory;
+    // Hosts with >= 24 GiB physical RAM (such as 32 GiB laptops) do not suffer working-set
+    // pressure during normal 4-6 GiB Switch 2 course loads, whereas scanning resident guest pages
+    // takes ~1000 ms under VAD locks. Defer whenever guest mapping is active and only scan on idle
+    // intervals once enough new zero-filled guest memory has accumulated.
+    const bool ample_host_ram = host_ram_bytes >= (u64{24} << 30);
+    const size_t min_useful_trim = ample_host_ram ? (size_t{256} << 20) : (size_t{64} << 20);
+    const u64 active_map_threshold = ample_host_ram ? (u64{8} << 20) : (u64{16} << 20);
     std::mutex mutex;
     std::condition_variable_any wake;
-    std::chrono::seconds interval = 5s;
+    std::chrono::seconds interval = ample_host_ram ? 30s : 5s;
+    u64 last_zero_filled_bytes = 0;
+    u32 consecutive_busy_deferrals = 0;
     while (true) {
         {
             std::unique_lock lock{mutex};
@@ -55,9 +64,11 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         if (stop.stop_requested()) {
             return;
         }
-        // Busy: over 32 MiB mapped, unmapped or protected in the last half second. At most 10
-        // waits (5 s), then the pass runs anyway.
-        for (int wait = 0; wait < 10; ++wait) {
+        // Check whether bulk mapping/unmapping/protection (course loads, boots, spawns) is active.
+        // Never force a 1-second zero-page scan in the middle of an active load on ample-RAM hosts.
+        bool mapping_active = false;
+        const int poll_checks = ample_host_ram ? 4 : 10;
+        for (int wait = 0; wait < poll_checks; ++wait) {
             const u64 before = Common::HostMemory::MappedBytes();
             {
                 std::unique_lock lock{mutex};
@@ -66,9 +77,26 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             if (stop.stop_requested()) {
                 return;
             }
-            if (Common::HostMemory::MappedBytes() - before < (u64{32} << 20)) {
+            if (Common::HostMemory::MappedBytes() - before < active_map_threshold) {
+                mapping_active = false;
                 break;
             }
+            mapping_active = true;
+        }
+        if (mapping_active && (ample_host_ram || consecutive_busy_deferrals < 12)) {
+            ++consecutive_busy_deferrals;
+            continue;
+        }
+        consecutive_busy_deferrals = 0;
+        if (ample_host_ram) {
+            const u64 zero_now = Common::HostMemory::ZeroFilledBytes();
+            const Common::ProcessMemoryUsage usage = Common::GetProcessMemoryUsage();
+            if (usage.working_set < (host_ram_bytes / 3) &&
+                zero_now - last_zero_filled_bytes < (u64{512} << 20)) {
+                interval = (std::min)(interval * 2, std::chrono::seconds{300});
+                continue;
+            }
+            last_zero_filled_bytes = zero_now;
         }
         const auto start = std::chrono::steady_clock::now();
         std::pair<size_t, size_t> result;
@@ -90,11 +118,11 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - start)
                             .count();
-        if (trimmed < Busy) {
+        if (trimmed < min_useful_trim) {
             interval = (std::min)(interval * 2, std::chrono::seconds{300});
             continue;
         }
-        interval = 5s;
+        interval = ample_host_ram ? 30s : 5s;
         LOG_INFO(HW_Memory,
                  "Trimmed {} MiB of all-zero guest pages out of {} MiB resident in {} ms; the kernel "
                  "zero-filled {} MiB so far",

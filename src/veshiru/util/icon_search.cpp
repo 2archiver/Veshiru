@@ -29,10 +29,12 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QPixmap>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
+#include "common/artwork_cache.h"
 #include "common/httplib.h"
 #include "common/logging.h"
 #include "common/string_util.h"
@@ -43,7 +45,8 @@
 
 namespace {
 
-constexpr int IconTargetSize = 256;
+constexpr int IconStandardSize = 256;
+constexpr int IconHdSize = 512;
 constexpr int MinCandidateScore = 300;
 constexpr std::size_t MaxIconDownloads = 3;
 constexpr std::size_t MaxSgdbChoices = 8;
@@ -52,15 +55,21 @@ std::vector<u8> EncodeSquareIcon(const QImage& source) {
     if (source.isNull()) {
         return {};
     }
+    const int min_dim = std::min(source.width(), source.height());
+    if (min_dim < 32) {
+        return {};
+    }
+    // Preserve native 512x512 HD artwork when available; use 256x256 otherwise.
+    const int target_size = min_dim >= 384 ? IconHdSize : IconStandardSize;
     QImage img = source.convertToFormat(QImage::Format_RGBA8888);
-    if (img.width() != IconTargetSize || img.height() != IconTargetSize) {
-        img = img.scaled(IconTargetSize, IconTargetSize, Qt::KeepAspectRatioByExpanding,
+    if (img.width() != target_size || img.height() != target_size) {
+        img = img.scaled(target_size, target_size, Qt::KeepAspectRatioByExpanding,
                          Qt::SmoothTransformation);
-        if (img.width() > IconTargetSize || img.height() > IconTargetSize) {
-            const int x = (img.width() - IconTargetSize) / 2;
-            const int y = img.height() > img.width() ? (img.height() - IconTargetSize) / 3
-                                                     : (img.height() - IconTargetSize) / 2;
-            img = img.copy(x, y, IconTargetSize, IconTargetSize);
+        if (img.width() > target_size || img.height() > target_size) {
+            const int x = (img.width() - target_size) / 2;
+            const int y = img.height() > img.width() ? (img.height() - target_size) / 3
+                                                     : (img.height() - target_size) / 2;
+            img = img.copy(x, y, target_size, target_size);
         }
     }
     QByteArray encoded;
@@ -68,72 +77,6 @@ std::vector<u8> EncodeSquareIcon(const QImage& source) {
     buffer.open(QIODevice::WriteOnly);
     img.save(&buffer, "PNG");
     return std::vector<u8>(encoded.begin(), encoded.end());
-}
-
-std::string NormalizeGameSlug(std::string title) {
-    title = Common::ToLower(title);
-    boost::replace_all(title, "é", "e");
-    boost::replace_all(title, "è", "e");
-    boost::replace_all(title, "ê", "e");
-    boost::replace_all(title, "ō", "o");
-    std::replace(title.begin(), title.end(), ' ', '-');
-    std::replace(title.begin(), title.end(), '_', '-');
-    std::erase_if(title, [](unsigned char c) { return !std::isalnum(c) && c != '-'; });
-    title.erase(title.begin(),
-                std::find_if(title.begin(), title.end(), [](char ch) { return ch != '-'; }));
-    title.erase(std::find_if(title.rbegin(), title.rend(), [](char ch) { return ch != '-'; }).base(),
-                title.end());
-    title.erase(std::unique(title.begin(), title.end(),
-                            [](char a, char b) { return a == '-' && b == '-'; }),
-                title.end());
-    return title;
-}
-
-std::string ResolveGameNameAlias(const std::string& raw_name, u64 title_id) {
-    static const std::unordered_map<u64, std::string> by_title_id{
-        {0x0400C3F00006E000ULL, "Mario Kart World"},
-        {0x0100000000010000ULL, "Super Mario Odyssey"},
-        {0x0100152000022000ULL, "Mario Kart 8 Deluxe"},
-        {0x01007EF00011E000ULL, "The Legend of Zelda: Breath of the Wild"},
-        {0x0100F2C0115B6000ULL, "The Legend of Zelda: Tears of the Kingdom"},
-        {0x01006A800016E000ULL, "Super Smash Bros. Ultimate"},
-        {0x01006F8002326000ULL, "Animal Crossing: New Horizons"},
-    };
-    static const std::unordered_map<std::string, std::string> by_alias{
-        {"mkw", "Mario Kart World"},
-        {"mariokartworld", "Mario Kart World"},
-        {"mario-kart-world", "Mario Kart World"},
-        {"dkb", "Donkey Kong Bananza"},
-        {"donkeykongbananza", "Donkey Kong Bananza"},
-        {"kar", "Kirby Air Riders"},
-        {"kirbyairriders", "Kirby Air Riders"},
-        {"mp4", "Metroid Prime 4: Beyond"},
-        {"metroidprime4", "Metroid Prime 4: Beyond"},
-        {"plza", "Pokemon Legends: Z-A"},
-        {"pokemonlegendsza", "Pokemon Legends: Z-A"},
-        {"mk8", "Mario Kart 8 Deluxe"},
-        {"mk8d", "Mario Kart 8 Deluxe"},
-        {"smo", "Super Mario Odyssey"},
-        {"botw", "The Legend of Zelda: Breath of the Wild"},
-        {"totk", "The Legend of Zelda: Tears of the Kingdom"},
-        {"ssbu", "Super Smash Bros. Ultimate"},
-        {"acnh", "Animal Crossing: New Horizons"},
-        {"smbw", "Super Mario Bros. Wonder"},
-        {"splatoon3", "Splatoon 3"},
-        {"xc3", "Xenoblade Chronicles 3"},
-        {"lm3", "Luigi's Mansion 3"},
-        {"pikmin4", "Pikmin 4"},
-    };
-    const std::string slug = NormalizeGameSlug(raw_name);
-    if (const auto it = by_alias.find(slug); it != by_alias.end()) {
-        return it->second;
-    }
-    if (slug.empty()) {
-        if (const auto it = by_title_id.find(title_id); it != by_title_id.end()) {
-            return it->second;
-        }
-    }
-    return raw_name;
 }
 
 std::string UrlEncode(std::string_view value) {
@@ -155,14 +98,17 @@ std::string UrlEncode(std::string_view value) {
 }
 
 constexpr std::chrono::seconds SearchDeadline{10};
-constexpr std::size_t MaxHttpBodySize = 4 * 1024 * 1024;
-constexpr std::chrono::seconds PrimarySourceDeadline{5};
+constexpr std::size_t MaxHttpBodySize = 6 * 1024 * 1024;
+constexpr std::chrono::seconds TitleIdProbeDeadline{3};
+constexpr std::chrono::seconds PrimarySourceDeadline{6};
 constexpr std::string_view IconSiteHost = "https://switchiconshowdown.com";
+constexpr std::string_view TitleIdApiHost = "https://api.nlib.cc";
 constexpr std::string_view SgdbApiBase = "https://www.steamgriddb.com/api/v2";
 
 bool IsAllowedIconHost(std::string_view host) {
-    return host == "switchiconshowdown.com" || host == "steamgriddb.com" ||
-           host.ends_with(".steamgriddb.com");
+    return host == "switchiconshowdown.com" || host == "api.nlib.cc" ||
+           host == "img-eshop.cdn.nintendo.net" || host.ends_with(".nintendo.net") ||
+           host == "steamgriddb.com" || host.ends_with(".steamgriddb.com");
 }
 
 enum class HttpStatus { Ok, NetworkError, Timeout, Cancelled, Unauthorized };
@@ -322,70 +268,21 @@ std::vector<std::string> ParseSgdbIconUrls(const std::string& body) {
 }
 
 int ScoreCandidateTitle(const std::string& candidate, const std::string& query) {
-    const std::string c_slug = NormalizeGameSlug(candidate);
-    const std::string q_slug = NormalizeGameSlug(query);
-    if (c_slug.empty() || q_slug.empty()) {
-        return -1000;
-    }
-    if (c_slug == q_slug) {
-        return 1000;
-    }
-    int score = 0;
-    if (c_slug.starts_with(q_slug + "-") || q_slug.starts_with(c_slug + "-")) {
-        score += 750 - static_cast<int>(std::abs(static_cast<long>(c_slug.size()) -
-                                                 static_cast<long>(q_slug.size())));
-    } else if (c_slug.find(q_slug) != std::string::npos) {
-        score += 600;
-    }
-    const auto split_words = [](const std::string& s) {
-        std::set<std::string> words;
-        std::size_t start = 0;
-        while (start < s.size()) {
-            const auto dash = s.find('-', start);
-            const auto word = s.substr(start, dash - start);
-            if (!word.empty()) {
-                words.insert(word);
-            }
-            if (dash == std::string::npos) {
-                break;
-            }
-            start = dash + 1;
-        }
-        return words;
-    };
-    const auto q_words = split_words(q_slug);
-    const auto c_words = split_words(c_slug);
-    int overlap = 0;
-    for (const auto& w : q_words) {
-        if (c_words.contains(w)) {
-            ++overlap;
-        }
-    }
-    score += overlap * 120 - static_cast<int>(c_words.size()) * 10;
-    const std::string lower_cand = Common::ToLower(candidate);
-    if (lower_cand.find("(series)") != std::string::npos ||
-        lower_cand.find("(character)") != std::string::npos ||
-        lower_cand.find("soundtrack") != std::string::npos) {
-        score -= 400;
-    }
-    return score;
+    return Common::ArtworkCache::ScoreArtworkCandidate(candidate, query);
 }
 
-
 IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std::string& api_key,
-                               const std::atomic_bool& cancel) {
+                               const std::atomic_bool& cancel, bool silent_first_choice = false) {
     using namespace std::chrono;
     IconSearchResult out;
     try {
         const auto start = steady_clock::now();
         const auto deadline = start + SearchDeadline;
-        const std::string search_name = ResolveGameNameAlias(raw_query, tid);
-        if (search_name != raw_query) {
+        const u64 base_tid = Common::ArtworkCache::BaseProgramId(tid);
+        std::string search_name =
+            Common::ArtworkCache::ResolveCanonicalSearchTitle(raw_query, base_tid);
+        if (!search_name.empty() && search_name != raw_query) {
             out.resolved_title = search_name;
-        }
-        if (search_name.empty()) {
-            out.status = IconSearchStatus::NotFound;
-            return out;
         }
 
         const auto to_status = [](const HttpResult& res) {
@@ -409,10 +306,53 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             return !out.icon_bytes.empty();
         };
 
-        // Primary: switchiconshowdown.com, limited so the fallback keeps some of the time.
+        // 1. Exact Title ID lookup when the Program ID is known: resolves canonical title and
+        //    official HD eShop icon when available, avoiding wrong editions completely.
+        if (base_tid != 0 && Common::ArtworkCache::LookupTitleByProgramId(base_tid).empty()) {
+            const auto tid_deadline = std::min(deadline, start + TitleIdProbeDeadline);
+            const auto tid_res = HttpGet(
+                fmt::format("{}/nx/{:016X}", TitleIdApiHost, base_tid), tid_deadline, cancel);
+            if (tid_res.status == HttpStatus::Ok) {
+                const auto meta = nlohmann::json::parse(tid_res.body, nullptr, false);
+                if (!meta.is_discarded() && meta.is_object()) {
+                    if (meta.contains("name") && meta["name"].is_string()) {
+                        const auto exact_name = meta["name"].get<std::string>();
+                        if (!exact_name.empty()) {
+                            search_name = exact_name;
+                            out.resolved_title = exact_name;
+                        }
+                    }
+                    for (const char* icon_field : {"iconUrl", "icon_url", "icon"}) {
+                        if (meta.contains(icon_field) && meta[icon_field].is_string()) {
+                            const auto icon_url = meta[icon_field].get<std::string>();
+                            if (icon_url.starts_with("https://")) {
+                                const auto img_res = HttpGet(icon_url, tid_deadline, cancel);
+                                if (img_res.status == HttpStatus::Ok && decode_icon(img_res.body)) {
+                                    out.status = IconSearchStatus::Found;
+                                    out.source = "nintendo_cdn";
+                                    return out;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (tid_res.status == HttpStatus::Cancelled) {
+                out.status = IconSearchStatus::Cancelled;
+                return out;
+            }
+        }
+
+        if (search_name.empty()) {
+            out.status = IconSearchStatus::NotFound;
+            return out;
+        }
+
+        // 2. Primary HD icon source: switchiconshowdown.com (full-res PNG first, never stretching
+        //    100x100 thumbnails unless no full-res asset exists).
         IconSearchStatus primary = IconSearchStatus::NotFound;
         std::string primary_error;
-        const auto primary_deadline = std::min(deadline, start + PrimarySourceDeadline);
+        const auto primary_deadline =
+            std::min(deadline, steady_clock::now() + PrimarySourceDeadline);
         do {
             std::vector<std::string> queries{search_name};
             if (const auto colon = search_name.find(':');
@@ -449,17 +389,29 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             std::ranges::stable_sort(
                 scored, [](const auto& a, const auto& b) { return a.first > b.first; });
             for (std::size_t i = 0; i < scored.size() && i < MaxIconDownloads; ++i) {
-                const auto res = HttpGet(fmt::format("{}/images/100/{}.png", IconSiteHost,
-                                                     scored[i].second.id),
-                                         primary_deadline, cancel);
-                if (res.status != HttpStatus::Ok) {
-                    primary = to_status(res);
-                    primary_error = res.detail;
-                    break;
+                const int icon_id = scored[i].second.id;
+                for (const std::string_view pattern :
+                     {"/images/{}.png", "/images/256/{}.png", "/images/100/{}.png"}) {
+                    const auto res = HttpGet(
+                        std::string{IconSiteHost} + fmt::format(fmt::runtime(pattern), icon_id),
+                        primary_deadline, cancel);
+                    if (res.status == HttpStatus::Cancelled || res.status == HttpStatus::Timeout) {
+                        primary = to_status(res);
+                        primary_error = res.detail;
+                        break;
+                    }
+                    if (res.status == HttpStatus::Ok && decode_icon(res.body)) {
+                        if (out.resolved_title.empty()) {
+                            out.resolved_title = scored[i].second.title;
+                        }
+                        out.status = IconSearchStatus::Found;
+                        out.source = "switchiconshowdown";
+                        return out;
+                    }
                 }
-                if (decode_icon(res.body)) {
-                    out.status = IconSearchStatus::Found;
-                    return out;
+                if (primary == IconSearchStatus::Cancelled ||
+                    primary == IconSearchStatus::Timeout) {
+                    break;
                 }
             }
         } while (false);
@@ -469,7 +421,7 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             return out;
         }
 
-        // Fallback: SteamGridDB, which needs the user's API key.
+        // 3. Fallback HD source: SteamGridDB (scored by title relevance to avoid wrong editions).
         if (api_key.empty()) {
             out.status = primary == IconSearchStatus::NotFound ? IconSearchStatus::NeedsApiKey
                                                                : primary;
@@ -486,19 +438,32 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             return out;
         }
         const auto parsed = nlohmann::json::parse(search.body, nullptr, false);
-        int game_id = 0;
+        int best_game_id = 0;
+        int best_score = MinCandidateScore - 1;
+        std::string best_sgdb_title;
         if (!parsed.is_discarded() && parsed.is_object() && parsed.contains("data") &&
-            parsed["data"].is_array() && !parsed["data"].empty() &&
-            parsed["data"][0].is_object() && parsed["data"][0].contains("id") &&
-            parsed["data"][0]["id"].is_number_integer()) {
-            game_id = parsed["data"][0]["id"].get<int>();
+            parsed["data"].is_array()) {
+            for (const auto& entry : parsed["data"]) {
+                if (!entry.is_object() || !entry.contains("id") ||
+                    !entry["id"].is_number_integer() || !entry.contains("name") ||
+                    !entry["name"].is_string()) {
+                    continue;
+                }
+                const auto cand_name = entry["name"].get<std::string>();
+                const int score = ScoreCandidateTitle(cand_name, search_name);
+                if (score > best_score) {
+                    best_score = score;
+                    best_game_id = entry["id"].get<int>();
+                    best_sgdb_title = cand_name;
+                }
+            }
         }
-        if (game_id <= 0) {
+        if (best_game_id <= 0) {
             out.status = IconSearchStatus::NotFound;
             return out;
         }
-        const auto icons =
-            sgdb_get(fmt::format("/icons/game/{}?dimensions=256,512&mimes=image/png", game_id));
+        const auto icons = sgdb_get(
+            fmt::format("/icons/game/{}?dimensions=512,256&mimes=image/png", best_game_id));
         if (icons.status != HttpStatus::Ok) {
             out.status = to_status(icons);
             out.error = icons.detail;
@@ -519,12 +484,24 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
                 continue;
             }
             if (decode_icon(img.body)) {
+                if (silent_first_choice) {
+                    if (out.resolved_title.empty()) {
+                        out.resolved_title = best_sgdb_title;
+                    }
+                    out.status = IconSearchStatus::Found;
+                    out.source = "steamgriddb";
+                    return out;
+                }
                 out.choices.push_back(std::move(out.icon_bytes));
                 out.icon_bytes.clear();
             }
         }
         if (!out.choices.empty()) {
+            if (out.resolved_title.empty()) {
+                out.resolved_title = best_sgdb_title;
+            }
             out.status = IconSearchStatus::Choices;
+            out.source = "steamgriddb";
             return out;
         }
         out.status = IconSearchStatus::NotFound;
@@ -571,6 +548,43 @@ void IconSearch::Start(const QString& name, u64 title_id) {
 
 bool IconSearch::IsRunning() const {
     return watcher.isRunning();
+}
+
+void IconSearch::FetchSilentAsync(
+    u64 title_id, const QString& fallback_name, QObject* context,
+    std::function<void(QByteArray png, QString resolved_title)> on_done) {
+    if (title_id == 0 || context == nullptr || !on_done) {
+        return;
+    }
+    const std::string query = fallback_name.trimmed().toStdString();
+    const std::string api_key = UISettings::values.steamgriddb_api_key.GetValue();
+    (void)QtConcurrent::run([title_id, query, api_key, context = QPointer<QObject>(context),
+                             cb = std::move(on_done)]() mutable {
+        std::atomic_bool cancel{false};
+        IconSearchResult res = RunIconSearch(query, title_id, api_key, cancel, true);
+        if (res.status == IconSearchStatus::Found && !res.icon_bytes.empty()) {
+            const std::string effective_title =
+                !res.resolved_title.empty() ? res.resolved_title : query;
+            (void)Common::ArtworkCache::WriteCachedArtwork(
+                title_id, res.icon_bytes, effective_title,
+                res.source.empty() ? "online" : res.source);
+            if (context) {
+                QByteArray bytes(reinterpret_cast<const char*>(res.icon_bytes.data()),
+                                 static_cast<qsizetype>(res.icon_bytes.size()));
+                QString title_q = QString::fromStdString(res.resolved_title);
+                QMetaObject::invokeMethod(
+                    context,
+                    [cb = std::move(cb), bytes = std::move(bytes),
+                     title_q = std::move(title_q)]() mutable {
+                        cb(std::move(bytes), std::move(title_q));
+                    },
+                    Qt::QueuedConnection);
+            }
+        } else {
+            Common::ArtworkCache::RecordArtworkFailure(
+                title_id, res.error.empty() ? "not_found" : res.error);
+        }
+    });
 }
 
 int IconSearch::ChooseIcon(const std::vector<std::vector<u8>>& choices) {
@@ -662,6 +676,14 @@ void IconSearch::OnFinished() {
     }
 
     const auto select = [&](std::vector<u8> png) {
+        if (last_title_id != 0 && !png.empty()) {
+            const std::string effective_title = !result.resolved_title.empty()
+                                                    ? result.resolved_title
+                                                    : last_name.trimmed().toStdString();
+            (void)Common::ArtworkCache::WriteCachedArtwork(
+                last_title_id, png, effective_title,
+                result.source.empty() ? "manual_search" : result.source);
+        }
         emit IconSelected(QByteArray(reinterpret_cast<const char*>(png.data()),
                                      static_cast<qsizetype>(png.size())),
                           QString::fromStdString(result.resolved_title));

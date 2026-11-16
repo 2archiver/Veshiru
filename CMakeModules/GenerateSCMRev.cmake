@@ -13,7 +13,11 @@ endfunction()
 
 get_timestamp(BUILD_DATE)
 
-if (VESHIRU_BUILD_TAG MATCHES "^build-[0-9]+$")
+if ("${VESHIRU_BUILD_TAG}" STREQUAL "" AND GIT_TAG MATCHES "^(build-[0-9]+|v[0-9]+\\.[0-9]+\\.[0-9]+)$")
+    set(VESHIRU_BUILD_TAG "${GIT_TAG}")
+endif()
+
+if (VESHIRU_BUILD_TAG MATCHES "^(build-[0-9]+|v[0-9]+\\.[0-9]+\\.[0-9]+)$")
     set(BUILD_VERSION "${VESHIRU_BUILD_TAG}")
     set(IS_DEV_BUILD false)
 elseif (DEFINED GIT_RELEASE)

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string_view>
 
+#include "common/artwork_cache.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/string_util.h"
@@ -480,11 +481,21 @@ ResultStatus AppLoader_NUP::ReadProgramIds(std::vector<u64>& out_program_ids) {
 }
 
 ResultStatus AppLoader_NUP::ReadIcon(std::vector<u8>& buffer) {
-    if (icon_file == nullptr) {
-        return ResultStatus::ErrorNoIcon;
+    if (icon_file != nullptr) {
+        auto embedded = icon_file->ReadAllBytes();
+        if (Common::ArtworkCache::IsValidImageBytes(embedded)) {
+            buffer = std::move(embedded);
+            return ResultStatus::Success;
+        }
     }
-    buffer = icon_file->ReadAllBytes();
-    return ResultStatus::Success;
+    if (base_title_id != 0) {
+        auto cached = Common::ArtworkCache::ReadCachedArtwork(base_title_id);
+        if (!cached.empty()) {
+            buffer = std::move(cached);
+            return ResultStatus::Success;
+        }
+    }
+    return ResultStatus::ErrorNoIcon;
 }
 
 ResultStatus AppLoader_NUP::ReadTitle(std::string& title) {
@@ -492,14 +503,20 @@ ResultStatus AppLoader_NUP::ReadTitle(std::string& title) {
         title = display_title;
         return ResultStatus::Success;
     }
-    if (nacp_file == nullptr) {
-        return ResultStatus::ErrorNoControl;
+    if (nacp_file != nullptr) {
+        title = nacp_file->GetApplicationName();
+        if (!title.empty()) {
+            return ResultStatus::Success;
+        }
     }
-    title = nacp_file->GetApplicationName();
-    if (title.empty()) {
-        return ResultStatus::ErrorNoControl;
+    if (base_title_id != 0) {
+        if (auto sidecar_title = Common::ArtworkCache::ReadSidecarTitle(base_title_id);
+            !sidecar_title.empty()) {
+            title = std::move(sidecar_title);
+            return ResultStatus::Success;
+        }
     }
-    return ResultStatus::Success;
+    return ResultStatus::ErrorNoControl;
 }
 
 ResultStatus AppLoader_NUP::ReadControlData(FileSys::NACP& control) {

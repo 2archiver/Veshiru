@@ -104,7 +104,7 @@ struct ImageBase {
 
     ImageInfo info;
 
-    u32 guest_size_bytes = 0;
+    u64 guest_size_bytes = 0;
     u32 unswizzled_size_bytes = 0;
     u32 converted_size_bytes = 0;
     u32 scale_rating = 0;
@@ -130,6 +130,8 @@ struct ImageBase {
 
     /// Set through SetModificationTick.
     u64 modification_tick = 0;
+    /// First frame (frame_tick + 1) the GPU modified this image; 0 until written.
+    u64 first_written_frame = 0;
     /// At least the newest modification_tick among aliased_images (raised when an alias's tick is
     /// set or an alias is added): SynchronizeAliases has nothing to do while it is not newer.
     u64 newest_alias_tick = 0;

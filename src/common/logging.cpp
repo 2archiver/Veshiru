@@ -27,6 +27,7 @@
 #endif
 
 #include <boost/algorithm/string/replace.hpp>
+#include <condition_variable>
 #include <fmt/ranges.h>
 
 #include "common/fs/file.h"
@@ -260,21 +261,19 @@ Subsystem GetSubsystemImpl(Class log_class) noexcept {
 
 std::string SanitizeLogMessageImpl(std::string_view message) {
     std::string text{message};
-#ifndef __ANDROID__
-    if (Settings::values.censor_username.GetValue()) {
-        static const std::string username = []() -> std::string {
-            for (const auto* var : {"LOGNAME", "USERNAME", "USER"}) {
-                if (const auto* value = std::getenv(var); value != nullptr && *value != '\0') {
-                    return std::string{value};
-                }
-            }
-            return {};
-        }();
-        if (!username.empty()) {
-            boost::replace_all(text, username, "<user>");
+    const auto replace_dir = [&](std::string_view dir, std::string_view token) {
+        if (dir.empty()) {
+            return;
         }
-    }
-#endif
+        std::string fwd{dir};
+        std::ranges::replace(fwd, '\\', '/');
+        std::string back{dir};
+        std::ranges::replace(back, '/', '\\');
+        boost::ireplace_all(text, back, token);
+        if (fwd != back) {
+            boost::ireplace_all(text, fwd, token);
+        }
+    };
     static const std::string home = []() -> std::string {
 #ifdef _WIN32
         if (const auto* value = std::getenv("USERPROFILE"); value != nullptr) {
@@ -292,23 +291,48 @@ std::string SanitizeLogMessageImpl(std::string_view message) {
         return {};
 #endif
     }();
-    if (!home.empty()) {
-        boost::replace_all(text, home, "<home>");
+    static const std::string local_appdata = []() -> std::string {
+#ifdef _WIN32
+        if (const auto* value = std::getenv("LOCALAPPDATA"); value != nullptr) {
+            return std::string{value};
+        }
+#endif
+        return {};
+    }();
+    replace_dir(appdata, "<appdata>");
+    replace_dir(local_appdata, "<localappdata>");
+    replace_dir(home, "<home>");
+
+#ifndef __ANDROID__
+    if (Settings::values.censor_username.GetValue()) {
+        static const std::string username = []() -> std::string {
+            for (const auto* var : {"LOGNAME", "USERNAME", "USER"}) {
+                if (const auto* value = std::getenv(var); value != nullptr && *value != '\0') {
+                    return std::string{value};
+                }
+            }
+            return {};
+        }();
+        // Guard against single-character usernames corrupting hex/register values while still
+        // redacting real account names case-insensitively.
+        if (username.size() >= 2) {
+            boost::ireplace_all(text, username, "<user>");
+        }
     }
-    if (!appdata.empty()) {
-        boost::replace_all(text, appdata, "<appdata>");
-    }
+#endif
 
     // Absolute paths can name personal files. Keep relative source paths and title IDs, but
-    // replace host file locations with a stable placeholder.
+    // replace host file locations (including Windows \\?\ extended paths) with a stable token.
+    static const std::regex win_extended_path{R"(\\\\(?:\?|\.)\\[A-Za-z]:[\\/][^\s"'<>]*)"};
     static const std::regex windows_path{R"(\b[A-Za-z]:[\\/][^\s"'<>]*)"};
     static const std::regex unc_path{R"(\\\\[^\s"'<>]*)"};
     static const std::regex posix_path{
-        R"((^|[\s"'(=])(/(?:home|Users|tmp|var|mnt|media|run|srv|opt|root)/[^\s"'<>]*))"};
+        R"((^|[\s"'(=])(/(?:home|Users|tmp|var|mnt|media|run|srv|opt|root|private)/[^\s"'<>]*))"};
     static const std::regex credential{
-        R"((authorization\s*:\s*bearer\s+|token\s*[:=]\s*|api[_-]?key\s*[:=]\s*|password\s*[:=]\s*|secret\s*[:=]\s*)([^\s,;]+))",
+        R"((authorization\s*:\s*(?:bearer|basic|token)\s+|(?:access[_-]?)?token\s*[:=]\s*|api[_-]?key\s*[:=]\s*|password\s*[:=]\s*|secret\s*[:=]\s*|cookie\s*:\s*)([^\s,;"']+))",
         std::regex::icase};
     static const std::regex url_userinfo{R"((https?://)[^\s/@:]+:[^\s/@]+@)"};
+    text = std::regex_replace(text, win_extended_path, "<path>");
     text = std::regex_replace(text, windows_path, "<path>");
     text = std::regex_replace(text, unc_path, "<path>");
     text = std::regex_replace(text, posix_path, "$1<path>");
@@ -439,11 +463,38 @@ struct FileBackend final : public Backend {
                 mode = FS::FileAccessMode::Append;
         }
         file.emplace(path, mode, FS::FileType::TextFile);
+        active_path = path;
         // Count what is already there so the size limit still applies when appending.
         if (mode == FS::FileAccessMode::Append)
             bytes_written = file->GetSize();
+        flush_thread = std::jthread([this](std::stop_token stop) {
+            Common::SetCurrentThreadName("LogFlush");
+            std::mutex wake_mutex;
+            std::condition_variable_any wake;
+            while (!stop.stop_requested()) {
+                {
+                    std::unique_lock lock{wake_mutex};
+                    wake.wait_for(lock, stop, std::chrono::seconds{1}, [] { return false; });
+                }
+                if (stop.stop_requested()) {
+                    break;
+                }
+                if (dirty.exchange(false, std::memory_order_acq_rel)) {
+                    std::scoped_lock lock{write_mutex};
+                    if (file) {
+                        file->Flush();
+                    }
+                }
+            }
+        });
     }
-    ~FileBackend() noexcept override = default;
+    ~FileBackend() noexcept override {
+        if (flush_thread.joinable()) {
+            flush_thread.request_stop();
+            flush_thread.join();
+        }
+        Flush();
+    }
 
     void Write(const Entry& entry) noexcept override {
         if (!enabled)
@@ -467,11 +518,17 @@ struct FileBackend final : public Backend {
                 boost::replace_all(message, username, "user");
         }
 #endif
+        std::scoped_lock lock{write_mutex};
+        if (!enabled || !file)
+            return;
         bytes_written += file->WriteSpan(std::span<const char>{message.begin(), message.end()});
+        dirty.store(true, std::memory_order_release);
 
         // Option to log each line rather than 4k buffers
-        if (Settings::values.log_flush_line.GetValue())
+        if (Settings::values.log_flush_line.GetValue()) {
             file->Flush();
+            dirty.store(false, std::memory_order_release);
+        }
 
         using namespace Common::Literals;
         // Prevent logs from exceeding a set maximum size in the event that log entries are spammed.
@@ -483,14 +540,37 @@ struct FileBackend final : public Backend {
             if (write_limit_exceeded)
                 enabled = false;
             file->Flush();
+            dirty.store(false, std::memory_order_release);
         }
     }
 
     void Flush() noexcept override {
+        std::scoped_lock lock{write_mutex};
+        if (file) {
+            file->Flush();
+        }
+        dirty.store(false, std::memory_order_release);
+    }
+
+    void WriteCrashUnlocked(const Entry& entry) noexcept {
+        if (!file) {
+            return;
+        }
+        const auto message = FormatLogMessage(entry);
+        (void)file->WriteSpan(std::span<const char>{message.begin(), message.end()});
         file->Flush();
     }
+
+    [[nodiscard]] const std::filesystem::path& GetPath() const noexcept {
+        return active_path;
+    }
+
 private:
+    std::mutex write_mutex;
     std::optional<FS::IOFile> file;
+    std::filesystem::path active_path;
+    std::atomic_bool dirty{false};
+    std::jthread flush_thread;
     std::size_t bytes_written = 0;
     bool enabled = true;
 };
@@ -816,6 +896,21 @@ void Stop() {
     }
 }
 
+void Flush() {
+    if (logging_instance) {
+        logging_instance->ForEachBackend([](Backend& backend) { backend.Flush(); });
+    }
+}
+
+std::filesystem::path GetActiveLogFilePath() {
+#ifndef __OPENORBIS__
+    if (logging_instance && logging_instance->file_backend) {
+        return logging_instance->file_backend->GetPath();
+    }
+#endif
+    return {};
+}
+
 void FmtCrashMessageImpl(const char* filename, unsigned int line_num, const char* function, fmt::string_view format, const fmt::format_args& args) noexcept {
 #ifndef __OPENORBIS__
     if (!logging_instance || !logging_instance->file_backend)
@@ -834,8 +929,7 @@ void FmtCrashMessageImpl(const char* filename, unsigned int line_num, const char
         .function = function,
         .line_num = line_num,
     };
-    logging_instance->file_backend->Write(e);
-    logging_instance->file_backend->Flush();
+    logging_instance->file_backend->WriteCrashUnlocked(e);
 #endif
 }
 

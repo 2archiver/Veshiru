@@ -143,6 +143,9 @@ namespace Vulkan {
 
         vk::Buffer CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage) const;
 
+        /// CreateBuffer, but a null buffer instead of an exception when there is no memory for it.
+        vk::Buffer TryCreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage) const;
+
         vk::Buffer CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage,
                                 VkDeviceSize min_alignment) const;
 
@@ -175,6 +178,10 @@ namespace Vulkan {
         /// may_fail: the caller handles VK_ERROR_OUT_OF_DEVICE_MEMORY (see UsesUnbackedFallback).
         VkResult AllocateImage(const VkImageCreateInfo &ci, bool dedicated, bool may_fail,
                                vk::Image &image) const;
+
+        /// CreateBuffer's fallbacks; the buffer is left null when the result is an error.
+        VkResult AllocateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage,
+                                vk::Buffer &buffer) const;
 
         const Device &device;                              ///< Device handle.
         VmaAllocator allocator;                           ///< VMA allocator.

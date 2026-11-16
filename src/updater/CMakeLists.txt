@@ -8,6 +8,10 @@ target_link_libraries(veshiru-updater PRIVATE user32 shell32)
 set_target_properties(veshiru-updater PROPERTIES WIN32_EXECUTABLE ON)
 
 # The helper runs from a temporary folder, away from the DLLs next to veshiru.exe.
+# Exclude it from global PGO flags so it never pulls in profile runtime symbols or stale counters.
+if (CXX_CLANG)
+    target_compile_options(veshiru-updater PRIVATE -fno-profile-instr-use -fno-profile-instr-generate)
+endif()
 if (MSVC)
     set_property(TARGET veshiru-updater PROPERTY MSVC_RUNTIME_LIBRARY
                  "MultiThreaded$<$<CONFIG:Debug>:Debug>")

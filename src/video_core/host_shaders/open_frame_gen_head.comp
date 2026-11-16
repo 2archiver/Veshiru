@@ -1,0 +1,100 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Adapted from Open-Frame-gen NanoModel (MIT License, Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod)
+
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer InBuf {
+    float in_buf[];
+};
+layout(std430, binding = 1) readonly buffer Weights {
+    float weights[];
+};
+layout(std430, binding = 2) writeonly buffer OutBuf {
+    float out_buf[];
+};
+layout(rgba16f, binding = 3) uniform writeonly image2D OutFlowMask;
+
+layout(push_constant) uniform PushConstants {
+    uint width;
+    uint height;
+    uint mode; // 0 = head.0 (32->32 + LeakyReLU), 1 = head.2 (32->3 -> OutFlowMask)
+    uint w_offset;
+    uint b_offset;
+    float flow_norm_x;
+    float flow_norm_y;
+} pc;
+
+shared float s_k[864];
+shared float s_b[3];
+
+float readCh(uint ic, int ix, int iy) {
+    if (ix < 0 || iy < 0 || ix >= int(pc.width) || iy >= int(pc.height)) {
+        return 0.0;
+    }
+    return in_buf[(ic * pc.height + uint(iy)) * pc.width + uint(ix)];
+}
+
+void main() {
+    const uint tid = gl_LocalInvocationIndex; // 0..63
+    const uint ox = gl_GlobalInvocationID.x;
+    const uint oy = gl_GlobalInvocationID.y;
+
+    if (pc.mode == 0u) {
+        const uint oc = gl_WorkGroupID.z;
+        for (uint idx = tid; idx < 288u; idx += 64u) {
+            s_k[idx] = weights[pc.w_offset + oc * 288u + idx];
+        }
+        if (tid == 0u) {
+            s_b[0] = weights[pc.b_offset + oc];
+        }
+        barrier();
+
+        if (ox >= pc.width || oy >= pc.height) {
+            return;
+        }
+        float sum = s_b[0];
+        const int bx = int(ox) - 1;
+        const int by = int(oy) - 1;
+        for (uint ic = 0u; ic < 32u; ++ic) {
+            const uint kbase = ic * 9u;
+            for (int ky = 0; ky < 3; ++ky) {
+                for (int kx = 0; kx < 3; ++kx) {
+                    sum += s_k[kbase + uint(ky * 3 + kx)] * readCh(ic, bx + kx, by + ky);
+                }
+            }
+        }
+        out_buf[(oc * pc.height + oy) * pc.width + ox] = sum >= 0.0 ? sum : sum * 0.1;
+    } else {
+        for (uint idx = tid; idx < 864u; idx += 64u) {
+            s_k[idx] = weights[pc.w_offset + idx];
+        }
+        if (tid < 3u) {
+            s_b[tid] = weights[pc.b_offset + tid];
+        }
+        barrier();
+
+        if (ox >= pc.width || oy >= pc.height) {
+            return;
+        }
+        vec3 sum = vec3(s_b[0], s_b[1], s_b[2]);
+        const int bx = int(ox) - 1;
+        const int by = int(oy) - 1;
+        for (uint ic = 0u; ic < 32u; ++ic) {
+            for (int ky = 0; ky < 3; ++ky) {
+                for (int kx = 0; kx < 3; ++kx) {
+                    const float v = readCh(ic, bx + kx, by + ky);
+                    const uint off = ic * 9u + uint(ky * 3 + kx);
+                    sum.x += s_k[off] * v;
+                    sum.y += s_k[288u + off] * v;
+                    sum.z += s_k[576u + off] * v;
+                }
+            }
+        }
+        const vec2 flow_uv = vec2(sum.x * pc.flow_norm_x, sum.y * pc.flow_norm_y);
+        const float mask = 1.0 / (1.0 + exp(-sum.z));
+        imageStore(OutFlowMask, ivec2(ox, oy), vec4(flow_uv, mask, 1.0));
+    }
+}

@@ -10,9 +10,11 @@
 #include <system_error>
 
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QCursor>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -108,62 +110,31 @@ bool IsLink(const std::filesystem::path& path) {
     return Common::FS::IsSymlink(path);
 }
 
-bool HandleAlreadyLinked(const std::filesystem::path& veshiru_dir,
-                         const std::filesystem::path& eglantine_dir, QWidget* parent) {
-    const bool veshiru_link = IsLink(veshiru_dir);
-    const bool eglantine_link = IsLink(eglantine_dir);
-    if (!veshiru_link && !eglantine_link) {
-        return false;
-    }
-
-    const auto answer = QMessageBox::question(
-        parent, QObject::tr("Already Linked"),
-        QObject::tr("This title is already linked to Eglantine. Would you like to unlink it?"),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (answer != QMessageBox::Yes) {
-        return true;
-    }
-
-    const fs::path linked = veshiru_link ? veshiru_dir : eglantine_dir;
-    const fs::path orig = veshiru_link ? eglantine_dir : veshiru_dir;
-
-    // NB: do NOT use remove_all here; on Windows it would delete the link's *target* contents
-    // instead of the link itself. fs::remove removes just the reparse point.
-    try {
-        fs::remove(linked);
-    } catch (const std::exception& e) {
-        QMessageBox::critical(parent, QObject::tr("Failed to unlink"),
-                              QObject::tr("Could not remove the link at:\n\t%1\n\n%2")
-                                  .arg(QString::fromStdString(linked.string()), QString::fromUtf8(e.what())));
-        return true;
-    }
-
-    try {
-        fs::copy(orig, linked, fs::copy_options::recursive);
-    } catch (const std::exception& e) {
-        // Nothing is lost: the original is still intact at its own path.
-        QMessageBox::critical(parent, QObject::tr("Failed to copy save data"),
-                              QObject::tr("The link was removed, but the save data could not be "
-                                          "copied back to:\n\t%1\n\n%2\n\nThe original data is "
-                                          "still intact at:\n\t%3")
-                                  .arg(QString::fromStdString(linked.string()), QString::fromUtf8(e.what()),
-                                       QString::fromStdString(orig.string())));
-        return true;
-    }
-
-    QMessageBox::information(parent, QObject::tr("Unlink Successful"),
-                             QObject::tr("Successfully unlinked Eglantine save data. Save data "
-                                         "has been kept intact."));
-    return true;
-}
-
 } // namespace EglantineLink
 
 namespace {
 
-// Relative path -> file size, for every regular file in the tree.
-std::map<std::string, u64> ListTree(const fs::path& root) {
-    std::map<std::string, u64> result;
+struct FileDigest {
+    u64 size{};
+    QByteArray sha256;
+    bool operator==(const FileDigest&) const = default;
+};
+
+QByteArray HashFileSha256(const fs::path& path) {
+    QFile file(QString::fromStdString(Common::FS::PathToUTF8String(path)));
+    if (!file.open(QIODevice::ReadOnly)) {
+        throw std::runtime_error("Could not open " + path.string() + " for checksum verification");
+    }
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (!hash.addData(&file)) {
+        throw std::runtime_error("Could not read " + path.string() + " for checksum verification");
+    }
+    return hash.result();
+}
+
+// Relative path -> (file size, SHA-256 digest), for every regular file in the tree.
+std::map<std::string, FileDigest> ListTree(const fs::path& root) {
+    std::map<std::string, FileDigest> result;
     std::error_code ec;
     for (fs::recursive_directory_iterator it{root, ec}, end; !ec && it != end; it.increment(ec)) {
         const auto type = it->symlink_status().type();
@@ -184,7 +155,7 @@ std::map<std::string, u64> ListTree(const fs::path& root) {
         if (ec) {
             throw std::runtime_error("Could not relativize " + it->path().string());
         }
-        result.emplace(rel.generic_string(), size);
+        result.emplace(rel.generic_string(), FileDigest{size, HashFileSha256(it->path())});
     }
     if (ec) {
         throw std::runtime_error("Could not scan " + root.string() + ": " + ec.message());
@@ -223,7 +194,7 @@ fs::path BackupDirectory(const fs::path& dir) {
     return backup;
 }
 
-// Copies src to dst with verification. dst must not exist yet. Throws std::runtime_error
+// Copies src to dst with SHA-256 verification. dst must not exist yet. Throws std::runtime_error
 // describing the failing step on error; the partially written dst is removed.
 void VerifiedCopy(const fs::path& src, const fs::path& dst) {
     fs::create_directories(dst.parent_path());
@@ -240,9 +211,9 @@ void VerifiedCopy(const fs::path& src, const fs::path& dst) {
         fs::copy(src, staging, fs::copy_options::recursive);
         const auto after = ListTree(staging);
         if (before != after) {
-            throw std::runtime_error("Copied save data failed verification (file list or sizes "
-                                     "differ from the source). The original data was not "
-                                     "modified.");
+            throw std::runtime_error(
+                "Copied save data failed SHA-256 verification (file list, sizes, or contents "
+                "differ from the source). The original data was not modified.");
         }
         fs::rename(staging, dst, ec);
         if (ec) {
@@ -255,6 +226,99 @@ void VerifiedCopy(const fs::path& src, const fs::path& dst) {
         throw;
     }
 }
+
+} // namespace
+
+namespace EglantineLink {
+
+bool HandleAlreadyLinked(const std::filesystem::path& veshiru_dir,
+                         const std::filesystem::path& eglantine_dir, QWidget* parent) {
+    const bool veshiru_link = IsLink(veshiru_dir);
+    const bool eglantine_link = IsLink(eglantine_dir);
+    if (!veshiru_link && !eglantine_link) {
+        return false;
+    }
+
+    const fs::path linked = veshiru_link ? veshiru_dir : eglantine_dir;
+    const fs::path fallback_orig = veshiru_link ? eglantine_dir : veshiru_dir;
+    const auto resolved_target = Common::FS::ReadSymlinkTarget(linked);
+    const fs::path orig = resolved_target && !resolved_target->empty() ? *resolved_target : fallback_orig;
+
+    const auto answer = QMessageBox::question(
+        parent, QObject::tr("Already Linked"),
+        QObject::tr("This title is already linked to:\n\t%1\n\nWould you like to unlink it and "
+                    "keep independent verified copies?")
+            .arg(QString::fromStdString(orig.string())),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return true;
+    }
+
+    if (!fs::is_directory(orig)) {
+        QMessageBox::critical(
+            parent, QObject::tr("Failed to unlink"),
+            QObject::tr("The linked save target directory does not exist:\n\t%1\n\nThe link at "
+                        "%2 was kept untouched so you can inspect or repair the target path.")
+                .arg(QString::fromStdString(orig.string()),
+                     QString::fromStdString(linked.string())));
+        return true;
+    }
+
+    // Stage and SHA-256-verify the copy BEFORE removing the link so a failed copy never leaves
+    // the save path empty.
+    const fs::path staged_unlink =
+        linked.parent_path() /
+        (linked.filename().string() + ".unlink-verified-" + Timestamp().toStdString());
+    std::error_code cleanup_ec;
+    fs::remove_all(staged_unlink, cleanup_ec);
+    try {
+        VerifiedCopy(orig, staged_unlink);
+    } catch (const std::exception& e) {
+        fs::remove_all(staged_unlink, cleanup_ec);
+        QMessageBox::critical(
+            parent, QObject::tr("Failed to copy save data"),
+            QObject::tr("Could not stage a verified copy of the linked save data before "
+                        "unlinking:\n\n%1\n\nThe existing link at %2 was left untouched.")
+                .arg(QString::fromUtf8(e.what()), QString::fromStdString(linked.string())));
+        return true;
+    }
+
+    // NB: do NOT use remove_all on linked; on Windows remove_all deletes the junction's target
+    // contents. fs::remove removes only the reparse point.
+    std::error_code ec;
+    fs::remove(linked, ec);
+    if (ec) {
+        fs::remove_all(staged_unlink, cleanup_ec);
+        QMessageBox::critical(parent, QObject::tr("Failed to unlink"),
+                              QObject::tr("Could not remove the link at:\n\t%1\n\n%2")
+                                  .arg(QString::fromStdString(linked.string()),
+                                       QString::fromStdString(ec.message())));
+        return true;
+    }
+
+    fs::rename(staged_unlink, linked, ec);
+    if (ec) {
+        // Attempt to restore the link so Veshiru still points at the intact target.
+        (void)Common::FS::CreateSymlink(orig, linked);
+        QMessageBox::critical(
+            parent, QObject::tr("Failed to finalize unlink"),
+            QObject::tr("Could not move the verified copy into:\n\t%1\n\n%2\n\nA complete "
+                        "verified copy remains at:\n\t%3")
+                .arg(QString::fromStdString(linked.string()),
+                     QString::fromStdString(ec.message()),
+                     QString::fromStdString(staged_unlink.string())));
+        return true;
+    }
+
+    QMessageBox::information(parent, QObject::tr("Unlink Successful"),
+                             QObject::tr("Successfully unlinked save data. Verified independent "
+                                         "copies have been kept intact."));
+    return true;
+}
+
+} // namespace EglantineLink
+
+namespace {
 
 // Copies \p src_root to \p dst_root through VerifiedCopy after moving any existing dst_root
 // aside to a backup. Returns the backup path (empty if there was nothing to back up).

@@ -14,6 +14,7 @@
 
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QImage>
 #include <QObject>
 #include <QPainter>
@@ -50,14 +51,23 @@ static bool IsVeshiruTheme() {
     return UISettings::values.theme == "veshiru";
 }
 
+static qreal GameListIconDevicePixelRatio() {
+    if (const auto* app = qGuiApp) {
+        return (std::max)(qreal{1.0}, app->devicePixelRatio());
+    }
+    return 1.0;
+}
+
 static QPixmap GetDefaultIcon(u32 size) {
+    const qreal dpr = GameListIconDevicePixelRatio();
+    const int side = (std::max)(1, static_cast<int>(size * dpr + 0.5));
     if (size == 0 || !IsVeshiruTheme()) {
-        QPixmap icon(size, size);
+        QPixmap icon(side, side);
+        icon.setDevicePixelRatio(dpr);
         icon.fill(Qt::transparent);
         return icon;
     }
-    // Veshiru Blue draws a game without art as a tile with a controller glyph.
-    const int side = static_cast<int>(size);
+    // Veshiru Blue draws a game without art as a crisp HiDPI tile with a controller glyph.
     QImage icon(side, side, QImage::Format_ARGB32_Premultiplied);
     icon.fill(Qt::transparent);
     QPainter painter(&icon);
@@ -70,10 +80,12 @@ static QPixmap GetDefaultIcon(u32 size) {
     painter.drawImage(QRect((side - glyph) / 2, (side - glyph) / 2, glyph, glyph),
                       QImage(QStringLiteral(":/veshiru/icons/menu_gamepad@2x.png")));
     painter.end();
-    return QPixmap::fromImage(icon);
+    QPixmap out = QPixmap::fromImage(icon);
+    out.setDevicePixelRatio(dpr);
+    return out;
 }
 
-static QPixmap RoundedIcon(const QPixmap& picture) {
+static QPixmap RoundedIcon(const QPixmap& picture, qreal dpr = 1.0) {
     if (!IsVeshiruTheme() || picture.isNull()) {
         return picture;
     }
@@ -81,13 +93,40 @@ static QPixmap RoundedIcon(const QPixmap& picture) {
     icon.fill(Qt::transparent);
     QPainter painter(&icon);
     painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
     QPainterPath path;
     const qreal radius = picture.width() * 0.18;
     path.addRoundedRect(QRectF(icon.rect()), radius, radius);
     painter.setClipPath(path);
-    painter.drawPixmap(0, 0, picture);
+    QPixmap raw = picture;
+    raw.setDevicePixelRatio(1.0);
+    painter.drawPixmap(0, 0, raw);
     painter.end();
-    return QPixmap::fromImage(icon);
+    QPixmap out = QPixmap::fromImage(icon);
+    out.setDevicePixelRatio(dpr);
+    return out;
+}
+
+static QPixmap FormatHiDpiGameIcon(const u8* data, std::size_t byte_len, u32 logical_size,
+                                   bool* out_valid = nullptr) {
+    const qreal dpr = GameListIconDevicePixelRatio();
+    const int phys = (std::max)(1, static_cast<int>(logical_size * dpr + 0.5));
+    QImage source;
+    const bool loaded =
+        data != nullptr && byte_len > 0 &&
+        source.loadFromData(data, static_cast<int>(byte_len)) && !source.isNull();
+    if (out_valid != nullptr) {
+        *out_valid = loaded;
+    }
+    if (!loaded) {
+        return GetDefaultIcon(logical_size);
+    }
+    QImage scaled =
+        source.scaled(phys, phys, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    if (scaled.width() > phys || scaled.height() > phys) {
+        scaled = scaled.copy((scaled.width() - phys) / 2, (scaled.height() - phys) / 2, phys, phys);
+    }
+    return RoundedIcon(QPixmap::fromImage(scaled), dpr);
 }
 
 static QPixmap ThemeIcon(const char* name) {
@@ -136,6 +175,7 @@ public:
     static constexpr int FullPathRole = SortRole + 2;
     static constexpr int ProgramIdRole = SortRole + 3;
     static constexpr int FileTypeRole = SortRole + 4;
+    static constexpr int HasIconRole = SortRole + 5;
 
     GameListItemPath() = default;
     GameListItemPath(const QString& game_path, const std::vector<u8>& picture_data,
@@ -169,14 +209,30 @@ public:
         setData(tooltip, Qt::ToolTipRole);
 
         const u32 size = UISettings::CurrentGameIconSize().GetValue();
+        bool valid_icon = false;
+        setData(FormatHiDpiGameIcon(picture_data.data(), picture_data.size(), size, &valid_icon),
+                Qt::DecorationRole);
+        setData(valid_icon, HasIconRole);
+    }
 
-        QPixmap picture;
-        if (!picture.loadFromData(picture_data.data(), static_cast<u32>(picture_data.size()))) {
-            picture = GetDefaultIcon(size);
+    void ApplyArtwork(const QByteArray& png, const QString& resolved_title = {}) {
+        const u32 size = UISettings::CurrentGameIconSize().GetValue();
+        bool valid_icon = false;
+        const QPixmap pixmap = FormatHiDpiGameIcon(reinterpret_cast<const u8*>(png.constData()),
+                                                   static_cast<std::size_t>(png.size()), size,
+                                                   &valid_icon);
+        if (valid_icon) {
+            setData(pixmap, Qt::DecorationRole);
+            setData(true, HasIconRole);
         }
-        picture = picture.scaled(size, size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-
-        setData(RoundedIcon(picture), Qt::DecorationRole);
+        if (!resolved_title.isEmpty()) {
+            const QString current_title = data(TitleRole).toString();
+            const QString base_filename = QFileInfo(data(FullPathRole).toString()).completeBaseName();
+            if (current_title.isEmpty() || current_title == QStringLiteral(" ") ||
+                current_title == base_filename) {
+                setData(resolved_title, TitleRole);
+            }
+        }
     }
 
     int type() const override {

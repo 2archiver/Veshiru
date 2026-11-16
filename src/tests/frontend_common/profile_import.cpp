@@ -91,6 +91,23 @@ TEST_CASE("Move remaps every raw imported storage path before the source disappe
     CHECK(Migration::GetState(state) == Migration::State::Complete);
 }
 
+TEST_CASE("Imported v2 shader cache files are renamed to Veshiru's cache filename", "[migration]") {
+    Fixture fixture;
+    const auto shader_dir = fixture.root / "shader" / "0400c3f00006e000";
+    fs::create_directories(shader_dir);
+    {
+        std::ofstream log_file{shader_dir / "lichii-cache.v2.bin", std::ios::binary};
+        log_file << "LXSC2";
+        std::ofstream driver_file{shader_dir / "lichii-cache.v2.driver.bin", std::ios::binary};
+        driver_file << "DRV";
+    }
+    RemapImportedShaderCache(fixture.root / "shader");
+    CHECK(fs::is_regular_file(shader_dir / "veshiru-cache.v2.bin"));
+    CHECK(fs::is_regular_file(shader_dir / "veshiru-cache.v2.driver.bin"));
+    CHECK_FALSE(fs::exists(shader_dir / "lichii-cache.v2.bin"));
+    CHECK_FALSE(fs::exists(shader_dir / "lichii-cache.v2.driver.bin"));
+}
+
 #if !defined(_WIN32) && !defined(__ANDROID__)
 TEST_CASE("CLI-first configuration is blocked and portable user stays untouched", "[migration]") {
     Fixture fixture;

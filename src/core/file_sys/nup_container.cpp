@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstdlib>
 #include <condition_variable>
@@ -27,6 +28,7 @@
 #include "common/fs/file.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "common/memory_detect.h"
 #include "common/swap.h"
 #include "core/file_sys/vfs/vfs_offset.h"
 
@@ -160,7 +162,7 @@ bool Sha256(const u8* data, std::size_t size, std::array<u8, 0x20>& out) {
 }
 
 /// Bytes read from the extent per decode step; a read decodes at most one step past its end.
-constexpr std::size_t DecodeInputChunk = 128 * 1024;
+constexpr std::size_t DecodeInputChunk = 512 * 1024;
 /// How far past the decoded prefix a read may end and still decode only up to its end.
 constexpr u64 NearDecode = 1024 * 1024;
 /// What a zstd decoder holds while a member is partly decoded (measured: about 221 KiB).
@@ -578,18 +580,42 @@ NupContainer::NupContainer(VirtualFile file_, std::size_t memory_cache_cap,
     const char* fallback = std::getenv("EDEN_NUP_DAMAGED_FALLBACK");
     damaged_fallback = fallback == nullptr || std::string_view{fallback} != "0";
     cache->cap = memory_cache_cap;
-    // EDEN_NX2_NUP_CACHE_MIB=<MiB> (64 or more) keeps more decompressed members on hosts with RAM
-    // to spare, so area changes stop decompressing again what the 512 MiB default evicted.
     if (memory_cache_cap == DefaultCacheCap) {
-        if (const char* value = std::getenv("EDEN_NX2_NUP_CACHE_MIB");
-            value != nullptr && value[0] != '\0') {
-            const auto mib = static_cast<std::size_t>(std::strtoull(value, nullptr, 10));
-            if (mib >= 64) {
-                cache->cap = mib * 1024 * 1024;
+        constexpr u64 MiB = 1024ULL * 1024ULL;
+        const u64 host_ram_mib = Common::GetMemInfo().TotalPhysicalMemory / MiB;
+        const u64 max_cache_mib =
+            host_ram_mib >= 256 ? std::clamp<u64>(host_ram_mib / 4, 64, 8192) : 2048;
+        // On ample-RAM hosts (>= 24 GiB, e.g. 32 GiB laptops), keep 1.5 GiB of decompressed NUP
+        // members in memory by default so MKW/DKB course transitions avoid repeated Zstd spikes.
+        if (host_ram_mib >= 24 * 1024) {
+            cache->cap = static_cast<std::size_t>(std::min<u64>(1536, max_cache_mib) * MiB);
+        }
+        const char* value = std::getenv("VESHIRU_NUP_CACHE_MIB");
+        if (value == nullptr || value[0] == '\0') {
+            value = std::getenv("EDEN_NUP_CACHE_MIB");
+        }
+        if (value == nullptr || value[0] == '\0') {
+            value = std::getenv("EDEN_NX2_NUP_CACHE_MIB");
+        }
+        if (value != nullptr && value[0] != '\0') {
+            const std::string_view raw{value};
+            u64 requested_mib = 0;
+            const auto [end, ec] =
+                std::from_chars(raw.data(), raw.data() + raw.size(), requested_mib);
+            if (ec == std::errc{} && end == raw.data() + raw.size() && requested_mib > 0) {
+                const u64 clamped_mib = std::clamp<u64>(requested_mib, 64, max_cache_mib);
+                if (clamped_mib != requested_mib) {
+                    LOG_WARNING(Loader,
+                                "Clamped NUP cache override from {} MiB to {} MiB (host RAM {} MiB)",
+                                requested_mib, clamped_mib, host_ram_mib);
+                }
+                cache->cap = static_cast<std::size_t>(clamped_mib * MiB);
+            } else {
+                LOG_WARNING(Loader, "Ignoring invalid NUP cache override '{}'", raw);
             }
-            if (static std::atomic_flag logged; !logged.test_and_set()) {
-                LOG_INFO(Loader, "NUP decompression cache: {} MiB", cache->cap / (1024 * 1024));
-            }
+        }
+        if (static std::atomic_flag logged; !logged.test_and_set()) {
+            LOG_INFO(Loader, "NUP decompression cache: {} MiB", cache->cap / (1024 * 1024));
         }
     }
     cache->spill_dir = spill_dir_.empty()

@@ -434,11 +434,13 @@ bool UpdateDialog::DownloadTo(const QString& filename) {
 
     const bool wrong_size = m_asset.size != 0 && received != m_asset.size;
     const bool wrong_hash =
-        !m_asset.sha256.empty() &&
-        hash.result().toHex() != QByteArray::fromStdString(m_asset.sha256);
+        m_asset.sha256.empty() ||
+        hash.result().toHex().compare(QByteArray::fromStdString(m_asset.sha256),
+                                      Qt::CaseInsensitive) != 0;
     if (wrong_size || wrong_hash) {
-        LOG_ERROR(Frontend, "Downloaded {} does not match the published size or SHA-256",
-                  m_asset.filename);
+        LOG_ERROR(Frontend,
+                  "Downloaded {} failed verification (size={}, expected_size={}, has_sha256={})",
+                  m_asset.filename, received, m_asset.size, !m_asset.sha256.empty());
         file.cancelWriting();
         QtCommon::Frontend::Critical(
             tr("Download failed verification"),
