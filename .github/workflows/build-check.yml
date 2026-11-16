@@ -198,9 +198,9 @@ jobs:
         shell: bash
         run: |
           # Surface each Catch2 assertion, including cases earlier than the output tail.
-          grep -E -A 4 ': FAILED:|FAIL!' test-output.txt | head -200 | while IFS= read -r line; do
-            printf '::error title=Assertion::%s\n' "${line//$'\r'/}"
-          done || true
+          details=$(grep -E -A 4 ': FAILED:|FAIL!' test-output.txt | head -200 || true)
+          details=${details//$'\r'/}
+          printf '::error title=Assertions::%s\n' "${details//$'\n'/%0A}"
           tools/ci/ctest-annotate.sh build test-output.txt rerun
           exit 1
 
