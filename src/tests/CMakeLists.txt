@@ -5,7 +5,9 @@
 
 add_executable(tests
     common/addon_config.cpp
+    common/artwork_cache.cpp
     video_core/vulkan_overlay_filter.cpp
+    video_core/open_frame_gen_weights.cpp
     video_core/buffer_cache_ports.cpp
     video_core/unswizzle_workers.cpp
     video_core/block_linear_swizzle.cpp
@@ -14,7 +16,6 @@ add_executable(tests
     video_core/nx2_stutter_trace.cpp
     video_core/back_idle_trace.cpp
     video_core/list_macro_trace.cpp
-    video_core/nx2_list_grid.cpp
     video_core/host_mip_limits.cpp
     video_core/gpu_timestamp.cpp
     video_core/semaphore_waiters.cpp
@@ -47,6 +48,7 @@ add_executable(tests
     audio_core/hardware_audio_codec.cpp
     core/gpu_dirty_memory.cpp
     core/memory_acquire.cpp
+    core/ncz_decompressor.cpp
     core/builtin_patches.cpp
     core/builtin_font_glyphs.cpp
     core/system_test_context.h
@@ -64,7 +66,17 @@ add_executable(tests
     core/nx_archive.cpp
     frontend_common/nx_archive.cpp
     core/vfs_vector.cpp
+    core/ncz_io_guards.cpp
     core/file_sys_parsers.cpp
+    core/cheat_parser.cpp
+    core/kip_blz.cpp
+    core/kip_ini.cpp
+    core/kip_sections.cpp
+    core/npdm_kac.cpp
+    core/nx2_fence_action.cpp
+    video_core/ocarina_camera.cpp
+    video_core/vulkan_buffer_oom.cpp
+    video_core/nx2_sparse_residency.cpp
     input_common/calibration_lifetime.cpp
     video_core/ampere_logged_numeric.cpp
     video_core/ampere_logged_textures.cpp
@@ -231,6 +243,7 @@ add_executable(tests
     video_core/descriptor_payload_growth.cpp
     video_core/global_address_tracking.cpp
     video_core/global_atomic_routing.cpp
+    video_core/global_memory_routes.cpp
     video_core/nvn_storage_descriptor.cpp
     video_core/ampere_f2i.cpp
     video_core/ampere_ldc.cpp

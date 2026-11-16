@@ -156,4 +156,34 @@ void RemapImportedConfig(const fs::path& config_directory, const fs::path& sourc
     }
 }
 
+void RemapImportedShaderCache(const fs::path& shader_directory) {
+    std::error_code ec;
+    if (!fs::is_directory(shader_directory, ec)) {
+        return;
+    }
+    struct LegacyPair {
+        std::string_view from;
+        std::string_view to;
+    };
+    constexpr std::array pairs{
+        LegacyPair{"lichii-cache.v2.bin", "veshiru-cache.v2.bin"},
+        LegacyPair{"eglantine-cache.v2.bin", "veshiru-cache.v2.bin"},
+        LegacyPair{"lichii-cache.v2.driver.bin", "veshiru-cache.v2.driver.bin"},
+        LegacyPair{"eglantine-cache.v2.driver.bin", "veshiru-cache.v2.driver.bin"},
+    };
+    for (const auto& entry : fs::recursive_directory_iterator(shader_directory, ec)) {
+        if (ec || !entry.is_directory(ec)) {
+            continue;
+        }
+        for (const auto& pair : pairs) {
+            const fs::path src = entry.path() / pair.from;
+            const fs::path dst = entry.path() / pair.to;
+            if (fs::is_regular_file(src, ec) && !fs::exists(dst, ec)) {
+                fs::rename(src, dst, ec);
+                ec.clear();
+            }
+        }
+    }
+}
+
 } // namespace FrontendCommon

@@ -35,14 +35,43 @@ fixed high-end cap.
 Verified during this development pass:
 
 - Eglantine Community `nx2` and SmileyTatsu's Eglantine build 17/build 20: ASTC one-submit,
-  decode-image pooling, scratch bucketing, in-place opacity scan and texture-cache memory limit.
-- Lichii build 177: current compatibility/renderer baseline, NUP container/validation, budget-aware
-  texture collection, shader cache v2 and Windows crash/minidump work.
+  decode-image pooling, scratch bucketing, in-place opacity scan, texture-cache memory limit,
+  `R16G16B16A16_SFLOAT` HDR swapchain preservation and native asynchronous pipeline compilation.
+- Lichii (`#948`–`#1907`): current compatibility/renderer baseline, NUP container/validation,
+  budget-aware texture collection, `ShaderCacheV2`, Maxwell/Ampere shader lowering, `SET_SCISSOR`
+  stride, `RenderTargetState` layout sync, NCZ bounds validation and Windows crash/minidump work.
 - Nemyu (GitLab `nemyu-emulator/nemyu`, GitHub mirror `PlayerJV55/DeckEmuV2OOT`): NUP base-title
   peek, decompression-cache override, damaged-member fallback and slow-decompression diagnostics.
+- Deadly-pro/Open-Frame-gen (`Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod`,
+  MIT License): `NanoModel` depthwise-separable optical-flow U-Net + Squeeze-and-Excitation
+  architecture and `nano_v17_best` checkpoint weights, implemented natively in Vulkan compute
+  shaders (`open_frame_gen_*.comp`) with BatchNorm-folded FP16 embedded weights.
 
 Do not blindly merge whole forks. Port the smallest compatible change, preserve upstream SPDX
 notices, and add a regression test or a targeted diagnostic where practical.
+
+## Frame generation
+
+**Configure > Graphics > Frame Generation** (`frame_gen_type`) offers three modes:
+
+- **Off** (default)
+- **LS1 (Lossless Scaling)** (`FrameGenType::Lsfg`) — optical-flow search/inpaint/blend compute pipeline
+- **Open-Frame-Gen (Neural Optical Flow)** (`FrameGenType::OpenFrameGen`) — native Vulkan compute port
+  of `Open-Frame-Gen`'s `NanoModel` U-Net (`open_frame_gen_{prep,dw3x3,pw1x1,se,head,warp}.comp`).
+  Evaluates dense bidirectional optical flow and an occlusion mask at quarter resolution using
+  packed `rgba16f` tensor layers and 87,995 BatchNorm-folded FP16 weights (~176 KiB embedded in
+  `open_frame_gen_weights.cpp`), then performs bilinear flow upsampling, bidirectional warping and
+  CAS sharpening at presentation resolution without Python, CUDA or TensorRT dependencies.
+
+## High-resolution game artwork
+
+Game-list icons are cached lossless up to 512x512 PNG in
+`%APPDATA%\veshiru\cache\game_list\artwork\<title_id>.png` (`Common::ArtworkCache`) without
+touching user custom overrides in `load/<title_id>/icon.*`, and rendered with `devicePixelRatioF()`
+scaling on Windows HiDPI monitors. `IconSearch` queries Nintendo CDN catalogs by 16-hex Title ID
+first and falls back to an edition-aware scored title matcher (`Nintendo Switch 2 Edition`,
+Deluxe/Demo/Region disambiguation), silently auto-fetching missing artwork in the background and
+exposing **Refresh Game Artwork** on the game-list context menu.
 
 ## Save compatibility
 
@@ -55,29 +84,35 @@ than merged. Save data, title IDs, save-size files and compatible shader caches 
 On top of the first-launch import, `Right-click game > Link to Eglantine` transfers a single
 title's saves. Eglantine stores saves in the same `nand/user/save/0000000000000000/<user>/<title>`
 NAND layout, so the transfer copies the data to a sibling staging directory, verifies the copy
-(file list and sizes), moves the replaced directory aside to a timestamped `*.veshiru-backup-*`
-folder instead of deleting it, and finally makes the Veshiru save directory a junction pointing at
-the Eglantine save, so both emulators reference the same files. Junctions are created natively
-(`FSCTL_SET_REPARSE_POINT`) — no `mklink` shell-out — and every step reports its errors to the
-user instead of failing silently. If either directory is already a link, the menu offers to
-unlink (removing the junction and copying the save back) and stop.
+(file list, sizes and SHA-256 content digests), moves the replaced directory aside to a timestamped
+`*.veshiru-backup-*` folder instead of deleting it, and finally makes the Veshiru save directory a
+junction pointing at the Eglantine save, so both emulators reference the same files. Junctions are
+created and inspected natively (`FSCTL_SET_REPARSE_POINT` / `FSCTL_GET_REPARSE_POINT`) — no
+`mklink` shell-out — and unlinking stages and verifies the standalone copy before removing the
+junction. Every step reports its errors to the user instead of failing silently.
 
 ## Live console
 
 `Tools > Console` opens a non-modal Qt window independent of the main window. The common logging
 layer has a bounded MPSC console backend that is enabled only while the window is open. Logging
-threads enqueue already-formatted messages; a worker sanitizes, rate-limits and buffers them. The
-UI polls without blocking emulation. Display pause stops UI updates only.
+threads enqueue already-formatted messages; a worker sanitizes (redacting case-insensitive Windows
+and POSIX user paths and credential/token headers), rate-limits and buffers them. `veshiru_log.txt`
+flushes dirty buffers every second and on crash paths. The UI polls without blocking emulation, and
+display pause stops UI updates only.
 
 The console groups existing log classes into CPU, GPU, HLE, FS, Audio, Networking, Performance,
 Compatibility and Other. It does not invent performance statistics. Diagnostic export writes a
 sanitized zip containing logs, build/version information and hardware/graphics details; it never
 includes game files, saves, firmware, keys or credentials.
 
-## NUP
+## NUP and host memory
 
-NUP remains a major container format. The target profile sets `EDEN_NX2_NUP_CACHE_MIB=1024` because
-the host has 32 GB RAM; this is host memory, not GTX 1650 VRAM. `EDEN_NUP_DAMAGED_FALLBACK=0`
+NUP remains a major container format. Hosts with `>= 24 GiB` RAM automatically default the host-RAM
+NUP decompression cache to **1,536 MiB** (`1.5 GiB`; 256 MiB on smaller systems), overridable via
+`VESHIRU_NUP_CACHE_MIB` or `EDEN_NX2_NUP_CACHE_MIB` (clamped to `[0, 16384]` MiB), and stream zstd
+blocks in 512 KiB chunks; this is host memory, not GTX 1650 VRAM. On `>= 24 GiB` hosts, guest
+physical-memory zero-page sweeps (`TrimZeroPages`) are also deferred while emulation is actively
+running to avoid mid-gameplay `VirtualAlloc(MEM_RESET)` page-table churn. `EDEN_NUP_DAMAGED_FALLBACK=0`
 disables serving a sound sibling for a damaged `.zs` member. `NupContainer::PeekBaseTitleId` reads
 only package records so large collections can be scanned without parsing every container. The loader
 uses that peek to find a matching sibling base for an update-only file, exposes carried add-ons to

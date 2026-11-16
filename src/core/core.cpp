@@ -606,7 +606,13 @@ struct System::Impl {
         core_timing.SyncPause(false);
         Network::CancelPendingSocketOperations();
         kernel.SuspendEmulation(true);
+        if (service_manager) {
+            // Services on host threads that still wait for one on the guest cores give up (after
+            // a close during the boot shader load, the guest cores never started).
+            service_manager->Close();
+        }
         kernel.CloseServices();
+        applet_manager.DropPendingProcess();
         kernel.ShutdownCores();
         // Each step done tells the frontend the teardown still moves (see
         // Common::ShutdownProgress); the GPU's (pipeline caches) reports its own steps.
@@ -1218,6 +1224,9 @@ void System::RegisterApplicationChangedCallback(ApplicationChangedCallback&& cal
 void System::NotifyApplicationChanged(u64 program_id) {
     //LOG_DEBUG(Core, "Running application changed to {:016X}", program_id);
 
+    if (impl->gpu_core) {
+        impl->gpu_core->NotifyApplicationChanged(program_id);
+    }
     if (impl->application_changed_callback) {
         impl->application_changed_callback(program_id);
     }

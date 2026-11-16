@@ -68,6 +68,8 @@ void MigrationWorker::process() {
             if (clear_shader_cache && !shader.empty()) {
                 fs::remove_all(shader);
                 fs::create_directories(shader);
+            } else if (!shader.empty()) {
+                FrontendCommon::RemapImportedShaderCache(shader);
             }
         });
 

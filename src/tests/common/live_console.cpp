@@ -44,6 +44,14 @@ TEST_CASE("Console sanitisation removes personal paths and credential-like value
     CHECK(url.find("secret") == std::string::npos);
     CHECK(url.find("<redacted>@") != std::string::npos);
 
+    const auto win_ext = SanitizeLogMessage(R"(Open \\?\C:\Users\Alice\Games\mkw.nup)");
+    CHECK(win_ext.find("Alice") == std::string::npos);
+    CHECK(win_ext.find("<path>") != std::string::npos);
+
+    const auto auth = SanitizeLogMessage("Authorization: Bearer ghp_secret123456");
+    CHECK(auth.find("ghp_secret123456") == std::string::npos);
+    CHECK(auth.find("<redacted>") != std::string::npos);
+
     // Relative source locations and title IDs remain useful diagnostics.
     const auto relative = SanitizeLogMessage("core/loader/loader.cpp: 0100ABCD00000000");
     CHECK(relative.find("core/loader/loader.cpp") != std::string::npos);

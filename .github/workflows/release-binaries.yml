@@ -38,9 +38,9 @@ permissions:
   contents: read
 
 # Veshiru is a Windows-exclusive emulator. Only Windows packages are built and published, and the
-# Windows job is the only place that ships a PGO variant. veshiru-windows.profdata is an
-# MSVC-ABI profile written by a current clang-cl and trained in Veshiru on Ocarina of Time; it is
-# committed under the source tree, where the configure step reads it.
+# Windows job is the only place that ships a PGO variant. veshiru-windows.profdata is a balanced
+# multi-game MSVC-ABI profile written by LLVM 22 clang-cl across Switch 1 and Switch 2 workloads;
+# it is committed under the source tree, where the configure step reads it.
 
 # A running build is never cancelled: it finishes and publishes. A push meanwhile queues one build;
 # a later push replaces it, so the newest commit builds as soon as the running one is done.
@@ -52,6 +52,7 @@ jobs:
   prepare-release:
     name: Prepare release
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -78,6 +79,9 @@ jobs:
     name: ${{ matrix.platform }} binary
     needs: prepare-release
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 3000M
@@ -91,8 +95,8 @@ jobs:
           - platform: windows-x86_64
             runner: windows-2022
           # The windows-x86_64-pgo build is the windows-x86_64 build plus veshiru-windows.profdata,
-          # an MSVC-ABI profile trained on Ocarina of Time (see docs/CI.md). Both Windows builds
-          # are clang-cl with ThinLTO.
+          # a balanced multi-game MSVC-ABI profile across Switch 1 and Switch 2 titles (see docs/CI.md).
+          # Both Windows builds are clang-cl with ThinLTO.
           - platform: windows-x86_64-pgo
             runner: windows-2022
             pgo: true
@@ -101,6 +105,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       # The profile is in the source tree, where the configure step reads it.
       - name: Check PGO profile
@@ -135,8 +141,14 @@ jobs:
         shell: pwsh
         run: |
           $zip = Join-Path $env:RUNNER_TEMP 'sccache.zip'
+          $expectedSha = '28BE8C61F6B2C89B9EB2869F6AF7F78E6F992E78A8ABAE0CE855FCC129CBEAC1'
           Invoke-WebRequest -OutFile $zip https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.zip
+          $actualSha = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash
+          if ($actualSha -ne $expectedSha) {
+            throw "sccache SHA-256 mismatch: expected $expectedSha, got $actualSha"
+          }
           Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'sccache')
+          Remove-Item -Force $zip
           $bin = (Get-ChildItem -Recurse -Filter sccache.exe (Join-Path $env:RUNNER_TEMP 'sccache')).DirectoryName
           $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
@@ -177,8 +189,11 @@ jobs:
       # profile format 13, so the profile must come from the LLVM that tools/windows installs.
       - name: Configure Windows
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          build_tag="${RELEASE_TAG:-build-${GITHUB_RUN_NUMBER}}"
           flags="-DWIN32 -D_WINDOWS -DNOMINMAX -flto=thin"
           if [ -n '${{ matrix.profile }}' ]; then
             flags+=" -fprofile-use=$(cygpath -m "$PWD/${{ matrix.profile }}")"
@@ -196,7 +211,7 @@ jobs:
             -DENABLE_QT_TRANSLATION=ON \
             -DVESHIRU_USE_BUNDLED_SDL3=ON \
             -DENABLE_UPDATE_CHECKER=ON \
-            -DVESHIRU_BUILD_TAG=build-${{ github.run_number }} \
+            "-DVESHIRU_BUILD_TAG=${build_tag}" \
             -DVESHIRU_BUILD_PLATFORM=${{ matrix.platform }} \
             -DUSE_DISCORD_PRESENCE=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
@@ -263,6 +278,7 @@ jobs:
     needs: build
     if: github.event_name == 'push' || inputs.publish_release
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -323,7 +339,7 @@ jobs:
             {
               echo '| Build Type | Standard | PGO (Recommended) | Notes |'
               echo '| --- | --- | --- | --- |'
-              echo "| amd64 / x86_64 | $(link zip veshiru-windows-x86_64.zip) | $(link "PGO zip" veshiru-windows-x86_64-pgo.zip) | Both built with clang-cl and ThinLTO; the PGO zip adds a profile trained on Ocarina of Time |"
+              echo "| amd64 / x86_64 | $(link zip veshiru-windows-x86_64.zip) | $(link "PGO zip" veshiru-windows-x86_64-pgo.zip) | Both built with clang-cl and ThinLTO; the PGO zip uses a balanced multi-game Switch 1 & Switch 2 profile |"
             }
           }
 
@@ -349,7 +365,7 @@ jobs:
               echo
               assets_table
               echo
-              echo "The PGO build is the same program compiled with profile-guided optimization using a profile trained in Veshiru on Ocarina of Time, so other games gain less. Prefer it when your CPU supports it."
+              echo "The PGO build is compiled with profile-guided optimization using a balanced multi-game Switch 1 & Switch 2 runtime profile (\`veshiru-windows.profdata\`). Prefer it on modern x86_64 CPUs."
             } > notes.md
             gh release create "${tag}" release-dist/* \
               --repo "${GITHUB_REPOSITORY}" \
@@ -367,7 +383,7 @@ jobs:
               echo
               assets_table
               echo
-              echo 'The PGO build is the same program compiled with profile-guided optimization using a profile trained in Veshiru on Ocarina of Time, so other games gain less. Prefer it when your CPU supports it.'
+              echo 'The PGO build is compiled with profile-guided optimization using a balanced multi-game Switch 1 & Switch 2 runtime profile (`veshiru-windows.profdata`). Prefer it on modern x86_64 CPUs.'
             } > notes.md
 
             gh release create "${tag}" release-dist/* \

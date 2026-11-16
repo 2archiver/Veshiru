@@ -66,7 +66,6 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/present_lanczos.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/present_spline1.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/present_mmpx.frag
-    ${CMAKE_CURRENT_SOURCE_DIR}/nx2_list_grid_arguments.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/queries_prefix_scan_sum.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/queries_prefix_scan_sum_nosubgroups.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/resolve_conditional_render.comp
@@ -102,6 +101,12 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/sgsr1_shader_mobile_edge_direction.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_optical_flow.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/fsr3_frame_interpolation.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/open_frame_gen_prep.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/open_frame_gen_dw3x3.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/open_frame_gen_pw1x1.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/open_frame_gen_se.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/open_frame_gen_head.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/open_frame_gen_warp.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/dlss_network_probe.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_camera_motion.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_actor_motion.vert
@@ -111,6 +116,7 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_dlss_4k_composite.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_dlss_4k_reference.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_dlss_effects.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_dlss_effects_base.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_dlss_bias.comp
 )
 

@@ -1,0 +1,99 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Adapted from Open-Frame-gen NanoModel (MIT License, Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod)
+
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer InA {
+    float in_a[];
+};
+layout(std430, binding = 1) readonly buffer InB {
+    float in_b[];
+};
+layout(std430, binding = 2) readonly buffer Weights {
+    float weights[];
+};
+layout(std430, binding = 3) writeonly buffer OutBuf {
+    float out_buf[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint in_w;
+    uint in_h;
+    uint out_w;
+    uint out_h;
+    uint stride;
+    uint mode; // 0 = in_a, 1 = cat(in_a, in_b), 2 = cat(upsample2x_bilinear(in_a), in_b)
+    uint ch_a;
+    uint w_offset;
+    uint b_offset;
+} pc;
+
+shared float s_k[9];
+shared float s_b;
+
+float readIn(int ix, int iy, uint ch) {
+    if (ix < 0 || iy < 0 || ix >= int(pc.in_w) || iy >= int(pc.in_h)) {
+        return 0.0;
+    }
+    const uint ux = uint(ix);
+    const uint uy = uint(iy);
+    if (pc.mode == 0u) {
+        return in_a[(ch * pc.in_h + uy) * pc.in_w + ux];
+    }
+    if (ch >= pc.ch_a) {
+        const uint bc = ch - pc.ch_a;
+        return in_b[(bc * pc.in_h + uy) * pc.in_w + ux];
+    }
+    if (pc.mode == 1u) {
+        return in_a[(ch * pc.in_h + uy) * pc.in_w + ux];
+    }
+    // mode == 2: PyTorch F.interpolate(scale_factor=2, mode='bilinear', align_corners=False)
+    const uint aw = max(1u, pc.in_w >> 1u);
+    const uint ah = max(1u, pc.in_h >> 1u);
+    const float sx = clamp((float(ix) + 0.5) * 0.5 - 0.5, 0.0, float(aw - 1u));
+    const float sy = clamp((float(iy) + 0.5) * 0.5 - 0.5, 0.0, float(ah - 1u));
+    const uint x0 = uint(floor(sx));
+    const uint y0 = uint(floor(sy));
+    const uint x1 = min(x0 + 1u, aw - 1u);
+    const uint y1 = min(y0 + 1u, ah - 1u);
+    const float fx = sx - float(x0);
+    const float fy = sy - float(y0);
+    const uint base = ch * ah * aw;
+    const float v00 = in_a[base + y0 * aw + x0];
+    const float v10 = in_a[base + y0 * aw + x1];
+    const float v01 = in_a[base + y1 * aw + x0];
+    const float v11 = in_a[base + y1 * aw + x1];
+    return mix(mix(v00, v10, fx), mix(v01, v11, fx), fy);
+}
+
+void main() {
+    const uint c = gl_WorkGroupID.z;
+    const uint tid = gl_LocalInvocationIndex;
+    if (tid < 9u) {
+        s_k[tid] = weights[pc.w_offset + c * 9u + tid];
+    }
+    if (tid == 0u) {
+        s_b = weights[pc.b_offset + c];
+    }
+    barrier();
+
+    const uint ox = gl_GlobalInvocationID.x;
+    const uint oy = gl_GlobalInvocationID.y;
+    if (ox >= pc.out_w || oy >= pc.out_h) {
+        return;
+    }
+
+    const int base_x = int(ox * pc.stride) - 1;
+    const int base_y = int(oy * pc.stride) - 1;
+    float sum = s_b;
+    for (int ky = 0; ky < 3; ++ky) {
+        for (int kx = 0; kx < 3; ++kx) {
+            sum += s_k[ky * 3 + kx] * readIn(base_x + kx, base_y + ky, c);
+        }
+    }
+    const float act = sum >= 0.0 ? sum : sum * 0.1;
+    out_buf[(c * pc.out_h + oy) * pc.out_w + ox] = act;
+}

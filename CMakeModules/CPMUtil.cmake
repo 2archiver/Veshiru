@@ -174,14 +174,22 @@ function(get_cache_path package key out)
     return(PROPAGATE ${out})
 endfunction()
 
-# Download a URL to file, with a sha512 hash
+# Download a URL to file, with a sha256 or sha512 hash
 # And retry 5 times
 function(cpm_download url file)
     echo("Downloading ${url} to ${file}")
     list(LENGTH ARGN argn_len)
     if(argn_len GREATER 0)
         list(GET ARGN 0 hash)
-        set(args EXPECTED_HASH SHA512=${hash})
+        string(STRIP "${hash}" hash)
+        string(LENGTH "${hash}" hash_len)
+        if(hash_len EQUAL 64)
+            set(args EXPECTED_HASH SHA256=${hash})
+        elseif(hash_len EQUAL 128)
+            set(args EXPECTED_HASH SHA512=${hash})
+        else()
+            fatal("Invalid archive hash length (${hash_len}) for ${url}")
+        endif()
     else()
         unset(args)
     endif()
@@ -290,7 +298,7 @@ function(fetch_package)
     endif()
 
     # refetch if cache is invalid or forced
-    needs_refetch(${ARG_PATH} "${ARG_PATCH_KEY}" CACHE_INVALID)
+    needs_refetch(${ARG_PATH} "${ARG_PATCH_KEY}" "${ARG_HASH}" CACHE_INVALID)
 
     if (ARG_FORCE OR CACHE_INVALID)
         file(REMOVE_RECURSE ${ARG_PATH})
@@ -374,13 +382,15 @@ endfunction()
 
 # Check if a package needs to be redownloaded. This can occur if:
 # - Patch key is missing or mismatched
+# - Archive hash marker is missing or mismatched against cpmfile.json
 # - Package fetch dir is missing
 # path is the package cache path
-function(needs_refetch path patch_key out)
+function(needs_refetch path patch_key expected_hash out)
     set(patch_key_file "${path}/.cpm_patch_key")
+    set(archive_hash_file "${path}/.cpm_archive_sha512")
 
-    # download directory is empty or patch key file is missing
-    if (NOT EXISTS ${patch_key_file})
+    # download directory is empty or marker files are missing
+    if (NOT EXISTS "${patch_key_file}" OR NOT EXISTS "${archive_hash_file}")
         set(${out} TRUE PARENT_SCOPE)
         return()
     endif()
@@ -388,6 +398,17 @@ function(needs_refetch path patch_key out)
     # compare patch key
     file(READ "${patch_key_file}" current_patch_key)
     if (NOT current_patch_key STREQUAL patch_key)
+        set(${out} TRUE PARENT_SCOPE)
+        return()
+    endif()
+
+    # compare pinned archive hash
+    file(READ "${archive_hash_file}" current_archive_hash)
+    string(STRIP "${current_archive_hash}" current_archive_hash)
+    string(TOLOWER "${current_archive_hash}" current_archive_hash)
+    string(STRIP "${expected_hash}" norm_expected_hash)
+    string(TOLOWER "${norm_expected_hash}" norm_expected_hash)
+    if (NOT current_archive_hash STREQUAL norm_expected_hash)
         set(${out} TRUE PARENT_SCOPE)
     else()
         set(${out} FALSE PARENT_SCOPE)
@@ -566,6 +587,7 @@ macro(parse_object object)
         get_json_element("${object}" name name "${JSON_NAME}")
         get_json_element("${object}" extension extension "tar.zst")
         get_json_element("${object}" raw_disabled disabled_platforms)
+        get_json_element("${object}" raw_hashes hashes "")
 
         if(raw_disabled)
             array_to_list("${raw_disabled}"
@@ -695,6 +717,7 @@ function(AddJsonPackage)
             PACKAGE "${package}"
             EXTENSION "${extension}"
             DISABLED_PLATFORMS "${disabled_platforms}"
+            HASHES_JSON "${raw_hashes}"
 
             GIT_HOST "${git_host}"
 
@@ -949,7 +972,8 @@ function(AddCIPackage)
         PACKAGE
         EXTENSION
         GIT_HOST
-        PKGNAME)
+        PKGNAME
+        HASHES_JSON)
 
     set(multiValueArgs DISABLED_PLATFORMS)
 
@@ -1051,11 +1075,22 @@ function(AddCIPackage)
         get_cache_path(${ARTIFACT_PACKAGE} ${ARTIFACT_KEY} artifact_cache_path)
         set(cached_sha512_file "${artifact_cache_path}/.cpm_archive_sha512")
 
-        # A package already in the cache was verified against its sha512sum when it was
-        # downloaded; reuse that hash so configuring works while the host is unreachable
-        if(EXISTS "${cached_sha512_file}")
+        unset(pinned_ci_hash)
+        if(DEFINED PKG_ARGS_HASHES_JSON AND NOT "${PKG_ARGS_HASHES_JSON}" STREQUAL "")
+            string(JSON candidate_hash ERROR_VARIABLE candidate_err
+                GET "${PKG_ARGS_HASHES_JSON}" "${pkgname}")
+            if(NOT candidate_err AND NOT "${candidate_hash}" STREQUAL "")
+                string(STRIP "${candidate_hash}" pinned_ci_hash)
+            endif()
+        endif()
+
+        if(DEFINED pinned_ci_hash)
+            set(sha512sum_hash "${pinned_ci_hash}")
+        elseif(EXISTS "${cached_sha512_file}")
+            # A package already in the cache without a cpmfile.json entry was verified against
+            # its sha512sum when downloaded; reuse it while offline.
             file(READ "${cached_sha512_file}" sha512sum_hash)
-            string(STRIP "${sha512sum_hash}" sha512sum_hash)
+            string(REGEX MATCH "^[0-9a-fA-F]+" sha512sum_hash "${sha512sum_hash}")
         else()
             set(sha512sum_url
                 "https://${ARTIFACT_GIT_HOST}/${ARTIFACT_REPO}/releases/download/${ARTIFACT_VERSION}/${ARTIFACT}.sha512sum")
@@ -1072,7 +1107,7 @@ function(AddCIPackage)
             endif()
 
             file(READ "${sha512sum_file}" sha512sum_hash)
-            string(STRIP "${sha512sum_hash}" sha512sum_hash)
+            string(REGEX MATCH "^[0-9a-fA-F]+" sha512sum_hash "${sha512sum_hash}")
             file(REMOVE "${sha512sum_file}")
 
             # Caches extracted before hashes were recorded get the hash now

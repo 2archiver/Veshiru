@@ -220,6 +220,30 @@ if (CXX_CLANG_CL)
     endif()
 endif()
 
+set(VESHIRU_PGO_GENERATE "" CACHE PATH
+    "Directory for LLVM IR PGO raw profile output (-fprofile-generate); empty disables instrumentation")
+if (VESHIRU_PGO_GENERATE)
+    if (CXX_CLANG_CL OR CXX_CLANG)
+        file(TO_CMAKE_PATH "${VESHIRU_PGO_GENERATE}" _veshiru_pgo_dir)
+        add_compile_options(
+            "$<$<COMPILE_LANGUAGE:C,CXX>:-fprofile-generate=${_veshiru_pgo_dir}>"
+            "$<$<COMPILE_LANGUAGE:C,CXX>:-fprofile-update=atomic>")
+        if (CXX_CLANG_CL)
+            get_filename_component(_veshiru_clang_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+            file(GLOB _veshiru_profile_rt
+                "${_veshiru_clang_bin}/../lib/clang/*/lib/windows/clang_rt.profile-x86_64.lib")
+            if (_veshiru_profile_rt)
+                list(GET _veshiru_profile_rt 0 _veshiru_profile_lib)
+                link_libraries("${_veshiru_profile_lib}")
+            endif()
+        else()
+            add_link_options("-fprofile-generate=${_veshiru_pgo_dir}")
+        endif()
+    else()
+        message(WARNING "VESHIRU_PGO_GENERATE requires Clang or clang-cl; ignoring.")
+    endif()
+endif()
+
 # Disable Warnings as Errors for MSVC
 if (MSVC AND NOT CXX_CLANG)
     # This was dripping into spirv, being overriden, and causing cl flag override warning

@@ -151,6 +151,9 @@ private:
     void AddCustomDirPopup(QMenu& context_menu, QModelIndex selected);
     void AddPermDirPopup(QMenu& context_menu, QModelIndex selected);
     void AddFavoritesPopup(QMenu& context_menu);
+    void AutoFetchMissingArtwork();
+    void RefreshGameArtwork(u64 program_id, const std::string& path);
+    void ApplyArtworkToModel(u64 program_id, const QByteArray& png, const QString& resolved_title);
 
     void RetranslateUI();
 
@@ -183,6 +186,8 @@ private:
     bool nup_conversion_running{};
     bool nx_tool_running{};
     u64 reportable_program_id{};
+    class IconSearch* manual_icon_search{};
+    u64 manual_icon_program_id{};
     QAbstractItemView* m_currentView = nullptr;
 };
 

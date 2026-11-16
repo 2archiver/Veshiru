@@ -22,8 +22,11 @@
 
 #include <QGuiApplication>
 #include <QStringLiteral>
+#include "common/settings.h"
+#include "common/settings_enums.h"
 #include "core/frontend/emu_window.h"
 #include "qt_common/util/meta.h"
+#include "qt_common/util/vk.h"
 
 #include <QFile>
 
@@ -241,7 +244,9 @@ void Init(QWidget* root) {
     const auto build_id = std::string(Common::g_build_id);
 
     const auto veshiru_build =
-        fmt::format("Veshiru Development Build | {}-{}", branch_name, description);
+        Common::g_is_dev_build
+            ? fmt::format("Veshiru Development Build | {}-{}", branch_name, description)
+            : fmt::format("Veshiru {}", Common::g_build_version);
     const auto override_build =
         fmt::format(fmt::runtime(std::string(Common::g_title_bar_format_idle)), build_id);
     const auto veshiru_build_version = override_build.empty() ? veshiru_build : override_build;
@@ -249,6 +254,8 @@ void Init(QWidget* root) {
 
     // info logging
     LOG_INFO(Frontend, "Veshiru Version: {}", veshiru_build_version);
+    LOG_INFO(Frontend, "Veshiru Commit: {} | Built: {} | Compiler: {}", Common::g_scm_rev,
+             Common::g_build_date, Common::g_compiler_id);
     LogRuntimes();
 #ifdef ARCHITECTURE_x86_64
     const auto& caps = Common::g_cpu_caps;
@@ -274,6 +281,14 @@ void Init(QWidget* root) {
     LOG_INFO(Frontend, "Host RAM: {:.2f} GiB",
              Common::GetMemInfo().TotalPhysicalMemory / f64{1_GiB});
     LOG_INFO(Frontend, "Host Swap: {:.2f} GiB", Common::GetMemInfo().TotalSwapMemory / f64{1_GiB});
+    {
+        std::vector<VkDeviceInfo::Record> vk_records;
+        VkDeviceInfo::PopulateRecords(vk_records, nullptr);
+        for (std::size_t i = 0; i < vk_records.size(); ++i) {
+            LOG_INFO(Frontend, "Vulkan Device [{}]: {} ({} MiB VRAM)", i, vk_records[i].name,
+                     vk_records[i].device_local_memory / (1024 * 1024));
+        }
+    }
 #ifdef _WIN32
     LOG_INFO(Frontend, "Host Timer Resolution: {:.4f} ms",
              std::chrono::duration_cast<std::chrono::duration<f64, std::milli>>(

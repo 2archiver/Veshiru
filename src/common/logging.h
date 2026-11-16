@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -152,6 +153,12 @@ void Start();
 
 /// Explicitly stops the logger thread and flushes the buffers
 void Stop();
+
+/// Flushes all active logging backends (including the active session log file).
+void Flush();
+
+/// Returns the active session log file path (or an empty path if file logging is inactive).
+[[nodiscard]] std::filesystem::path GetActiveLogFilePath();
 
 /// The global filter will prevent any messages from even being processed if they are filtered.
 void SetGlobalFilter(const Filter& filter);

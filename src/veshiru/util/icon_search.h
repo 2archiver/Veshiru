@@ -4,10 +4,12 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include <QByteArray>
 #include <QFutureWatcher>
 #include <QObject>
 #include <QString>
@@ -33,13 +35,14 @@ struct IconSearchResult {
     std::vector<u8> icon_bytes;
     std::vector<std::vector<u8>> choices;
     std::string resolved_title;
+    std::string source;
     std::string error;
 };
 
-// Looks an icon up by game name on switchiconshowdown.com, falling back to SteamGridDB when the
-// user has set an API key. The search runs in the background under one 10 second deadline; errors,
-// the API key prompt and the choice between several icons are handled here, so a caller only
-// connects IconSelected.
+// Looks up HD game artwork by exact Title ID first, then canonical game name across official CDN /
+// switchiconshowdown.com / SteamGridDB (when an API key is configured). Interactive searches run
+// under one 10-second deadline; silent background hydration uses FetchSilentAsync without modal UI
+// or modifying any .nup / ROM container on disk.
 class IconSearch : public QObject {
     Q_OBJECT
 public:
@@ -49,9 +52,15 @@ public:
     void Start(const QString& name, u64 title_id = 0);
     bool IsRunning() const;
 
+    /// Non-blocking silent background fetch for Game List missing-icon hydration. Writes validated
+    /// HD PNG + JSON metadata into <CacheDir>/artwork/ and invokes `on_done` on `context`'s thread.
+    static void FetchSilentAsync(
+        u64 title_id, const QString& fallback_name, QObject* context,
+        std::function<void(QByteArray png, QString resolved_title)> on_done);
+
 signals:
     void RunningChanged(bool running);
-    // A 256x256 PNG, and the canonical title when the name was an alias (else empty).
+    // A 256x256 or 512x512 HD PNG, and the canonical title when resolved (else empty).
     void IconSelected(const QByteArray& png, const QString& resolved_title);
 
 private:

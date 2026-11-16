@@ -67,4 +67,27 @@ TEST_CASE("Keys of a generation the key file lacks are derived from its sources"
     std::filesystem::remove_all(directory);
 }
 
+TEST_CASE("Keyblob lines past the keyblob table are skipped", "[core][crypto]") {
+    auto& keys = KeyManager::Instance();
+    const auto directory = std::filesystem::temp_directory_path() / "veshiru-keyblob-index-test";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    {
+        std::ofstream file{directory / "prod.keys"};
+        file << "keyblob_ff = " << std::string(0x90 * 2, 'a') << '\n';
+        file << "encrypted_keyblob_ff = " << std::string(0xB0 * 2, 'b') << '\n';
+        file << "keyblob_20 = " << std::string(0x90 * 2, 'c') << '\n';
+    }
+
+    const auto titlekek_source = keys.GetKey(S128KeyType::Source, u64(SourceKeyType::Titlekek));
+    const auto previous = Common::FS::GetEdenPath(Common::FS::EdenPath::KeysDir);
+    Common::FS::SetEdenPath(Common::FS::EdenPath::KeysDir, directory);
+    keys.ReloadKeys();
+    Common::FS::SetEdenPath(Common::FS::EdenPath::KeysDir, previous);
+
+    CHECK(keys.GetKey(S128KeyType::Source, u64(SourceKeyType::Titlekek)) == titlekek_source);
+
+    std::filesystem::remove_all(directory);
+}
+
 } // namespace

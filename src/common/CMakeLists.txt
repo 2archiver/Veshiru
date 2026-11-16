@@ -22,6 +22,8 @@ add_library(
     common STATIC
     address_space.cpp
     address_space.h
+    artwork_cache.cpp
+    artwork_cache.h
     algorithm.h
     alignment.h
     announce_multiplayer_room.h

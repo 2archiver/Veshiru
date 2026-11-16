@@ -6,9 +6,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
-<h2 align=" Download Veshiru **only** from this repository's [releases page](https://github.com/2archiver/Veshiru/releases).
-
-<p align="center">
+<h2 align="center">Download Veshiru <b>only</b> from this repository's <a href="https://github.com/2archiver/Veshiru/releases">releases page</a>.</h2>
 
 # Veshiru
 
@@ -16,14 +14,16 @@ Veshiru is an experimental, open-source Nintendo Switch 2 emulator written in C+
 
 Veshiru is a Windows-exclusive emulator: it is developed, built and tested for 64-bit Windows 10 and 11, and only Windows packages are published.
 
-The current development target is a Windows 11 PC with an Intel Core i7-10750H, NVIDIA GTX 1650 4 GB, Intel UHD integrated graphics and 32 GB RAM. Performance decisions are made for that machine first: GTX 1650 Vulkan rendering, bounded VRAM use, asynchronous shader/pipeline work, proven ASTC decode improvements and low-overhead CPU/GPU threading. Veshiru is not affiliated with Nintendo.
+The current development target is a Windows 11 PC with an Intel Core i7-10750H, NVIDIA GTX 1650 4 GB, Intel UHD integrated graphics and 32 GB RAM. Performance decisions are made for that machine first: GTX 1650 Vulkan rendering, bounded VRAM use, 3-stage front/back GPU thread splitting, native asynchronous shader/pipeline compilation, optional Vulkan compute frame generation (**LS1** and **Open-Frame-Gen**), proven ASTC decode improvements and balanced multi-game Profile-Guided Optimization (`veshiru-windows.profdata`). Veshiru is not affiliated with Nintendo.
 
 ## Interface
 
 Veshiru uses its own **Veshiru Blue** interface: deep-navy surfaces, an electric-blue primary
 accent and cyan highlights, applied to the main window, game list, settings, dialogs and the live
-console. It is the default for new and existing installations, and the older themes remain
-available in **Configure > General > UI**.
+console. High-resolution game artwork (up to 512x512 PNG, cached in `%APPDATA%\veshiru\cache\game_list\artwork`)
+is rendered natively on Windows HiDPI displays and fetched automatically by Title ID or edition-aware
+search when container icons are missing. Veshiru Blue is the default for new and existing installations,
+and the older themes remain available in **Configure > General > UI**.
 
 ## Downloads and setup
 
@@ -45,7 +45,7 @@ The console backend is asynchronous and bounded, starts only while the window is
 
 ## NUP support
 
-Veshiru loads NUP containers with base/update metadata, icons, localized titles, integrity verification and streamed zstd members. The target profile keeps a 1 GiB NUP decompression cache in host RAM (`EDEN_NX2_NUP_CACHE_MIB`) and can serve a sound sibling for a damaged `.zs` member (`EDEN_NUP_DAMAGED_FALLBACK=0` disables that fallback). Carried add-on content is exposed to the game when it is not installed separately, and update-only packages can use a matching base `.nup` in the same folder. The per-game add-on list shows carried Update/DLC entries and honors their disable switches.
+Veshiru loads NUP containers with base/update metadata, full-resolution icons, localized titles, integrity verification and streamed zstd members (512 KiB decode chunks). Hosts with 24 GiB+ RAM automatically keep a 1.5 GiB NUP decompression cache in host RAM (`VESHIRU_NUP_CACHE_MIB` or `EDEN_NX2_NUP_CACHE_MIB` overrides the cap) and can serve a sound sibling for a damaged `.zs` member (`EDEN_NUP_DAMAGED_FALLBACK=0` disables that fallback). Carried add-on content is exposed to the game when it is not installed separately, and update-only packages can use a matching base `.nup` in the same folder. The per-game add-on list shows carried Update/DLC entries and honors their disable switches.
 
 ## Compatibility and issue reports
 
@@ -65,9 +65,8 @@ See the [build guide](docs/Build.md), [user documentation](docs/user/README.md),
 
 Keep changes focused and distinguish code-level checks from actual gameplay testing. Performance claims should be backed by identical-settings benchmarks on the target hardware.
 
-## 
 ## Credits and license
 
-Veshiru inherits the work of the Eglantine, Lichii, Nemyu, Eden, yuzu and Sudachi projects and their contributors, including Eglantine's original developer Camille LaVey, SmileyTatsu's GTX 1650 ASTC/memory work, zortos293's Lichii compatibility work and UesleiDev's Nemyu NUP/interface work. Original copyright notices and third-party licenses are retained.
+Veshiru inherits the work of the Eglantine, Lichii, Nemyu, Eden, yuzu and Sudachi projects and their contributors, including Eglantine's original developer Camille LaVey, SmileyTatsu's GTX 1650 ASTC/memory work, zortos293's Lichii compatibility work and UesleiDev's Nemyu NUP/interface work. The optional **Open-Frame-Gen** Vulkan neural optical-flow frame generator adapts `NanoModel` and pretrained weights from [Deadly-pro/Open-Frame-gen](https://github.com/Deadly-pro/Open-Frame-gen) (`Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod`, MIT License). Original copyright notices and third-party licenses are retained.
 
 See [LICENSE.txt](LICENSE.txt) and the source files for applicable license terms.

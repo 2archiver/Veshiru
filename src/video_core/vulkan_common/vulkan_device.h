@@ -510,6 +510,12 @@ FN_MAX_LIMIT_LIST
         return features.descriptor_indexing.shaderStorageTexelBufferArrayNonUniformIndexing;
     }
 
+    /// Returns true if storage buffer pointers can be chosen per invocation and decorated NonUniform.
+    bool IsNonUniformStorageBufferPointerSupported() const {
+        return features.variable_pointer.variablePointersStorageBuffer &&
+               (instance_version >= VK_API_VERSION_1_2 || extensions.descriptor_indexing);
+    }
+
     /// Returns true if the device supports float64 natively.
     bool IsFloat64Supported() const {
         return features.features.shaderFloat64;
@@ -1097,6 +1103,12 @@ FN_MAX_LIMIT_LIST
         return device_access_memory;
     }
 
+    /// Size of the largest device-local heap (with EDEN_NX2_VRAM_LIMIT_MIB applied). Unlike
+    /// GetDeviceLocalMemory() this is the card's memory, not a budget with a reserve taken off.
+    u64 GetDeviceLocalHeapSize() const {
+        return main_heap_size;
+    }
+
     bool CanReportMemoryUsage() const {
         return extensions.memory_budget;
     }
@@ -1439,6 +1451,7 @@ private:
     std::vector<size_t> valid_heap_memory;                   ///< Heaps used.
     size_t main_heap{};       ///< Largest device-local heap, where images live.
     u64 heap_size_limit{};    ///< EDEN_NX2_VRAM_LIMIT_MIB for device-local heaps, 0 if unset.
+    u64 main_heap_size{};     ///< Size of main_heap, with heap_size_limit applied.
 
     /// Format properties dictionary.
     ::Common::unordered_map<VkFormat, VkFormatProperties> format_properties;

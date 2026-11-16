@@ -1,0 +1,58 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Adapted from Open-Frame-gen NanoModel (MIT License, Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod)
+
+#version 460 core
+
+layout(local_size_x = 96, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer FeatureBuf {
+    float feat[];
+};
+layout(std430, binding = 1) readonly buffer Weights {
+    float weights[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint plane_size;
+    uint fc0_w_off;
+    uint fc0_b_off;
+    uint fc2_w_off;
+    uint fc2_b_off;
+} pc;
+
+shared float s_mean[96];
+shared float s_mid[12];
+
+void main() {
+    const uint c = gl_LocalInvocationID.x;
+    const uint base = c * pc.plane_size;
+
+    float acc = 0.0;
+    for (uint i = 0u; i < pc.plane_size; ++i) {
+        acc += feat[base + i];
+    }
+    s_mean[c] = acc / float(max(1u, pc.plane_size));
+    barrier();
+
+    if (c < 12u) {
+        float m = weights[pc.fc0_b_off + c];
+        const uint w_row = pc.fc0_w_off + c * 96u;
+        for (uint j = 0u; j < 96u; ++j) {
+            m += weights[w_row + j] * s_mean[j];
+        }
+        s_mid[c] = max(0.0, m);
+    }
+    barrier();
+
+    float logit = weights[pc.fc2_b_off + c];
+    const uint w2_row = pc.fc2_w_off + c * 12u;
+    for (uint m = 0u; m < 12u; ++m) {
+        logit += weights[w2_row + m] * s_mid[m];
+    }
+    const float scale = 1.0 / (1.0 + exp(-logit));
+
+    for (uint i = 0u; i < pc.plane_size; ++i) {
+        feat[base + i] *= scale;
+    }
+}

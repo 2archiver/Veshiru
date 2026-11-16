@@ -1,0 +1,73 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Adapted from Open-Frame-gen NanoModel (MIT License, Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod)
+
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(std430, binding = 0) readonly buffer InBuf {
+    float in_buf[];
+};
+layout(std430, binding = 1) readonly buffer Weights {
+    float weights[];
+};
+layout(std430, binding = 2) writeonly buffer OutBuf {
+    float out_buf[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint width;
+    uint height;
+    uint in_ch;
+    uint out_ch;
+    uint w_offset;
+    uint b_offset;
+} pc;
+
+shared float s_w[4][32];
+shared float s_b[4];
+
+void main() {
+    const uint ox = gl_GlobalInvocationID.x;
+    const uint oy = gl_GlobalInvocationID.y;
+    const uint oc = gl_GlobalInvocationID.z;
+    const uint lz = gl_LocalInvocationID.z;
+    const uint tid = gl_LocalInvocationIndex; // 0..255
+
+    if (tid < 4u) {
+        const uint g_oc = gl_WorkGroupID.z * 4u + tid;
+        s_b[tid] = g_oc < pc.out_ch ? weights[pc.b_offset + g_oc] : 0.0;
+    }
+    barrier();
+
+    const bool valid_px = (ox < pc.width) && (oy < pc.height) && (oc < pc.out_ch);
+    const uint plane = pc.width * pc.height;
+    const uint px_idx = oy * pc.width + ox;
+    float sum = s_b[lz];
+
+    for (uint ic_base = 0u; ic_base < pc.in_ch; ic_base += 32u) {
+        if (tid < 128u) {
+            const uint w_lz = tid >> 5u;
+            const uint w_k = tid & 31u;
+            const uint g_oc = gl_WorkGroupID.z * 4u + w_lz;
+            const uint g_ic = ic_base + w_k;
+            s_w[w_lz][w_k] = (g_oc < pc.out_ch && g_ic < pc.in_ch)
+                                 ? weights[pc.w_offset + g_oc * pc.in_ch + g_ic]
+                                 : 0.0;
+        }
+        barrier();
+
+        if (valid_px) {
+            const uint count = min(32u, pc.in_ch - ic_base);
+            for (uint k = 0u; k < count; ++k) {
+                sum += s_w[lz][k] * in_buf[(ic_base + k) * plane + px_idx];
+            }
+        }
+        barrier();
+    }
+
+    if (valid_px) {
+        out_buf[oc * plane + px_idx] = sum >= 0.0 ? sum : sum * 0.1;
+    }
+}

@@ -25,12 +25,22 @@ typedef struct _VESHIRU_MOUNT_POINT_REPARSE_BUFFER {
     WCHAR PathBuffer[1];
 } VESHIRU_MOUNT_POINT_REPARSE_BUFFER;
 
+typedef struct _VESHIRU_SYMLINK_REPARSE_BUFFER {
+    USHORT SubstituteNameOffset;
+    USHORT SubstituteNameLength;
+    USHORT PrintNameOffset;
+    USHORT PrintNameLength;
+    ULONG Flags;
+    WCHAR PathBuffer[1];
+} VESHIRU_SYMLINK_REPARSE_BUFFER;
+
 typedef struct _VESHIRU_REPARSE_DATA_BUFFER {
     ULONG ReparseTag;
     USHORT ReparseDataLength;
     USHORT Reserved;
     union {
         VESHIRU_MOUNT_POINT_REPARSE_BUFFER MountPointReparseBuffer;
+        VESHIRU_SYMLINK_REPARSE_BUFFER SymbolicLinkReparseBuffer;
     };
 } VESHIRU_REPARSE_DATA_BUFFER;
 #endif
@@ -156,6 +166,79 @@ bool IsSymlink(const fs::path &path)
            (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 #else
     return boost::filesystem::is_symlink(boost::filesystem::path{path});
+#endif
+}
+
+std::optional<fs::path> ReadSymlinkTarget(const fs::path& path) {
+    if (!IsSymlink(path)) {
+        return std::nullopt;
+    }
+#ifdef _WIN32
+    const HANDLE handle = CreateFileW(path.c_str(), 0,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr, OPEN_EXISTING,
+                                      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                                      nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return std::nullopt;
+    }
+    std::vector<char> buffer(MAXIMUM_REPARSE_DATA_BUFFER_SIZE, 0);
+    DWORD bytes_returned = 0;
+    const BOOL ok = DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, nullptr, 0, buffer.data(),
+                                    static_cast<DWORD>(buffer.size()), &bytes_returned, nullptr);
+    CloseHandle(handle);
+    if (!ok || bytes_returned < offsetof(VESHIRU_REPARSE_DATA_BUFFER, MountPointReparseBuffer)) {
+        return std::nullopt;
+    }
+    const auto* reparse = reinterpret_cast<const VESHIRU_REPARSE_DATA_BUFFER*>(buffer.data());
+    const wchar_t* name_ptr = nullptr;
+    std::size_t name_chars = 0;
+    bool relative_symlink = false;
+    if (reparse->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT) {
+        const auto& mp = reparse->MountPointReparseBuffer;
+        const std::size_t end_bytes = offsetof(VESHIRU_REPARSE_DATA_BUFFER, MountPointReparseBuffer.PathBuffer) +
+                                      mp.SubstituteNameOffset + mp.SubstituteNameLength;
+        if (end_bytes > bytes_returned || (mp.SubstituteNameLength % sizeof(wchar_t)) != 0) {
+            return std::nullopt;
+        }
+        name_ptr = reinterpret_cast<const wchar_t*>(
+            reinterpret_cast<const char*>(mp.PathBuffer) + mp.SubstituteNameOffset);
+        name_chars = mp.SubstituteNameLength / sizeof(wchar_t);
+    } else if (reparse->ReparseTag == IO_REPARSE_TAG_SYMLINK) {
+        const auto& sl = reparse->SymbolicLinkReparseBuffer;
+        const std::size_t end_bytes = offsetof(VESHIRU_REPARSE_DATA_BUFFER, SymbolicLinkReparseBuffer.PathBuffer) +
+                                      sl.SubstituteNameOffset + sl.SubstituteNameLength;
+        if (end_bytes > bytes_returned || (sl.SubstituteNameLength % sizeof(wchar_t)) != 0) {
+            return std::nullopt;
+        }
+        name_ptr = reinterpret_cast<const wchar_t*>(
+            reinterpret_cast<const char*>(sl.PathBuffer) + sl.SubstituteNameOffset);
+        name_chars = sl.SubstituteNameLength / sizeof(wchar_t);
+        relative_symlink = (sl.Flags & 0x00000001UL) != 0; // SYMLINK_FLAG_RELATIVE
+    } else {
+        return std::nullopt;
+    }
+    std::wstring target_str(name_ptr, name_chars);
+    if (target_str.starts_with(L"\\??\\UNC\\")) {
+        target_str = L"\\\\" + target_str.substr(8);
+    } else if (target_str.starts_with(L"\\??\\") || target_str.starts_with(L"\\\\?\\")) {
+        target_str = target_str.substr(4);
+    }
+    fs::path resolved{target_str};
+    if (relative_symlink && resolved.is_relative()) {
+        resolved = (path.parent_path() / resolved).lexically_normal();
+    }
+    return resolved;
+#else
+    std::error_code ec;
+    fs::path resolved = fs::read_symlink(path, ec);
+    if (ec) {
+        return std::nullopt;
+    }
+    if (resolved.is_relative()) {
+        resolved = (path.parent_path() / resolved).lexically_normal();
+    }
+    return resolved;
 #endif
 }
 

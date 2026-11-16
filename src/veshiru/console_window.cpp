@@ -30,10 +30,6 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-#include <quazip.h>
-#include <quazipfile.h>
-#include <quazipnewinfo.h>
-
 #include "common/cpu_features.h"
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
@@ -126,11 +122,11 @@ ConsoleWindow::ConsoleWindow(QWidget* parent) : QMainWindow(parent) {
     auto* clear_button = new QPushButton(tr("Clear"), central);
     auto* copy_button = new QPushButton(tr("Copy"), central);
     auto* save_button = new QPushButton(tr("Save .log…"), central);
-    auto* diagnostics_button = new QPushButton(tr("Export diagnostics…"), central);
+    save_button->setToolTip(tr("Save a sanitized .log file including build, hardware, Vulkan "
+                               "device and session log diagnostics."));
     controls->addWidget(clear_button);
     controls->addWidget(copy_button);
     controls->addWidget(save_button);
-    controls->addWidget(diagnostics_button);
     layout->addLayout(controls);
 
     auto* subsystems = new QHBoxLayout;
@@ -173,7 +169,6 @@ ConsoleWindow::ConsoleWindow(QWidget* parent) : QMainWindow(parent) {
     connect(clear_button, &QPushButton::clicked, this, &ConsoleWindow::Clear);
     connect(copy_button, &QPushButton::clicked, this, &ConsoleWindow::Copy);
     connect(save_button, &QPushButton::clicked, this, &ConsoleWindow::Save);
-    connect(diagnostics_button, &QPushButton::clicked, this, &ConsoleWindow::ExportDiagnostics);
 
     poll_timer = new QTimer(this);
     connect(poll_timer, &QTimer::timeout, this, &ConsoleWindow::Poll);
@@ -227,167 +222,85 @@ void ConsoleWindow::Copy() const {
 
 void ConsoleWindow::Save() {
     const auto filename = QFileDialog::getSaveFileName(
-        this, tr("Save Console Log"),
-        QStringLiteral("veshiru-console.log"), tr("Log files (*.log);;Text files (*.txt)"));
+        this, tr("Save Diagnostic Log"),
+        QStringLiteral("veshiru.log"), tr("Log files (*.log);;Text files (*.txt)"));
     if (filename.isEmpty()) {
         return;
     }
+    Common::Log::Flush();
+
     QFile file(filename);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-        QMessageBox::warning(this, tr("Save Console Log"),
+        QMessageBox::warning(this, tr("Save Diagnostic Log"),
                              tr("Could not write the selected file."));
         return;
     }
     QTextStream stream(&file);
-    for (const auto& entry : Common::Log::ReadLiveConsole(0, 10000)) {
-        if (PassesFilter(entry)) {
-            stream << FormatPlain(entry) << '\n';
-        }
-    }
-}
-
-void ConsoleWindow::ExportDiagnostics() {
-    const auto filename = QFileDialog::getSaveFileName(
-        this, tr("Export Diagnostic Bundle"), QStringLiteral("veshiru-diagnostics.zip"),
-        tr("Zip archives (*.zip)"));
-    if (filename.isEmpty()) {
-        return;
-    }
-
-    QuaZip zip(filename);
-    if (!zip.open(QuaZip::mdCreate)) {
-        QMessageBox::warning(this, tr("Export Diagnostics"), tr("Could not create the archive."));
-        return;
-    }
-
-    const auto add_text = [&zip](const QString& name, const QByteArray& data) {
-        QuaZipFile file(&zip);
-        if (!file.open(QIODevice::WriteOnly, QuaZipNewInfo(name))) {
-            return false;
-        }
-        const auto written = file.write(data);
-        file.close();
-        return written == data.size();
-    };
-
-    QString system;
-    {
-        QTextStream stream(&system);
-        stream << "Veshiru diagnostic bundle\n";
-        stream << "Generated: " << QDateTime::currentDateTimeUtc().toString(Qt::ISODate) << "\n\n";
-        stream << "Build: " << QString::fromUtf8(Common::g_build_fullname) << "\n";
-        stream << "Version: " << QString::fromUtf8(Common::g_build_version) << "\n";
-        stream << "Commit: " << QString::fromUtf8(Common::g_scm_rev) << "\n";
-        stream << "Build date: " << QString::fromUtf8(Common::g_build_date) << "\n";
-        stream << "Compiler: " << QString::fromUtf8(Common::g_compiler_id) << "\n";
-        stream << "OS: " << QSysInfo::prettyProductName() << " (" << QSysInfo::kernelVersion()
-               << ", " << QSysInfo::currentCpuArchitecture() << ")\n";
+    stream << "# Veshiru Sanitized Diagnostic Log\n";
+    stream << "# Generated: " << QDateTime::currentDateTimeUtc().toString(Qt::ISODate) << "\n";
+    stream << "# Build: " << QString::fromUtf8(Common::g_build_fullname).trimmed() << " ("
+           << QString::fromUtf8(Common::g_build_version) << ", commit "
+           << QString::fromUtf8(Common::g_scm_rev) << ")\n";
+    stream << "# Built: " << QString::fromUtf8(Common::g_build_date) << " | Compiler: "
+           << QString::fromUtf8(Common::g_compiler_id) << "\n";
+    stream << "# OS: " << QSysInfo::prettyProductName() << " (" << QSysInfo::kernelVersion() << ", "
+           << QSysInfo::currentCpuArchitecture() << ")\n";
 #ifdef ARCHITECTURE_x86_64
-        stream << "CPU: " << QString::fromUtf8(Common::g_cpu_caps.cpu_string) << "\n";
-        stream << "CPU base/max MHz: " << Common::g_cpu_caps.base_frequency << " / "
-               << Common::g_cpu_caps.max_frequency << "\n";
-        stream << "AVX2: " << (Common::g_cpu_caps.avx2 ? "yes" : "no") << "\n";
+    stream << "# CPU: " << QString::fromUtf8(Common::g_cpu_caps.cpu_string)
+           << " | AVX2: " << (Common::g_cpu_caps.avx2 ? "yes" : "no") << "\n";
 #endif
-        stream << "Logical processors: " << QThread::idealThreadCount() << "\n";
-        const auto ram = Common::GetHostRam();
-        stream << "RAM MiB: " << ram.bytes / (1024 * 1024) << "\n\n";
-        stream << "Renderer backend: "
-               << QString::fromStdString(std::string{Settings::CanonicalizeEnum(
-                      Settings::values.renderer_backend.GetValue())})
-               << "\n";
-        stream << "Selected Vulkan device index: " << Settings::values.vulkan_device.GetValue()
-               << "\n";
-        stream << "GPU accuracy: "
-               << QString::fromStdString(std::string{Settings::CanonicalizeEnum(
-                      Settings::values.gpu_accuracy.GetValue())})
-               << "\n";
-        stream << "Texture cache memory limit MiB (0=Auto): "
-               << Settings::values.texture_cache_memory_limit.GetValue() << "\n";
-        stream << "Disk shader cache: " << Settings::values.use_disk_shader_cache.GetValue()
-               << "\n";
-        stream << "Vulkan driver pipeline cache: "
-               << Settings::values.use_vulkan_driver_pipeline_cache.GetValue() << "\n";
-        stream << "Asynchronous shaders: " << Settings::values.use_asynchronous_shaders.GetValue()
-               << "\n";
-        stream << "Log filter: " << QString::fromStdString(Settings::values.log_filter.GetValue())
-               << "\n\n";
-
-        std::vector<VkDeviceInfo::Record> records;
-        VkDeviceInfo::PopulateRecords(records, nullptr);
-        stream << "Vulkan devices:\n";
-        for (const auto& record : records) {
-            stream << "  - " << QString::fromStdString(record.name) << "\n";
-            stream << "    Device-local memory MiB: " << record.device_local_memory / (1024 * 1024)
-                   << "\n";
-            stream << "    Broken compute: " << (record.has_broken_compute ? "yes" : "no") << "\n";
-            stream << "    FSR4 capable: " << (record.fsr4_capable ? "yes" : "no") << "\n";
-        }
+    const auto ram = Common::GetHostRam();
+    stream << "# Logical processors: " << QThread::idealThreadCount()
+           << " | RAM MiB: " << ram.bytes / (1024 * 1024) << "\n";
+    stream << "# Renderer: "
+           << QString::fromStdString(std::string{
+                  Settings::CanonicalizeEnum(Settings::values.renderer_backend.GetValue())})
+           << " | Vulkan device index: " << Settings::values.vulkan_device.GetValue()
+           << " | GPU accuracy: "
+           << QString::fromStdString(std::string{
+                  Settings::CanonicalizeEnum(Settings::values.gpu_accuracy.GetValue())})
+           << " | Texture cache limit MiB: "
+           << Settings::values.texture_cache_memory_limit.GetValue() << "\n";
+    stream << "# Disk shader cache: " << Settings::values.use_disk_shader_cache.GetValue()
+           << " | Driver pipeline cache: "
+           << Settings::values.use_vulkan_driver_pipeline_cache.GetValue()
+           << " | Async shaders: " << Settings::values.use_asynchronous_shaders.GetValue()
+           << " | Frame generation: "
+           << QString::fromStdString(std::string{
+                  Settings::CanonicalizeEnum(Settings::values.frame_gen_type.GetValue())})
+           << "\n";
+    std::vector<VkDeviceInfo::Record> records;
+    VkDeviceInfo::PopulateRecords(records, nullptr);
+    for (std::size_t i = 0; i < records.size(); ++i) {
+        const auto& record = records[i];
+        stream << "# Vulkan GPU [" << i << "]: " << QString::fromStdString(record.name) << " ("
+               << record.device_local_memory / (1024 * 1024) << " MiB VRAM)\n";
     }
 
-    QString console;
-    {
-        QTextStream stream(&console);
+    const bool filtered = HasActiveFilter();
+    const auto active_log_path = Common::Log::GetActiveLogFilePath();
+    bool wrote_full_session = false;
+    if (!filtered && !active_log_path.empty()) {
+        QFile input(QString::fromStdString(Common::FS::PathToUTF8String(active_log_path)));
+        if (input.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            stream << "# Source: full sanitized session log\n\n";
+            while (!input.atEnd()) {
+                const auto line = QString::fromUtf8(input.readLine());
+                stream << QString::fromStdString(
+                    Common::Log::SanitizeLogMessage(line.toStdString()));
+            }
+            wrote_full_session = true;
+        }
+    }
+    if (!wrote_full_session) {
+        stream << (filtered ? "# Source: filtered console view\n\n"
+                            : "# Source: live console buffer\n\n");
         for (const auto& entry : Common::Log::ReadLiveConsole(0, 10000)) {
-            stream << FormatPlain(entry) << '\n';
-        }
-    }
-
-    const auto log_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir);
-    const auto add_sanitized_log = [&zip](const QString& name, const std::filesystem::path& path) {
-        QFile input(QString::fromStdString(Common::FS::PathToUTF8String(path)));
-        if (!input.open(QIODevice::ReadOnly)) {
-            return true; // A rotated log may not exist yet.
-        }
-        QuaZipFile output(&zip);
-        if (!output.open(QIODevice::WriteOnly, QuaZipNewInfo(name))) {
-            return false;
-        }
-        while (!input.atEnd()) {
-            const auto line = QString::fromUtf8(input.readLine());
-            const auto sanitized =
-                QString::fromStdString(Common::Log::SanitizeLogMessage(line.toStdString())).toUtf8();
-            if (output.write(sanitized) != sanitized.size()) {
-                output.close();
-                return false;
+            if (!filtered || PassesFilter(entry)) {
+                stream << FormatPlain(entry) << '\n';
             }
         }
-        output.close();
-        return true;
-    };
-
-    bool ok = true;
-    ok &= add_text(QStringLiteral("README.txt"),
-                   QByteArrayLiteral("This bundle contains sanitized emulator logs, build information "
-                                     "and hardware/graphics details. It does not include game files, "
-                                     "firmware, encryption keys, save data or personal documents. "
-                                     "Review it before sharing.\n"));
-    ok &= add_text(QStringLiteral("system.txt"), system.toUtf8());
-    ok &= add_text(QStringLiteral("console.log"), console.toUtf8());
-    ok &= add_sanitized_log(QStringLiteral("logs/") + QString::fromUtf8(LOG_FILE), log_dir / LOG_FILE);
-    ok &= add_sanitized_log(QStringLiteral("logs/") + QString::fromUtf8(LOG_FILE) +
-                                QStringLiteral(".old.txt"),
-                            log_dir / (std::string{LOG_FILE} + ".old.txt"));
-    // The fallback name logging.cpp derives: the stem with "_2" before the extension.
-    const std::string original{LOG_FILE};
-    const auto dot = original.rfind('.');
-    const auto rotated_second = dot == std::string::npos
-                                    ? original + "_2"
-                                    : original.substr(0, dot) + "_2" + original.substr(dot);
-    ok &= add_sanitized_log(QStringLiteral("logs/") + QString::fromStdString(rotated_second),
-                            log_dir / rotated_second);
-    ok &= add_sanitized_log(QStringLiteral("logs/") + QString::fromStdString(rotated_second) +
-                                QStringLiteral(".old.txt"),
-                            log_dir / (rotated_second + ".old.txt"));
-    zip.close();
-
-    if (!ok) {
-        QMessageBox::warning(this, tr("Export Diagnostics"),
-                             tr("The archive was created, but some files could not be written."));
-        return;
     }
-    QMessageBox::information(this, tr("Export Diagnostics"),
-                             tr("Diagnostic bundle saved. No game files, saves, keys or credentials "
-                                "are included."));
 }
 
 void ConsoleWindow::UpdateStatus() {
@@ -397,6 +310,21 @@ void ConsoleWindow::UpdateStatus() {
                         .arg(stats.dropped_queue)
                         .arg(stats.dropped_buffer)
                         .arg(stats.rate_limited));
+}
+
+bool ConsoleWindow::HasActiveFilter() const {
+    if (level_combo->currentData().toInt() > static_cast<int>(Common::Log::Level::Trace)) {
+        return true;
+    }
+    if (!search->text().isEmpty()) {
+        return true;
+    }
+    for (const auto* check : subsystem_checks) {
+        if (check && !check->isChecked()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool ConsoleWindow::PassesFilter(const Common::Log::ConsoleEntry& entry) const {

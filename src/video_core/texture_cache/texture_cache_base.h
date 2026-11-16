@@ -348,6 +348,10 @@ public:
     /// UpdateRenderTargets should be called before this
     Framebuffer* GetFramebuffer();
 
+    /// Whether render target 0 was first written in an earlier frame (cleared this frame or not):
+    /// a target the title draws every frame rather than one it fills once.
+    [[nodiscard]] bool ColorTargetWrittenBeforeThisFrame() noexcept;
+
     [[nodiscard]] const RenderTargets& GetRenderTargets() const noexcept {
         return render_targets;
     }

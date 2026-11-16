@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -23,7 +24,7 @@ using VideoCore::Surface::DefaultBlockWidth;
 
 namespace {
 /// Returns the base layer and mip level offset
-[[nodiscard]] std::pair<s32, s32> LayerMipOffset(s32 diff, u32 layer_stride) {
+[[nodiscard]] std::pair<u64, u64> LayerMipOffset(u64 diff, u32 layer_stride) {
     if (layer_stride == 0) {
         return {0, diff};
     } else {
@@ -81,25 +82,28 @@ std::optional<SubresourceBase> ImageBase::TryFindBase(GPUVAddr other_addr) const
         // Subresource address can't be lower than the base
         return std::nullopt;
     }
-    const u32 diff = static_cast<u32>(other_addr - gpu_addr);
-    if (diff > guest_size_bytes) {
+    const u64 diff = other_addr - gpu_addr;
+    if (diff >= guest_size_bytes) {
         // This can happen when two CPU addresses are used for different GPU addresses
         return std::nullopt;
     }
     if (info.type != ImageType::e3D) {
         const auto [layer, mip_offset] = LayerMipOffset(diff, info.layer_stride);
         const auto end = mip_level_offsets.begin() + info.resources.levels;
-        const auto it = std::find(mip_level_offsets.begin(), end, static_cast<u32>(mip_offset));
-        if (layer > info.resources.layers || it == end) {
+        const auto it = std::find(mip_level_offsets.begin(), end, mip_offset);
+        if (layer >= static_cast<u64>(info.resources.layers) || it == end) {
             return std::nullopt;
         }
         return SubresourceBase{
             .level = static_cast<s32>(std::distance(mip_level_offsets.begin(), it)),
-            .layer = layer,
+            .layer = static_cast<s32>(layer),
         };
     } else {
         // TODO: Consider using binary_search after a threshold
-        const auto it = std::ranges::find(slice_offsets, diff);
+        if (diff > (std::numeric_limits<u32>::max)()) {
+            return std::nullopt;
+        }
+        const auto it = std::ranges::find(slice_offsets, static_cast<u32>(diff));
         if (it == slice_offsets.cend()) {
             return std::nullopt;
         }

@@ -77,6 +77,20 @@ TEST_CASE("Veshiru offers newer stable releases to an installed stable release",
     const auto wrong_platform = std::array{
         MakeRelease("v1.3.0", "veshiru-linux-x86_64.AppImage")};
     CHECK_FALSE(UpdateChecker::SelectUpdate(wrong_platform, "v1.2.0", "windows-x86_64"));
+
+    // Legacy build-N installs bridge to non-prerelease stable vX.Y.Z when no newer build-N exists.
+    auto stable_v13 = MakeRelease("v1.3.0", "veshiru-windows-x86_64.zip");
+    stable_v13.prerelease = false;
+    auto stable_v12 = MakeRelease("v1.2.0", "veshiru-windows-x86_64.zip");
+    stable_v12.prerelease = false;
+    const auto bridge_releases = std::array{
+        MakeRelease("build-177", "veshiru-windows-x86_64.zip"),
+        stable_v12,
+        stable_v13,
+    };
+    const auto bridged = UpdateChecker::SelectUpdate(bridge_releases, "build-177", "windows-x86_64");
+    REQUIRE(bridged);
+    CHECK(bridged->tag == "v1.3.0");
 }
 
 TEST_CASE("Veshiru compares stable versions numerically, not as strings", "[updater]") {

@@ -1,0 +1,50 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Adapted from Open-Frame-gen NanoModel (MIT License, Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod)
+
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D PrevFrame;
+layout(binding = 1) uniform sampler2D CurrFrame;
+layout(std430, binding = 2) writeonly buffer OutTensor {
+    float xs[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint out_w;
+    uint out_h;
+} pc;
+
+void main() {
+    const uint x = gl_GlobalInvocationID.x;
+    const uint y = gl_GlobalInvocationID.y;
+    if (x >= pc.out_w || y >= pc.out_h) {
+        return;
+    }
+
+    const vec2 inv_full = 1.0 / vec2(float(pc.out_w * 2u), float(pc.out_h * 2u));
+    const vec2 uv00 = (vec2(float(x * 2u), float(y * 2u)) + 0.5) * inv_full;
+    const vec2 uv10 = (vec2(float(x * 2u + 1u), float(y * 2u)) + 0.5) * inv_full;
+    const vec2 uv01 = (vec2(float(x * 2u), float(y * 2u + 1u)) + 0.5) * inv_full;
+    const vec2 uv11 = (vec2(float(x * 2u + 1u), float(y * 2u + 1u)) + 0.5) * inv_full;
+
+    const vec3 p = 0.25 * (clamp(textureLod(PrevFrame, uv00, 0.0).rgb, 0.0, 1.0) +
+                           clamp(textureLod(PrevFrame, uv10, 0.0).rgb, 0.0, 1.0) +
+                           clamp(textureLod(PrevFrame, uv01, 0.0).rgb, 0.0, 1.0) +
+                           clamp(textureLod(PrevFrame, uv11, 0.0).rgb, 0.0, 1.0));
+    const vec3 c = 0.25 * (clamp(textureLod(CurrFrame, uv00, 0.0).rgb, 0.0, 1.0) +
+                           clamp(textureLod(CurrFrame, uv10, 0.0).rgb, 0.0, 1.0) +
+                           clamp(textureLod(CurrFrame, uv01, 0.0).rgb, 0.0, 1.0) +
+                           clamp(textureLod(CurrFrame, uv11, 0.0).rgb, 0.0, 1.0));
+
+    const uint plane = pc.out_w * pc.out_h;
+    const uint idx = y * pc.out_w + x;
+    xs[0u * plane + idx] = p.r;
+    xs[1u * plane + idx] = p.g;
+    xs[2u * plane + idx] = p.b;
+    xs[3u * plane + idx] = c.r;
+    xs[4u * plane + idx] = c.g;
+    xs[5u * plane + idx] = c.b;
+}

@@ -50,4 +50,6 @@ TEST_CASE("DLSS Frame Generation runs only for a game with inputs, else FSR3", "
     }
     REQUIRE(ActiveFrameGenType(FrameGenType::Lsfg, DlssgBlock::NotLoaded) == FrameGenType::Lsfg);
     REQUIRE(ActiveFrameGenType(FrameGenType::Fsr3, DlssgBlock::None) == FrameGenType::Fsr3);
+    REQUIRE(ActiveFrameGenType(FrameGenType::OpenFrameGen, DlssgBlock::NoStreamline) ==
+            FrameGenType::OpenFrameGen);
 }
