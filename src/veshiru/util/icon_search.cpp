@@ -31,6 +31,7 @@
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPixmap>
+#include <QPointer>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 

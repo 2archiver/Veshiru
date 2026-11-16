@@ -483,7 +483,7 @@ ResultStatus AppLoader_NUP::ReadProgramIds(std::vector<u64>& out_program_ids) {
 ResultStatus AppLoader_NUP::ReadIcon(std::vector<u8>& buffer) {
     if (icon_file != nullptr) {
         auto embedded = icon_file->ReadAllBytes();
-        if (Common::ArtworkCache::IsValidImageBytes(embedded)) {
+        if (!embedded.empty()) {
             buffer = std::move(embedded);
             return ResultStatus::Success;
         }

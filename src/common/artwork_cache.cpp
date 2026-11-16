@@ -331,7 +331,7 @@ int ScoreArtworkCandidate(std::string_view candidate, std::string_view target_qu
     for (const auto bad : bad_edition_tokens) {
         const std::string bad_str{bad};
         if (c_words.contains(bad_str) && !q_words.contains(bad_str)) {
-            score -= 650;
+            score -= 1000;
         }
     }
     const std::string lower_cand = Common::ToLower(std::string{candidate});
@@ -493,7 +493,9 @@ bool WriteCachedArtwork(u64 title_id, std::span<const u8> png_bytes,
             out << meta.dump(2) << '\n';
             out.flush();
         }
-        if (out) {
+        const bool written = static_cast<bool>(out);
+        out.close();
+        if (written && out) {
             std::filesystem::rename(tmp_meta, meta_path, ec);
             if (ec) {
                 std::filesystem::remove(meta_path, ec);
@@ -532,7 +534,9 @@ void RecordArtworkFailure(u64 title_id, std::string_view reason, u64 cooldown_se
     }
     out << meta.dump(2) << '\n';
     out.flush();
-    if (out) {
+    const bool written = static_cast<bool>(out);
+    out.close();
+    if (written && out) {
         std::filesystem::rename(tmp_meta, meta_path, ec);
         if (ec) {
             std::filesystem::remove(meta_path, ec);
