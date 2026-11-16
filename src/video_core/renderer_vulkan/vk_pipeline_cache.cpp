@@ -2471,7 +2471,7 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
         }();
         if (native_async && mode != NativePendingMode::Wait &&
             regs.zeta_enable != 0 && regs.depth_test_enable != 0 &&
-            regs.mesh_shader.enable == 0 && has_color_write &&
+            !regs.IsMeshEnabled() && has_color_write &&
             texture_cache.ColorTargetWrittenBeforeThisFrame()) {
             mode = NativePendingMode::Skip;
         }

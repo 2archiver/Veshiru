@@ -58,17 +58,17 @@ TEST_CASE("NCZBLOCK header validates block count against decompressed size", "[n
     std::memcpy(bytes.data() + BlockStart + 32 + blk0.size(), blk1.data(), blk1.size());
 
     SECTION("valid NCZBLOCK header is accepted") {
-        CHECK(Core::Crypto::IsSupportedNCZ(
+        CHECK(Core::Crypto::IsBlockCompressedNCZ(
             std::make_shared<FileSys::VectorVfsFile>(bytes)));
     }
     SECTION("block count that does not match the decompressed size is rejected") {
         bytes[BlockStart + 11] = 32; // 4 GiB blocks, so 20000 bytes must only have 1 block, not 2
-        CHECK_FALSE(Core::Crypto::IsSupportedNCZ(
+        CHECK_FALSE(Core::Crypto::IsBlockCompressedNCZ(
             std::make_shared<FileSys::VectorVfsFile>(std::move(bytes))));
     }
     SECTION("decompressed size needing more blocks than the table holds is rejected") {
         PutLe(bytes, BlockStart + 16, 40000, 8);
-        CHECK_FALSE(Core::Crypto::IsSupportedNCZ(
+        CHECK_FALSE(Core::Crypto::IsBlockCompressedNCZ(
             std::make_shared<FileSys::VectorVfsFile>(std::move(bytes))));
     }
 }

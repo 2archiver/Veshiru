@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# usage: bump-version.sh major|minor|patch|rc|release
-# major/minor/patch: start a new X.Y.Z-rc1 after a stable release (moves [Unreleased]).
-# rc:                increment X.Y.Z-rcN.
-# release:           promote X.Y.Z-rcN to X.Y.Z and date its changelog heading.
+# usage: bump-version.sh major|minor|patch
+# Prepare a new stable version and move [Unreleased] entries into its dated section.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -36,7 +34,7 @@ section_has_body() {
 case "$bump" in
   major|minor|patch)
     [[ -z "$rc" ]] || {
-      echo "$cur is still a release candidate; use rc or release first" >&2
+      echo "$cur is a release candidate; set VERSION to a stable version first" >&2
       exit 1
     }
     case "$bump" in
@@ -44,7 +42,7 @@ case "$bump" in
       minor) core="$maj.$((min + 1)).0" ;;
       patch) core="$maj.$min.$((pat + 1))" ;;
     esac
-    new="$core-rc1"
+    new="$core"
     section_exists Unreleased || {
       echo "CHANGELOG.md is missing the exact ## [Unreleased] heading" >&2
       exit 1
@@ -58,11 +56,11 @@ case "$bump" in
       exit 1
     }
     # Move the Unreleased body below the new version heading and leave a fresh empty Unreleased.
-    awk -v ver="$core" '
+    awk -v ver="$core" -v date="$today" '
       $0 == "## [Unreleased]" && !done {
         print "## [Unreleased]"
         print ""
-        print "## [" ver "]"
+        print "## [" ver "] - " date
         done = 1
         next
       }
@@ -71,39 +69,8 @@ case "$bump" in
     ' CHANGELOG.md > CHANGELOG.md.tmp
     mv CHANGELOG.md.tmp CHANGELOG.md
     ;;
-  rc)
-    [[ -n "$rc" ]] || {
-      echo "$cur is not a release candidate; use major, minor or patch" >&2
-      exit 1
-    }
-    section_exists "$core" && section_has_body "$core" || {
-      echo "CHANGELOG.md has no non-empty [$core] section" >&2
-      exit 1
-    }
-    new="$core-rc$((rc + 1))"
-    ;;
-  release)
-    [[ -n "$rc" ]] || {
-      echo "$cur is already a stable version" >&2
-      exit 1
-    }
-    section_exists "$core" && section_has_body "$core" || {
-      echo "CHANGELOG.md has no non-empty [$core] section" >&2
-      exit 1
-    }
-    new="$core"
-    # A release date belongs to the stable release, not to each RC iteration.
-    awk -v ver="$core" -v date="$today" '
-      $0 == "## [" ver "]" || index($0, "## [" ver "] - ") == 1 {
-        if (!done) { print "## [" ver "] - " date; done = 1; next }
-      }
-      { print }
-      END { if (!done) exit 1 }
-    ' CHANGELOG.md > CHANGELOG.md.tmp
-    mv CHANGELOG.md.tmp CHANGELOG.md
-    ;;
   *)
-    echo "usage: bump-version.sh major|minor|patch|rc|release" >&2
+    echo "usage: bump-version.sh major|minor|patch" >&2
     exit 1
     ;;
 esac

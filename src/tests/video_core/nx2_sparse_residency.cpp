@@ -22,7 +22,7 @@ constexpr u64 MiB = 1024 * KiB;
 struct SparseRegionScope {
     GPUVAddr address;
     ~SparseRegionScope() {
-        Tegra::Nx2SparseRegionUnregistered(address);
+        Tegra::Nx2SparseRegionDestroyed(address);
     }
 };
 } // namespace
@@ -52,7 +52,7 @@ TEST_CASE("Sparse HDR atlas tracks mapped tiles beyond 4 GiB", "[nx2_memory]") {
     CHECK_FALSE(image.TryFindBase(address + size + 4));
 
     SparseRegionScope scope{address};
-    Tegra::Nx2SparseRegionTiled(address, size, 4 * MiB);
+    Tegra::Nx2SparseRegionCreated(address, size, 4 * MiB);
     Tegra::Nx2SparseTilesMapped(address, layer_offset, 64 * KiB, true);
     const auto ranges = Tegra::Nx2SparseDataRanges(address, size);
     const auto rects = SparseTileRects(info, ranges, 256, 256, 5);

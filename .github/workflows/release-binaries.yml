@@ -3,36 +3,14 @@ name: release-binaries
 on:
   workflow_dispatch:
     inputs:
-      publish_release:
-        description: Publish the binaries as a GitHub release
-        type: boolean
-        default: true
       release_tag:
-        description: Tag the release manually (e.g. v1.1.0) instead of the build-N tag. The tag is created at this commit and the release is marked stable.
+        description: Stable release tag matching VERSION (e.g. v1.3.0)
         type: string
-        default: ""
+        required: true
       release_title:
-        description: Title for the manually tagged release (e.g. Veshiru 1.1). Defaults to "Veshiru <tag>".
+        description: Release title (defaults to Veshiru followed by the tag)
         type: string
-        default: ""
-  push:
-    branches:
-      - main
-    # A binary only changes when build inputs change; docs-only pushes skip the build.
-    paths:
-      - "src/**"
-      # Test-only changes cannot change a binary: the build configures with BUILD_TESTING=OFF and
-      # VESHIRU_TESTS=OFF below, so a push that only touches src/tests has nothing to rebuild.
-      - "!src/tests/**"
-      - "CMakeLists.txt"
-      - "CMakeModules/**"
-      - "externals/**"
-      - "dist/**"
-      - "tools/**"
-      - ".patch/**"
-      - "cpmfile.json"
-      - "*.profdata"
-      - ".github/workflows/release-binaries.yml"
+        required: false
 
 permissions:
   contents: read
@@ -42,10 +20,9 @@ permissions:
 # multi-game MSVC-ABI profile written by LLVM 22 clang-cl across Switch 1 and Switch 2 workloads;
 # it is committed under the source tree, where the configure step reads it.
 
-# A running build is never cancelled: it finishes and publishes. A push meanwhile queues one build;
-# a later push replaces it, so the newest commit builds as soon as the running one is done.
+# Only one release may publish at a time; do not cancel an in-flight release.
 concurrency:
-  group: release-binaries-${{ github.ref }}
+  group: release-binaries-stable
   cancel-in-progress: false
 
 jobs:
@@ -54,25 +31,27 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
     steps:
-      - name: Prepare release tag
-        if: github.event_name == 'push' || inputs.publish_release
+      - name: Check out source and tags
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate stable release
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          tag="${RELEASE_TAG:-build-${GITHUB_RUN_NUMBER}}"
-          if tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null); then
-            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
-              echo "Release tag $tag points to $tag_sha instead of $GITHUB_SHA"
-              exit 1
-            fi
-          else
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA"
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "Releases must be dispatched from main" >&2; exit 1; }
+          version=$(tr -d '[:space:]' < VERSION)
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "VERSION must be a stable X.Y.Z" >&2; exit 1; }
+          [[ "$RELEASE_TAG" == "v$version" ]] || { echo "release_tag must match VERSION (v$version)" >&2; exit 1; }
+          section=$(bash tools/ci/changelog-section.sh "$version")
+          [[ -n "$(tr -d '[:space:]' <<< "$section")" ]] || { echo "Missing changelog for $version" >&2; exit 1; }
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            [[ "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" == "$GITHUB_SHA" ]] || { echo "Tag already points to a different commit" >&2; exit 1; }
           fi
 
   build:
@@ -193,7 +172,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          build_tag="${RELEASE_TAG:-build-${GITHUB_RUN_NUMBER}}"
+          build_tag="$RELEASE_TAG"
           flags="-DWIN32 -D_WINDOWS -DNOMINMAX -flto=thin"
           if [ -n '${{ matrix.profile }}' ]; then
             flags+=" -fprofile-use=$(cygpath -m "$PWD/${{ matrix.profile }}")"
@@ -271,12 +250,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Publishes every binary as a GitHub pre-release once every build succeeded: on pushes to
-  # main, and on manual runs unless "Publish the binaries as a GitHub release" is unticked.
+  # Publish a stable release only after both Windows builds succeed.
   release:
     name: Publish release
     needs: build
-    if: github.event_name == 'push' || inputs.publish_release
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -285,6 +262,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Download binaries
@@ -323,12 +301,7 @@ jobs:
           RELEASE_TITLE: ${{ inputs.release_title }}
         run: |
           set -euo pipefail
-          tag="${RELEASE_TAG:-build-${GITHUB_RUN_NUMBER}}"
-          tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$tag" --jq '.object.sha')
-          if [ "$tag_sha" != "$GITHUB_SHA" ]; then
-            echo "Release tag $tag points to $tag_sha instead of $GITHUB_SHA"
-            exit 1
-          fi
+          tag="$RELEASE_TAG"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
 
           link() { [[ -e "release-dist/$2" ]] && echo "[$1](${base}/$2)" || true; }
@@ -343,71 +316,38 @@ jobs:
             }
           }
 
-          if [ -n "$RELEASE_TAG" ]; then
-            # Manually tagged stable release: the notes come from the matching CHANGELOG section.
-            title="${RELEASE_TITLE:-Veshiru $RELEASE_TAG}"
-            version="${RELEASE_TAG#v}"
-            changelog=$(gh api "repos/${GITHUB_REPOSITORY}/contents/CHANGELOG.md?ref=${GITHUB_SHA}" --jq .content | base64 -d)
-            section=$(awk -v name="$version" '
-              $0 == "## [" name "]" || index($0, "## [" name "] - ") == 1 { found = 1; next }
-              found && /^## / { exit }
-              found { print }
-            ' <<< "$changelog")
-            if [ -z "$(tr -d '[:space:]' <<< "$section")" ]; then
-              echo "CHANGELOG.md has no non-empty [$version] section" >&2
-              exit 1
-            fi
-            {
-              printf '%s\n\n' "$section"
-              echo "Veshiru is a Windows-exclusive emulator: it is built and tested for 64-bit Windows 10 and 11 only."
-              echo
-              echo "Extract the entire zip and run \`veshiru.exe\`, or \`veshiru-cmd.exe\` from a terminal."
-              echo
-              assets_table
-              echo
-              echo "The PGO build is compiled with profile-guided optimization using a balanced multi-game Switch 1 & Switch 2 runtime profile (\`veshiru-windows.profdata\`). Prefer it on modern x86_64 CPUs."
-            } > notes.md
-            gh release create "${tag}" release-dist/* \
-              --repo "${GITHUB_REPOSITORY}" \
-              --verify-tag \
-              --title "$title" \
-              --notes-file notes.md
-          else
-            {
-              printf 'Automatic build of `%s` at %s.\n\n' "$GITHUB_REF_NAME" "$GITHUB_SHA"
-              echo 'Veshiru is a Windows-exclusive emulator. Linux and macOS packages are no longer produced.'
-              echo
-              echo '## Windows'
-              echo
-              echo 'Windows packages are in-place zip files: extract and run `veshiru.exe`, or `veshiru-cmd.exe` from a terminal.'
-              echo
-              assets_table
-              echo
-              echo 'The PGO build is compiled with profile-guided optimization using a balanced multi-game Switch 1 & Switch 2 runtime profile (`veshiru-windows.profdata`). Prefer it on modern x86_64 CPUs.'
-            } > notes.md
-
-            gh release create "${tag}" release-dist/* \
-              --repo "${GITHUB_REPOSITORY}" \
-              --verify-tag \
-              --prerelease \
-              --title "Veshiru ${GITHUB_REF_NAME} build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
-              --notes-file notes.md
-          fi
-
-      # VESHIRU_BUILD_TAG is baked into every binary as build-<run number>, and the update checker
-      # compares release tags against it. A release whose tag or title names another run would be
-      # skipped or offered wrongly, so fail the run instead of leaving it published.
-      - name: Verify the release tag matches the run number
-        if: (github.event_name == 'push' || inputs.publish_release) && !inputs.release_tag
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          expected="build-${GITHUB_RUN_NUMBER}"
-          published_tag=$(gh release view "$expected" --repo "${GITHUB_REPOSITORY}" --json tagName --jq '.tagName')
-          published_title=$(gh release view "$expected" --repo "${GITHUB_REPOSITORY}" --json name --jq '.name')
-          if [ "$published_tag" != "$expected" ] || [[ "$published_title" != *" build ${GITHUB_RUN_NUMBER} ("* ]]; then
-            echo "Release is tagged '$published_tag' and titled '$published_title', expected tag $expected and a title naming build ${GITHUB_RUN_NUMBER}"
+          # Manually tagged stable release: the notes come from the matching CHANGELOG section.
+          title="${RELEASE_TITLE:-Veshiru $RELEASE_TAG}"
+          version="${RELEASE_TAG#v}"
+          changelog=$(gh api "repos/${GITHUB_REPOSITORY}/contents/CHANGELOG.md?ref=${GITHUB_SHA}" --jq .content | base64 -d)
+          section=$(awk -v name="$version" '
+            $0 == "## [" name "]" || index($0, "## [" name "] - ") == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' <<< "$changelog")
+          if [ -z "$(tr -d '[:space:]' <<< "$section")" ]; then
+            echo "CHANGELOG.md has no non-empty [$version] section" >&2
             exit 1
           fi
+          {
+            printf '%s\n\n' "$section"
+            echo "Veshiru is a Windows-exclusive emulator: it is built and tested for 64-bit Windows 10 and 11 only."
+            echo
+            echo "Extract the entire zip and run \`veshiru.exe\`, or \`veshiru-cmd.exe\` from a terminal."
+            echo
+            assets_table
+            echo
+            echo "The PGO build is compiled with profile-guided optimization using a balanced multi-game Switch 1 & Switch 2 runtime profile (\`veshiru-windows.profdata\`). Prefer it on modern x86_64 CPUs."
+          } > notes.md
+          # Create the tag only after both packages are ready. Existing tags must name this commit.
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            [[ "$(git rev-parse "refs/tags/$tag^{commit}")" == "$GITHUB_SHA" ]] || { echo "Tag points to a different commit" >&2; exit 1; }
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA"
+          fi
+          gh release create "${tag}" release-dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --title "$title" \
+            --notes-file notes.md
