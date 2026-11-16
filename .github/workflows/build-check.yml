@@ -189,7 +189,7 @@ jobs:
         shell: bash
         # tee keeps the output around for the summary step; pipefail keeps ctest's status.
         run: |
-          ctest --test-dir build --output-on-failure --no-tests=error \
+          ctest --test-dir build --output-on-failure --no-tests=error --test-output-size-failed 10000000 \
             --parallel "$NUMBER_OF_PROCESSORS" 2>&1 | tee test-output.txt
 
       # Surface which tests failed (and their assertion text) without downloading a full log.
@@ -197,6 +197,10 @@ jobs:
         if: failure() && steps.tests.outcome == 'failure'
         shell: bash
         run: |
+          # Surface each Catch2 assertion, including cases earlier than the output tail.
+          grep -E -A 4 ': FAILED:|FAIL!' test-output.txt | head -200 | while IFS= read -r line; do
+            printf '::error title=Assertion::%s\n' "${line//$'\r'/}"
+          done || true
           tools/ci/ctest-annotate.sh build test-output.txt rerun
           exit 1
 

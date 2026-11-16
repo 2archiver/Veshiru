@@ -331,7 +331,7 @@ int ScoreArtworkCandidate(std::string_view candidate, std::string_view target_qu
     for (const auto bad : bad_edition_tokens) {
         const std::string bad_str{bad};
         if (c_words.contains(bad_str) && !q_words.contains(bad_str)) {
-            score -= 650;
+            score -= 1000;
         }
     }
     const std::string lower_cand = Common::ToLower(std::string{candidate});
