@@ -18,31 +18,43 @@ using Clock = std::chrono::steady_clock;
 
 constexpr f32 INTERVAL_SMOOTHING = 0.25f;
 constexpr f32 MINIMUM_BASE_RATE = 10.0f;
+/// A frame longer than 400 ms indicates a loading screen, alt-tab, or scene discontinuity rather
+/// than an isolated gameplay stutter (e.g. a single 105 ms shader/GC hitch during 18 FPS racing).
+constexpr f32 LOADING_STALL_SECONDS = 0.400f;
+constexpr u32 SUSTAINED_SLOW_FRAMES = 3;
+constexpr u32 PROBE_SLOW_FRAMES = 2;
 constexpr f32 BURST_CADENCE_RATIO = 3.0f;
 constexpr f32 BURST_TARGET_RATIO = 2.0f;
 constexpr f32 PROBE_THROUGHPUT_TOLERANCE = 0.95f;
-constexpr f32 PROBE_BASE_RETENTION = 0.80f;
-constexpr f32 STEADY_BASE_RETENTION = 0.70f;
+/// Low-FPS gameplay (18-30 FPS) exhibits natural +/-20% scene-to-scene variance over a short probe
+/// window; a slightly lower retention floor avoids false-rejecting healthy probes while still
+/// catching genuine GPU overload (e.g. 30->18 FPS = 0.60x or 20->12 FPS = 0.60x).
+constexpr f32 LOW_FPS_RATE_THRESHOLD = 32.0f;
+constexpr f32 PROBE_BASE_RETENTION_LOW_FPS = 0.70f;
+constexpr f32 PROBE_BASE_RETENTION_HIGH_FPS = 0.76f;
+constexpr f32 STEADY_BASE_RETENTION = 0.65f;
 constexpr f32 TARGET_SATISFIED_RATIO = 0.95f;
 constexpr f32 TARGET_START_RATIO = 0.92f;
 constexpr f32 CREDIT_EPSILON = 1.0e-4f;
 constexpr u32 MAX_PROBE_FAILURES = 4;
 
-constexpr auto STABILIZATION_DURATION = std::chrono::seconds(1);
-constexpr auto PROBE_DURATION = std::chrono::seconds(1);
-constexpr auto DEFICIT_DURATION = std::chrono::seconds(1);
-constexpr auto PROBE_STEP_DELAY = std::chrono::milliseconds(250);
+constexpr auto STABILIZATION_DURATION = std::chrono::milliseconds(500);
+constexpr auto PROBE_DURATION = std::chrono::milliseconds(750);
+constexpr auto DEFICIT_DURATION = std::chrono::milliseconds(500);
+constexpr auto SURPLUS_DURATION = std::chrono::seconds(1);
+constexpr auto SLOWDOWN_DURATION = std::chrono::milliseconds(1200);
+constexpr auto PROBE_STEP_DELAY = std::chrono::milliseconds(200);
 
 [[nodiscard]] Clock::duration ProbeBackoff(u32 failures) {
     switch (failures) {
     case 1:
-        return std::chrono::seconds(5);
+        return std::chrono::seconds(4);
     case 2:
-        return std::chrono::seconds(15);
+        return std::chrono::seconds(8);
     case 3:
-        return std::chrono::seconds(30);
+        return std::chrono::seconds(16);
     default:
-        return std::chrono::seconds(60);
+        return std::chrono::seconds(24);
     }
 }
 
@@ -61,15 +73,15 @@ f32 FrameGenPacer::PlanningInterval(f32 interval_seconds, f32 blocked_seconds, f
     if (!had_generations || blocked_seconds <= 0.0f) {
         return interval_seconds;
     }
-    const f32 unblocked = interval_seconds - std::min(blocked_seconds, interval_seconds);
+    const f32 unblocked = interval_seconds - (std::min)(blocked_seconds, interval_seconds);
     if (guest_interval_seconds > 0.0f) {
-        return std::max(unblocked, std::min(guest_interval_seconds, interval_seconds));
+        return (std::max)(unblocked, (std::min)(guest_interval_seconds, interval_seconds));
     }
     if (target_rate > 0.0f) {
         // Without a reported guest frame interval (e.g. Switch 1 titles or menus before guest
         // pacing settles), subtract FIFO present-queue waiting down to the target-rate interval so
         // generated frames cannot pin a 60 FPS menu at 30 real FPS on a 60 Hz FIFO display.
-        return std::max(unblocked, std::min(1.0f / target_rate, interval_seconds));
+        return (std::max)(unblocked, (std::min)(1.0f / target_rate, interval_seconds));
     }
     return interval_seconds;
 }
@@ -103,10 +115,18 @@ FrameGenPlan FrameGenPacer::Plan(size_t capacity, Clock::duration blocked) {
                   Settings::FrameGenMaxGenerations(), Settings::FrameGenGenerations());
 }
 
+void FrameGenPacer::RecordLevelFailure(size_t failed_level, Clock::time_point now) {
+    if (failed_level == 0 || failed_level >= MAX_TRACKED_LEVELS) {
+        return;
+    }
+    level_failures[failed_level] = (std::min)(level_failures[failed_level] + 1, MAX_PROBE_FAILURES);
+    level_next_probe[failed_level] = now + ProbeBackoff(level_failures[failed_level]);
+}
+
 FrameGenPlan FrameGenPacer::PlanAt(Clock::time_point now, size_t capacity, Clock::duration blocked,
                                    f32 target_rate, f32 guest_interval_seconds,
                                    size_t max_generations, size_t fixed_generations) {
-    const size_t ceiling = std::min(capacity, max_generations);
+    const size_t ceiling = (std::min)(capacity, max_generations);
     if (ceiling == 0) {
         Reset();
         return {};
@@ -122,14 +142,14 @@ FrameGenPlan FrameGenPacer::PlanAt(Clock::time_point now, size_t capacity, Clock
     last_frame = now;
 
     if (interval_seconds <= 0.0f) {
-        Stabilize(now);
+        Stabilize(now, false);
         return {};
     }
 
     if (smoothed_interval > 0.0f) {
         f32 burst_threshold = BURST_CADENCE_RATIO / smoothed_interval;
         if (target_rate > 0.0f) {
-            burst_threshold = std::max(burst_threshold, target_rate * BURST_TARGET_RATIO);
+            burst_threshold = (std::max)(burst_threshold, target_rate * BURST_TARGET_RATIO);
         }
         if (1.0f / interval_seconds > burst_threshold) {
             DeferEvaluations(interval);
@@ -138,16 +158,49 @@ FrameGenPlan FrameGenPacer::PlanAt(Clock::time_point now, size_t capacity, Clock
         }
     }
 
-    if (interval_seconds > 1.0f / MINIMUM_BASE_RATE) {
-        // If frame time spiked past 100 ms while probing a higher generation limit, count it as a
-        // probe failure with exponential backoff rather than re-probing every 2 seconds forever.
-        if (probe_until) {
-            probe_failures = std::min(probe_failures + 1, MAX_PROBE_FAILURES);
-            next_probe = now + ProbeBackoff(probe_failures);
-        }
-        Stabilize(now);
+    // True loading screen, scene cut, or window pause: invalidate pacing and history cleanly, and
+    // clear previous scene's probe backoffs so the new scene can ramp immediately once steady.
+    if (interval_seconds >= LOADING_STALL_SECONDS) {
+        Stabilize(now, true);
         return {};
     }
+
+    if (interval_seconds > 1.0f / MINIMUM_BASE_RATE) {
+        ++consecutive_slow_frames;
+
+        // During an active probe, repeated >100 ms frames mean the newly probed generation level
+        // itself overloaded the GPU. Step back ONLY to probe_previous_limit and back off ONLY the
+        // failed level (never wiping a healthy lower limit down to zero or locking out limit=1).
+        if (probe_until && consecutive_slow_frames >= PROBE_SLOW_FRAMES) {
+            const size_t failed_level = limit;
+            probe_until.reset();
+            limit = probe_previous_limit;
+            output_credit = 0.0f;
+            deficit_since.reset();
+            surplus_since.reset();
+            slowdown_since.reset();
+            consecutive_slow_frames = 0;
+            RecordLevelFailure(failed_level, now);
+            return {.generations = 0, .warm = limit > 0, .hitch_skipped = true};
+        }
+
+        // Outside a probe, sustained <10 FPS (3+ consecutive slow frames) or unknown baseline
+        // requires full stabilization (invalidating optical-flow history).
+        if (smoothed_interval <= 0.0f || consecutive_slow_frames >= SUSTAINED_SLOW_FRAMES) {
+            Stabilize(now, true);
+            return {};
+        }
+
+        // Isolated single-frame hitch (e.g. 105-250 ms during steady 18-30 FPS gameplay):
+        // skip generating intermediate frames across the jump, defer evaluation timers so the
+        // hitch does not poison an in-progress probe, and preserve healthy limit + pacing history.
+        DeferEvaluations(interval);
+        output_credit = 0.0f;
+        const bool keep_history = limit > 0 && !stable_until;
+        return {.generations = 0, .warm = keep_history, .hitch_skipped = true};
+    }
+
+    consecutive_slow_frames = 0;
 
     smoothed_interval = smoothed_interval > 0.0f
                             ? smoothed_interval +
@@ -169,7 +222,7 @@ FrameGenPlan FrameGenPacer::PlanAt(Clock::time_point now, size_t capacity, Clock
     }
 
     if (target_rate == 0.0f) {
-        limit = std::min(fixed_generations, ceiling);
+        limit = (std::min)(fixed_generations, ceiling);
         output_credit = 0.0f;
         return {.generations = limit, .warm = limit > 0};
     }
@@ -178,7 +231,7 @@ FrameGenPlan FrameGenPacer::PlanAt(Clock::time_point now, size_t capacity, Clock
     const f32 real_rate = 1.0f / smoothed_interval;
     UpdateLimit(now, base_rate, real_rate, target_rate, ceiling);
 
-    const size_t allowed = std::min(limit, ceiling);
+    const size_t allowed = (std::min)(limit, ceiling);
     const f32 desired_outputs = planning_interval * target_rate;
     if (allowed == 0 || base_rate >= target_rate * TARGET_SATISFIED_RATIO ||
         desired_outputs <= 1.0f) {
@@ -189,8 +242,8 @@ FrameGenPlan FrameGenPacer::PlanAt(Clock::time_point now, size_t capacity, Clock
 
     output_credit += desired_outputs;
     const size_t outputs =
-        std::max<size_t>(1, static_cast<size_t>(std::floor(output_credit + CREDIT_EPSILON)));
-    const size_t generations = std::min(outputs - 1, allowed);
+        (std::max)(size_t{1}, static_cast<size_t>(std::floor(output_credit + CREDIT_EPSILON)));
+    const size_t generations = (std::min)(outputs - 1, allowed);
 
     output_credit -= static_cast<f32>(generations + 1);
     if (output_credit < 0.0f) {
@@ -205,7 +258,7 @@ FrameGenPlan FrameGenPacer::PlanAt(Clock::time_point now, size_t capacity, Clock
 
 void FrameGenPacer::UpdateLimit(Clock::time_point now, f32 base_rate, f32 real_rate,
                                 f32 target_rate, size_t ceiling) {
-    limit = std::min(limit, ceiling);
+    limit = (std::min)(limit, ceiling);
 
     if (probe_until) {
         if (now < *probe_until) {
@@ -215,25 +268,32 @@ void FrameGenPacer::UpdateLimit(Clock::time_point now, f32 base_rate, f32 real_r
         output_credit = 0.0f;
 
         const f32 previous_output =
-            std::min(target_rate, probe_base_rate * static_cast<f32>(probe_previous_limit + 1));
+            (std::min)(target_rate, probe_base_rate * static_cast<f32>(probe_previous_limit + 1));
         const f32 current_output =
-            std::min(target_rate, base_rate * static_cast<f32>(limit + 1));
+            (std::min)(target_rate, base_rate * static_cast<f32>(limit + 1));
 
+        const f32 retention = probe_real_rate < LOW_FPS_RATE_THRESHOLD
+                                  ? PROBE_BASE_RETENTION_LOW_FPS
+                                  : PROBE_BASE_RETENTION_HIGH_FPS;
         const bool throughput_regressed =
             current_output < previous_output * PROBE_THROUGHPUT_TOLERANCE;
-        const bool base_degraded = real_rate < probe_real_rate * PROBE_BASE_RETENTION;
+        const bool base_degraded = real_rate < probe_real_rate * retention;
 
         if (throughput_regressed || base_degraded) {
+            const size_t failed_level = limit;
             limit = probe_previous_limit;
-            probe_failures = std::min(probe_failures + 1, MAX_PROBE_FAILURES);
-            next_probe = now + ProbeBackoff(probe_failures);
+            RecordLevelFailure(failed_level, now);
             deficit_since.reset();
             return;
         }
 
-        probe_failures = 0;
+        // Probe succeeded: clear failure history for this level and every lower level.
+        for (size_t lv = 0; lv <= limit && lv < MAX_TRACKED_LEVELS; ++lv) {
+            level_failures[lv] = 0;
+            level_next_probe[lv].reset();
+        }
         active_real_rate = real_rate;
-        next_probe = now + PROBE_STEP_DELAY;
+        probe_step_until = now + PROBE_STEP_DELAY;
         surplus_since.reset();
         slowdown_since.reset();
     }
@@ -251,8 +311,8 @@ void FrameGenPacer::UpdateLimit(Clock::time_point now, f32 base_rate, f32 real_r
     }
 
     // Continuous GPU-overload / heavy-scene guard: if real emulation speed drops sharply below the
-    // accepted probe rate while generating, step down to re-baseline without penalizing
-    // probe_failures; a subsequent probe will apply backoff only if frame generation itself causes
+    // accepted probe rate while generating, step down one level to re-baseline without penalizing
+    // probe failures; a subsequent probe applies backoff only if frame generation itself causes
     // the slowdown.
     if (limit > 0 && active_real_rate > 0.0f &&
         real_rate < active_real_rate * STEADY_BASE_RETENTION) {
@@ -260,7 +320,7 @@ void FrameGenPacer::UpdateLimit(Clock::time_point now, f32 base_rate, f32 real_r
         surplus_since.reset();
         if (!slowdown_since) {
             slowdown_since = now;
-        } else if (now - *slowdown_since >= PROBE_DURATION) {
+        } else if (now - *slowdown_since >= SLOWDOWN_DURATION) {
             --limit;
             output_credit = 0.0f;
             active_real_rate = limit > 0 ? real_rate : 0.0f;
@@ -276,7 +336,7 @@ void FrameGenPacer::UpdateLimit(Clock::time_point now, f32 base_rate, f32 real_r
         deficit_since.reset();
         if (!surplus_since) {
             surplus_since = now;
-        } else if (now - *surplus_since >= DEFICIT_DURATION) {
+        } else if (now - *surplus_since >= SURPLUS_DURATION) {
             --limit;
             output_credit = 0.0f;
             surplus_since.reset();
@@ -300,7 +360,12 @@ void FrameGenPacer::UpdateLimit(Clock::time_point now, f32 base_rate, f32 real_r
     if (now - *deficit_since < DEFICIT_DURATION) {
         return;
     }
-    if (next_probe && now < *next_probe) {
+    if (probe_step_until && now < *probe_step_until) {
+        return;
+    }
+    const size_t target_level = limit + 1;
+    if (target_level < MAX_TRACKED_LEVELS && level_next_probe[target_level] &&
+        now < *level_next_probe[target_level]) {
         return;
     }
 
@@ -323,33 +388,44 @@ void FrameGenPacer::DeferEvaluations(Clock::duration amount) {
     };
     defer(stable_until);
     defer(probe_until);
-    defer(next_probe);
+    defer(probe_step_until);
+    for (auto& deadline : level_next_probe) {
+        defer(deadline);
+    }
     deficit_since.reset();
     surplus_since.reset();
     slowdown_since.reset();
 }
 
-void FrameGenPacer::Stabilize(Clock::time_point now) {
+void FrameGenPacer::Stabilize(Clock::time_point now, bool clear_backoffs) {
     stable_until = now + STABILIZATION_DURATION;
     probe_until.reset();
+    probe_step_until.reset();
     deficit_since.reset();
     surplus_since.reset();
     slowdown_since.reset();
+    if (clear_backoffs) {
+        level_next_probe.fill(std::nullopt);
+        level_failures.fill(0);
+    }
     smoothed_interval = 0.0f;
     planning_interval = 0.0f;
     output_credit = 0.0f;
     active_real_rate = 0.0f;
     limit = 0;
+    consecutive_slow_frames = 0;
 }
 
 void FrameGenPacer::Reset() {
     last_frame.reset();
     stable_until.reset();
     probe_until.reset();
-    next_probe.reset();
+    probe_step_until.reset();
     deficit_since.reset();
     surplus_since.reset();
     slowdown_since.reset();
+    level_next_probe.fill(std::nullopt);
+    level_failures.fill(0);
     smoothed_interval = 0.0f;
     planning_interval = 0.0f;
     output_credit = 0.0f;
@@ -358,7 +434,7 @@ void FrameGenPacer::Reset() {
     active_real_rate = 0.0f;
     probe_previous_limit = 0;
     limit = 0;
-    probe_failures = 0;
+    consecutive_slow_frames = 0;
 }
 
 } // namespace Vulkan

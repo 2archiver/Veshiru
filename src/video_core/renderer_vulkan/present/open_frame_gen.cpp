@@ -277,14 +277,16 @@ void OpenFrameGen::CreateResources(const Device& device) {
     m_buf_scratch_b = CreateStorageBuffer(m_allocator, std::max({32u * p4, 64u * p8, 96u * p16}));
 
     const std::array pool_sizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                             6 + static_cast<u32>(MaxCachedWarpSets * 3)},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 68},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                             4 + static_cast<u32>(MaxCachedWarpSets)},
     };
     m_static_desc_pool = device.GetLogical().CreateDescriptorPool(VkDescriptorPoolCreateInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
-        .maxSets = StaticSetCount,
+        .maxSets = StaticSetCount + static_cast<u32>(MaxCachedWarpSets),
         .poolSizeCount = static_cast<u32>(pool_sizes.size()),
         .pPoolSizes = pool_sizes.data(),
     });
@@ -426,6 +428,11 @@ void OpenFrameGen::CreatePipelines(const Device& device) {
         *m_head_desc_layout, // SetHead2
     };
     m_static_sets = CreateWrappedDescriptorSets(m_static_desc_pool, layouts);
+
+    std::array<VkDescriptorSetLayout, MaxCachedWarpSets> warp_layouts;
+    warp_layouts.fill(*m_warp_desc_layout);
+    m_warp_cached_sets = CreateWrappedDescriptorSets(m_static_desc_pool, warp_layouts);
+    m_warp_cache_count = 0;
 }
 
 void OpenFrameGen::WriteStaticDescriptors(const Device& device) {
@@ -742,33 +749,111 @@ void OpenFrameGen::Generate(const Device& device, Scheduler& scheduler, VkImage 
         return;
     }
 
-    if (!m_warp_pool) {
-        m_warp_pool.emplace(device, scheduler);
-        m_warp_allocator = m_warp_pool->Allocator(device, scheduler, *m_warp_desc_layout,
-                                                  DescriptorBankInfo{.textures = 3, .images = 1});
-    }
     const u32 prev_slot = m_curr_slot ^ 1u;
-    const VkDescriptorSet set = m_warp_allocator.Commit();
-    std::vector<VkDescriptorImageInfo> img_infos;
-    img_infos.reserve(4);
-    std::vector<VkWriteDescriptorSet> updates{
-        CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_frame_views[prev_slot], set, 0),
-        CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_frame_views[m_curr_slot], set, 1),
-        CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_flow_mask_view, set, 2),
-    };
-    const VkDescriptorImageInfo dest_info{
-        .imageView = destination_storage_view,
-        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-    };
-    updates.push_back(VkWriteDescriptorSet{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = set,
-        .dstBinding = 3,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-        .pImageInfo = &dest_info,
-    });
-    device.GetLogical().UpdateDescriptorSets(updates, {});
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    for (size_t i = 0; i < m_warp_cache_count; ++i) {
+        const auto& entry = m_warp_cache[i];
+        if (entry.prev_slot == prev_slot && entry.destination == destination &&
+            entry.destination_view == destination_storage_view) {
+            set = entry.set;
+            break;
+        }
+    }
+    if (set == VK_NULL_HANDLE) {
+        bool cached = false;
+        if (m_warp_cache_count < MaxCachedWarpSets) {
+            set = m_warp_cached_sets[m_warp_cache_count];
+            m_warp_cache[m_warp_cache_count++] = CachedWarpSet{
+                .prev_slot = prev_slot,
+                .destination = destination,
+                .destination_view = destination_storage_view,
+                .set = set,
+            };
+            cached = true;
+        }
+        if (!cached) {
+            if (!m_warp_pool) {
+                m_warp_pool.emplace(device, scheduler);
+                m_warp_allocator =
+                    m_warp_pool->Allocator(device, scheduler, *m_warp_desc_layout,
+                                           DescriptorBankInfo{.textures = 3, .images = 1});
+            }
+            set = m_warp_allocator.Commit();
+        }
+        const std::array<VkDescriptorImageInfo, 4> img_infos{{
+            {
+                .sampler = *m_linear_sampler,
+                .imageView = *m_frame_views[prev_slot],
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            },
+            {
+                .sampler = *m_linear_sampler,
+                .imageView = *m_frame_views[m_curr_slot],
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            },
+            {
+                .sampler = *m_linear_sampler,
+                .imageView = *m_flow_mask_view,
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            },
+            {
+                .sampler = VK_NULL_HANDLE,
+                .imageView = destination_storage_view,
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            },
+        }};
+        const std::array<VkWriteDescriptorSet, 4> updates{{
+            {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &img_infos[0],
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &img_infos[1],
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = set,
+                .dstBinding = 2,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &img_infos[2],
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = set,
+                .dstBinding = 3,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .pImageInfo = &img_infos[3],
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+            },
+        }};
+        device.GetLogical().UpdateDescriptorSets(updates, {});
+    }
 
     const u32 out_w = m_extent.width;
     const u32 out_h = m_extent.height;

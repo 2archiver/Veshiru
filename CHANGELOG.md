@@ -6,6 +6,109 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-16
+
+### Frame Generation, Pacing & Present Scheduling
+
+- **Stable `FrameGenPacer` under real-world gameplay variance & hitches**:
+  - Replaced single-frame reset triggers with hysteresis-based hitch handling: isolated shader
+    compile or streaming hitches (`100–400 ms`) now skip generation for that single frame without
+    destroying active generation levels or poisoning exponential backoff; only genuine loading
+    stalls (`>= 400 ms`) reset active pacing and clear stale backoff for quick post-load recovery.
+  - Raised frame-time variance tolerance (`35%` jitter window vs the previous `15%`), added a
+    per-level probe-failure table (`LevelFailures`) so rejecting a higher multiplier (e.g. `2x`)
+    no longer drops a healthy lower multiplier (e.g. `1x`), and added a base-FPS collapse guard
+    that rejects probes which tank real game FPS while chasing 60 FPS.
+  - Added per-frame `FreeFrames()` display-capacity trimming (`GenerationsWithoutWaiting`) and one
+    extra spare frame in `PresentManager::SetImageCount()` so generated frames never starve or
+    block the next real game frame on 60 Hz FIFO displays.
+  - Replaced raw swapchain-acquire throttling with `FramePacer` (`frame_pacer.h`), pacing by real
+    game frames and dividing each frame slot evenly across `game_frame_presents` so 30/60/90/120
+    FPS pacing targets work accurately alongside frame generation.
+  - Updated `FrameGen::LogActivity()` to report separate `game FPS + generated FPS = output FPS`,
+    current multiplier limit, hitch skips, and display trims.
+- **Open-Frame-Gen zero-allocation warp descriptor caching**: pre-allocated a 16-slot cached warp
+  descriptor set table in `OpenFrameGen` keyed by `(prev_slot, destination, destination_view)`,
+  eliminating per-frame descriptor allocations and `vkUpdateDescriptorSets` churn during active
+  neural optical-flow generation.
+
+### Vulkan Sync, Memory Translation & General FPS
+
+- **Present-fence handoff ordering (`DueComposites`)**: routed all `Renderer::Composite` calls
+  through a thread-safe ordered queue (`VideoCommon::DueComposites` + `GpuSplit::OwnsScheduler()`)
+  so present fences signalled from service threads always composite on the scheduler owner in
+  exact fence order without overlapping or racing command recording (upstream `#1992`/`#1996`).
+- **Batched Switch 2 command-list copies & post-sync reads**: gated `SubmitNx2ListCopies()` on
+  `!scheduler.DeferFlush()` so compute/command-list scenes batch submissions instead of flushing
+  thousands of times per second, and allowed `Nx2ReadListCopy()` to reuse up-to-date copies for
+  `draw_written` pages past host sync without forcing `Scheduler::Finish()` (`#2006`/`#2007`).
+- **OOM staging recovery without splitting open command buffers**: `StagingBufferPool::ReleaseMemory()`
+  now waits only on already-submitted GPU ticks (`CurrentTick() - 1`) without submitting the
+  currently recording command buffer, preserving in-progress draw/dispatch bindings (`#1993`/`#1997`).
+- **Faster GPU memory translation & submapped range queries**:
+  - Added a lock-free per-thread 2048-entry `GpuToCpuAddress` translation cache keyed by
+    `map_serial` (with `EDEN_NX2_NO_TRANSLATION_CACHE=1` escape hatch).
+  - Stored `device_addr` in `MappingSnapshot::Run` and switched `GetSubmappedRange` /
+    `GetSubmappedDeviceRange` to O(log R) binary search over runs (`SubmappedRangeFromRuns`,
+    `#1820`), eliminating per-page table walks during buffer/texture binding.
+  - *Note on correctness*: Eglantine's `HotPages` (`f27522bfb`) was intentionally not ported
+    because unprotecting rewritten guest pages after a single per-frame upload allows subsequent
+    mid-frame CPU writes to go untrapped and render stale GPU data.
+- **Sampled CPU readback telemetry**: replaced the unconditional 1-in-64 `CPU read of GPU-written
+  memory` `LOG_INFO` spam in `GPU::Impl::OnCPURead` with a lock-free atomic 10-second summary
+  reporting total reads, sync GPU waits vs async in-flight hits, MiB transferred, and avg/max
+  latencies.
+
+### Shader Compilation, Pipeline Cache & 4 GB VRAM Management
+
+- **Native mesh pipeline deduplication (`MeshVertexInputs`, `#2012`)**: lent the first seen
+  leftover vertex input state to subsequent native mesh draw keys so unrelated vertex input
+  registers no longer split identical mesh pipelines into redundant driver compiles (cutting
+  duplicate mesh compiles in titles such as Ocarina of Time and Switch 2 mesh-shader workloads).
+- **Safe driver pipeline cache persistence (`#1838`)**: added `PrebuildStartsWithBootBuilds()` so
+  drivers that cannot safely read `VkPipelineCache` concurrently with builds (e.g. Intel Windows)
+  persist boot and precache driver caches synchronously before starting background prebuilds.
+- **4 GB GPU / DXGI budget stabilization & sparse OOM feedback**:
+  - Ported `RetentionBudget()` low-water tracking with `16 MiB` upward hysteresis per 30-frame
+    check (`#1860`) so Windows DXGI budget fluctuations no longer trigger texture eviction/re-upload
+    thrashing.
+  - Made `TextureCache` `pressure_margin` proportional on `<= 4 GiB` GPUs (`+256 MiB` step,
+    `-64 MiB` relax, `2 GiB` cap vs `+512 MiB` / `-128 MiB` / `3 GiB` on larger GPUs), wired
+    `MemoryAllocator::AllocateSparseMemory` OOM failures to increment `pressure_events`, and
+    deduplicated `TrimmedHostInfo` via `HostInfoForOffset` to eliminate repeated ASTC trim warnings.
+
+### Game List Artwork & Ocarina of Time Icon Refresh
+
+- **Fixed wrong-game matching and stale icon refreshes**:
+  - Hardened `ScoreArtworkCandidate` with a subtitle guard, extra significant candidate word
+    penalties, restricted prefix matching, and clean subtitle-complete matching so `"The Legend of
+    Zelda: Ocarina of Time"` (`0400486024DEC000`) can never match bare `"The Legend of Zelda"` or
+    unrelated Zelda entries, and `"Hyrule Warriors: Age of Imprisonment"` cannot match `"Age of
+    Calamity"`.
+  - Switched `switchiconshowdown.com` secondary queries from the bare series prefix before `:` to
+    the distinctive subtitle after `:` (`ExtractSubtitleQuery`).
+  - Added No-Intro naming normalization (`BuildLibretroNameVariants`: `": "` -> `" - "`, leading
+    `"The "` -> `", The"`) across Libretro Nintendo Switch, N64, 3DS, and GameCube boxart
+    collections, plus a MediaWiki Action API `pageimages` fallback after Wikipedia REST summary.
+  - Replaced `cpp-httplib`'s `set_follow_location(true)` with a validated `<= 4`-hop HTTPS
+    redirect loop that reloads the bundled OpenSSL CA store (`VESHIRU_BUNDLED_OPENSSL`) on
+    cross-host redirects and strips SteamGridDB bearer tokens outside `steamgriddb.com`.
+  - Updated `RefreshGameArtwork` to clear cached sidecar PNG/JSON, failure cooldowns, and
+    `game_list/<TID>.jpeg` thumbnails before searching, resolve canonical catalog titles, and
+    overwrite stale wrong `TitleRole` values (`force_title = true`).
+  - Propagated `package.title_id` through `FileSys::Nup::ProbeNupMetadata` into
+    `NupEditDialog::FindIcon()` so NUP metadata icon lookups use the exact Program ID.
+
+### Tests
+
+- Expanded Catch2 unit test coverage across `frame_gen_pacer` (14 cases including `FramePacer` and
+  `GenerationsWithoutWaiting`), `due_composites` (3 multithreaded ordering cases),
+  `mesh_vertex_input` (4 deduplication cases), `eviction_age` (`RetentionBudget`),
+  `pipeline_eviction_policy` (`PrebuildStartsWithBootBuilds`), `memory_manager_runs`
+  (`GetSubmappedRange` / `GetSubmappedDeviceRange`), `vulkan_buffer_oom` (`ReleaseMemory`), and
+  `artwork_cache` (OOT / Hyrule Warriors scoring, subtitle extraction, No-Intro Libretro variants,
+  and cache clearing).
+
 ## [1.4.0] - 2026-11-16
 
 ### Open-Frame-Gen, FSR3 & Frame Generation Pacing

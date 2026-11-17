@@ -442,6 +442,17 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
 // over 1 GiB as RGBA8 (title 1's 8192x8192x68 ASTC 8x8 virtual textures are 24 GB each) keeps only
 // its mip levels from `level_offset` on, so host mip 0 is guest mip `level_offset`. Normalized
 // coordinates and derivative LOD still address it correctly; explicit LODs sample one level lower.
+[[nodiscard]] ImageInfo HostInfoForOffset(const ImageInfo& info, u32 level_offset) {
+    if (level_offset == 0) {
+        return info;
+    }
+    ImageInfo host = info;
+    host.size.width = (std::max)(info.size.width >> level_offset, 1U);
+    host.size.height = (std::max)(info.size.height >> level_offset, 1U);
+    host.resources.levels -= static_cast<s32>(level_offset);
+    return host;
+}
+
 [[nodiscard]] ImageInfo TrimmedHostInfo(const Device& device, const ImageInfo& info, u32& level_offset) {
     level_offset = 0;
     if (!WillUseAcceleratedAstcDecode(device, info) || info.type != ImageType::e2D) {
@@ -464,10 +475,7 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
            decoded_bytes(level_offset) > limit) {
         ++level_offset;
     }
-    ImageInfo host = info;
-    host.size.width = (std::max)(info.size.width >> level_offset, 1U);
-    host.size.height = (std::max)(info.size.height >> level_offset, 1U);
-    host.resources.levels -= static_cast<s32>(level_offset);
+    const ImageInfo host = HostInfoForOffset(info, level_offset);
     LOG_WARNING(Render_Vulkan, "{}x{}x{} ASTC image would be {} MiB decoded; keeping mip levels {}+ ({}x{})",
                 info.size.width, info.size.height, info.resources.layers, decoded_bytes(0) >> 20,
                 level_offset, host.size.width, host.size.height);
@@ -3065,7 +3073,7 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
     }
     if (original_image.IsUnbacked()) {
         flags |= VideoCommon::ImageFlagBits::Unbacked;
-        const ImageInfo host_info = TrimmedHostInfo(runtime_.device, info, host_level_offset);
+        const ImageInfo host_info = HostInfoForOffset(info, host_level_offset);
         const u64 texels = u64{host_info.size.width} * host_info.size.height *
                            host_info.size.depth * static_cast<u64>(host_info.resources.layers);
         const u64 bytes =
@@ -3600,8 +3608,7 @@ bool Image::InitSparseLayers() {
     s.allocator = &runtime->memory_allocator;
     s.requirements = device.GetLogical().GetImageMemoryRequirements(handle);
     s.sparse = *it;
-    u32 offset = host_level_offset;
-    const ImageInfo host = TrimmedHostInfo(device, info, offset);
+    const ImageInfo host = HostInfoForOffset(info, host_level_offset);
     s.width = host.size.width;
     s.height = host.size.height;
     s.levels = HostMipCount(host);

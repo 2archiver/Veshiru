@@ -2211,6 +2211,7 @@ Metadata ProbeNupMetadata(const fs::path& archive) {
     const auto& packages = nup.GetPackages();
     const size_t target = NupEditTargetIndex(packages);
     const auto& package = packages[target];
+    out.title_id = package.title_id;
     out.title_name = package.title_name;
     out.icon = package.icon;
     out.publisher = package.publisher;

@@ -34,6 +34,7 @@ constexpr u64 DefaultRawThreshold = 256ULL * 1024 * 1024;
 // Application metadata written to the base package (or the first package when there is no base).
 // In PackOptions an empty field keeps what the dump supplies; ProbeMetadata fills all of them.
 struct Metadata {
+    u64 title_id{};
     std::string title_name;
     // JPEG or PNG bytes; 256x256 JPEG as distributed on-console.
     std::vector<u8> icon;

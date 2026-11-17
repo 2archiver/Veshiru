@@ -388,6 +388,7 @@ VmaAllocation MemoryAllocator::AllocateSparseMemory(const VkMemoryRequirements &
         }
     }
     if (vmaAllocateMemory(allocator, &requirements, &alloc_ci, &allocation, &info) != VK_SUCCESS) {
+        pressure_events.fetch_add(1, std::memory_order_relaxed);
         return VK_NULL_HANDLE;
     }
     memory = info.deviceMemory;

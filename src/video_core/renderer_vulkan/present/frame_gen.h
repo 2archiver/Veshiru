@@ -30,8 +30,9 @@ public:
 
     void Process(const Device& device, Frame* frame, VkFormat format, VkExtent2D guest_extent);
 
+    /// free_frames: present frames currently free without blocking (PresentManager::FreeFrames).
     /// blocked: the time the renderer waited for the present thread since the last call.
-    [[nodiscard]] size_t WantedGenerations(size_t capacity,
+    [[nodiscard]] size_t WantedGenerations(size_t capacity, size_t free_frames,
                                            std::chrono::steady_clock::duration blocked = {});
 
     [[nodiscard]] size_t GeneratedFrameCount() const;
@@ -84,6 +85,8 @@ private:
         std::chrono::steady_clock::time_point since{};
         u64 frames{};
         u64 generated{};
+        u64 hitch_skips{};
+        u64 display_trims{};
         f32 logged_per_frame{-1.0f};
     } activity;
 };

@@ -32,8 +32,16 @@ namespace Common::ArtworkCache {
 /// available and falling back to cleaned aliases/filenames.
 [[nodiscard]] std::string ResolveCanonicalSearchTitle(std::string_view raw_name, u64 title_id);
 
+/// Returns a trimmed subtitle after ':' when a title has a distinctive subtitle (>= 4 non-space
+/// characters), or empty otherwise. Never returns the bare series prefix before ':'.
+[[nodiscard]] std::string ExtractSubtitleQuery(std::string_view title);
+
+/// Builds Libretro/No-Intro thumbnail base name variants (without region or .png suffix),
+/// handling colon-to-dash conversion and trailing ", The" normalization.
+[[nodiscard]] std::vector<std::string> BuildLibretroNameVariants(std::string_view title);
+
 /// Scores an online search candidate title against a target query, penalizing demos, DLCs,
-/// soundtracks, wrong editions, and sequel number mismatches.
+/// soundtracks, wrong editions, wrong series entries, and sequel number mismatches.
 [[nodiscard]] int ScoreArtworkCandidate(std::string_view candidate, std::string_view target_query);
 
 /// Checks that raw image bytes carry a valid PNG (with sane IHDR dimensions) or JPEG header.
@@ -53,6 +61,9 @@ namespace Common::ArtworkCache {
 /// Atomically stores validated PNG artwork + JSON metadata in <CacheDir>/artwork/.
 bool WriteCachedArtwork(u64 title_id, std::span<const u8> png_bytes,
                         std::string_view resolved_title, std::string_view source);
+
+/// Removes cached artwork PNG and sidecar JSON metadata (including failure cooldowns) for a title.
+void ClearCachedArtwork(u64 title_id);
 
 /// Records a failed lookup with a retry cooldown so offline/unknown titles do not spam requests.
 void RecordArtworkFailure(u64 title_id, std::string_view reason, u64 cooldown_seconds = 3600);

@@ -823,7 +823,7 @@ void GameList::AddFavoritesPopup(QMenu& context_menu) {
 }
 
 void GameList::ApplyArtworkToModel(u64 program_id, const QByteArray& png,
-                                   const QString& resolved_title) {
+                                   const QString& resolved_title, bool force_title) {
     const u64 target_base = Common::ArtworkCache::BaseProgramId(program_id);
     if (target_base == 0 || png.isEmpty()) {
         return;
@@ -848,7 +848,8 @@ void GameList::ApplyArtworkToModel(u64 program_id, const QByteArray& png,
                 const u64 row_tid = Common::ArtworkCache::BaseProgramId(
                     child->data(GameListItemPath::ProgramIdRole).toULongLong());
                 if (row_tid == target_base) {
-                    static_cast<GameListItemPath*>(child)->ApplyArtwork(png, resolved_title);
+                    static_cast<GameListItemPath*>(child)->ApplyArtwork(png, resolved_title,
+                                                                        force_title);
                 }
             }
             if (child->rowCount() > 0) {
@@ -914,7 +915,7 @@ void GameList::RefreshGameArtwork(u64 program_id, const std::string& path) {
         connect(manual_icon_search, &IconSearch::IconSelected, this,
                 [this](const QByteArray& png, const QString& resolved_title) {
                     if (manual_icon_program_id != 0) {
-                        ApplyArtworkToModel(manual_icon_program_id, png, resolved_title);
+                        ApplyArtworkToModel(manual_icon_program_id, png, resolved_title, true);
                     }
                 });
     }
@@ -923,9 +924,18 @@ void GameList::RefreshGameArtwork(u64 program_id, const std::string& path) {
     }
     manual_icon_program_id = program_id;
 
-    // Look up the current display title recursively from the model; otherwise clean filename.
-    QString query;
+    // Clear stale/wrong cached artwork, failure cooldowns, and pre-rendered JPEG thumbnails
+    // before launching the fresh lookup so bad previous artwork can never linger.
     const u64 target_base = Common::ArtworkCache::BaseProgramId(program_id);
+    Common::ArtworkCache::ClearCachedArtwork(target_base);
+    std::error_code ec;
+    std::filesystem::remove(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) / "game_list" /
+                                fmt::format("{:016X}.jpeg", target_base),
+                            ec);
+
+    // Prefer the canonical Title ID catalog name when known; otherwise read the model title or
+    // clean filename so stale/wrong cached titles cannot poison the new search.
+    QString query;
     const auto find_title = [&](const auto& self, QStandardItem* parent) -> void {
         if (parent == nullptr || !query.isEmpty()) {
             return;
@@ -950,7 +960,12 @@ void GameList::RefreshGameArtwork(u64 program_id, const std::string& path) {
     if (query.isEmpty()) {
         query = QFileInfo(QString::fromStdString(path)).completeBaseName();
     }
-    manual_icon_search->Start(query, program_id);
+    const std::string canonical =
+        Common::ArtworkCache::ResolveCanonicalSearchTitle(query.toStdString(), target_base);
+    if (!canonical.empty()) {
+        query = QString::fromStdString(canonical);
+    }
+    manual_icon_search->Start(query, target_base);
 }
 
 void GameList::changeEvent(QEvent* event) {
