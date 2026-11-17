@@ -230,6 +230,13 @@ void Init(QWidget* root) {
 
     Common::Log::Initialize();
     Common::Log::Start();
+
+    // Start the live-console backend immediately, before the first startup logs below. This lets
+    // the Ryujinx-style startup console (and the on-demand console window) capture the whole boot
+    // sequence. The backend is refcounted: it starts here and keeps running while any console
+    // window is open.
+    Common::Log::SetLiveConsoleCapacity(10000);
+    Common::Log::SetLiveConsoleEnabled(true);
 #ifdef _WIN32
     Common::Windows::InstallCrashHandler(Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir));
 #endif

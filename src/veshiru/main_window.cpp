@@ -37,6 +37,7 @@
 #include "data_dialog.h"
 #include "deps_dialog.h"
 #include "install_dialog.h"
+#include "startup_console.h"
 
 #include "bootmanager.h"
 #include "loading_screen.h"
@@ -460,6 +461,10 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     UpdateWindowTitle();
 
     show();
+
+    // Open the Ryujinx-style startup console automatically at launch. It stays open for the whole
+    // session and streams timestamped startup logs from the live console backend.
+    StartupConsole::Show();
 
 #ifdef ENABLE_UPDATE_CHECKER
     if (UISettings::values.check_for_updates) {

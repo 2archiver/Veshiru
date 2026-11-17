@@ -214,8 +214,10 @@ struct ConsoleStats {
 };
 
 /// Enables/disables the live-console backend. While disabled it does no work on logging threads.
-/// Enabling starts a small worker thread; disabling drains and stops it. The worker never writes
-/// to the network and never blocks emulation on the UI.
+/// Enabling starts a small worker thread; disabling drains and stops it. The backend is refcounted:
+/// the worker runs while at least one console window is enabled, so closing one console window
+/// never stops logging for the others. The worker never writes to the network and never blocks
+/// emulation on the UI.
 void SetLiveConsoleEnabled(bool enabled);
 [[nodiscard]] bool IsLiveConsoleEnabled();
 /// Bounded in-memory console buffer. The oldest entries are dropped when the limit is reached.

@@ -79,11 +79,7 @@ bool IsNoiseParenthetical(std::string_view inner) {
 
 } // namespace
 
-std::string_view LookupTitleByProgramId(u64 title_id) noexcept {
-    const u64 base = BaseProgramId(title_id);
-    if (base == 0) {
-        return {};
-    }
+const std::unordered_map<u64, std::string_view>& ProgramIdCatalog() {
     static const std::unordered_map<u64, std::string_view> catalog{
         // Nintendo Switch 2 titles
         {0x0400C3F00006E000ULL, "Mario Kart World"},
@@ -125,11 +121,74 @@ std::string_view LookupTitleByProgramId(u64 title_id) noexcept {
         {0x010049900F546000ULL, "Super Mario RPG"},
         {0x010086C01A04C000ULL, "Paper Mario: The Thousand-Year Door"},
     };
+    return catalog;
+}
+
+std::string_view LookupTitleByProgramId(u64 title_id) noexcept {
+    const u64 base = BaseProgramId(title_id);
+    if (base == 0) {
+        return {};
+    }
+    const auto& catalog = ProgramIdCatalog();
     if (const auto it = catalog.find(base); it != catalog.end()) {
         return it->second;
     }
     return {};
 }
+
+namespace {
+
+bool IsStopWord(std::string_view word) {
+    return word == "the" || word == "of" || word == "and" || word == "a" || word == "for" ||
+           word == "to" || word == "in";
+}
+
+// Rebuilds a canonical "Series: Subtitle" catalog title when the cleaned query carries the series
+// prefix plus every significant subtitle word, but without the colon (e.g. dump filenames such as
+// "The Legend of Zelda Ocarina of Time Switch 2" resolve to "The Legend of Zelda: Ocarina of
+// Time"). Returns empty when no catalog entry matches.
+std::string ReconstructCatalogTitle(std::string_view cleaned) {
+    const std::string query_slug = NormalizeSlug(cleaned);
+    if (query_slug.empty()) {
+        return {};
+    }
+    const auto query_words = SplitSlugWords(query_slug);
+    for (const auto& [title_id, title] : ProgramIdCatalog()) {
+        const auto colon = title.find(':');
+        if (colon == std::string_view::npos) {
+            continue;
+        }
+        const std::string_view series = title.substr(0, colon);
+        std::string_view subtitle = title.substr(colon + 1);
+        while (!subtitle.empty() && std::isspace(static_cast<unsigned char>(subtitle.front()))) {
+            subtitle.remove_prefix(1);
+        }
+        const std::string series_slug = NormalizeSlug(series);
+        if (series_slug.empty() || query_slug == series_slug) {
+            continue;
+        }
+        if (!query_slug.starts_with(series_slug + "-")) {
+            continue;
+        }
+        const auto sub_words = SplitSlugWords(NormalizeSlug(subtitle));
+        bool all_subtitle_words_present = true;
+        for (const auto& word : sub_words) {
+            if (IsStopWord(word)) {
+                continue;
+            }
+            if (!query_words.contains(word)) {
+                all_subtitle_words_present = false;
+                break;
+            }
+        }
+        if (all_subtitle_words_present) {
+            return std::string{title};
+        }
+    }
+    return {};
+}
+
+} // namespace
 
 std::string NormalizeSlug(std::string_view raw_title) {
     std::string title = Common::ToLower(std::string{raw_title});
@@ -183,6 +242,12 @@ std::string CleanGameSearchQuery(std::string_view raw_name) {
                 }
             }
         }
+        // Trademark/registered symbols are display noise for search (e.g. "Zelda\u2122: Ocarina of
+        // Time" must still resolve to the canonical article/search title).
+        if (raw_name[i] == '\u2122' || raw_name[i] == '\u00AE') {
+            ++i;
+            continue;
+        }
         stripped.push_back(raw_name[i]);
         ++i;
     }
@@ -223,6 +288,31 @@ std::string CleanGameSearchQuery(std::string_view raw_name) {
             lower_tok == "usa" || lower_tok == "eur" || lower_tok == "jpn") {
             continue;
         }
+        // Drop platform tags ("Switch 2", "Switch2", "NX2") that dump filenames append after the
+        // real title. A bare "Switch" is only a platform tag when followed by a number or when it
+        // is the last token, so titles such as "Switch Sports" keep their leading word.
+        if (lower_tok == "switch2" || lower_tok == "switch-2" || lower_tok == "nx2") {
+            continue;
+        }
+        if (lower_tok == "switch") {
+            std::size_t next = pos;
+            while (next < stripped.size() && std::isspace(static_cast<unsigned char>(stripped[next]))) {
+                ++next;
+            }
+            std::size_t next_end = next;
+            while (next_end < stripped.size() &&
+                   !std::isspace(static_cast<unsigned char>(stripped[next_end]))) {
+                ++next_end;
+            }
+            const bool trailing_number =
+                next_end > next &&
+                std::ranges::all_of(std::string_view{stripped.data() + next, next_end - next},
+                                    [](unsigned char c) { return std::isdigit(c) != 0; });
+            if (next_end == next || trailing_number) {
+                pos = next_end;
+                continue;
+            }
+        }
         if (!cleaned.empty()) {
             cleaned.push_back(' ');
         }
@@ -239,7 +329,14 @@ std::string CleanGameSearchQuery(std::string_view raw_name) {
         {"donkey-kong-bananza", "Donkey Kong Bananza"},
         {"oot", "The Legend of Zelda: Ocarina of Time"},
         {"ocarina-of-time", "The Legend of Zelda: Ocarina of Time"},
+        {"ocarinaoftime", "The Legend of Zelda: Ocarina of Time"},
+        {"the-legend-of-zelda-ocarina-of-time", "The Legend of Zelda: Ocarina of Time"},
+        {"the-legend-of-zelda-ocarina-of-time-switch", "The Legend of Zelda: Ocarina of Time"},
+        {"the-legend-of-zelda-ocarina-of-time-switch-2", "The Legend of Zelda: Ocarina of Time"},
+        {"legend-of-zelda-ocarina-of-time", "The Legend of Zelda: Ocarina of Time"},
+        {"zelda-ocarina-of-time", "The Legend of Zelda: Ocarina of Time"},
         {"welcometour", "Nintendo Switch 2 Welcome Tour"},
+        {"nintendo-welcome-tour", "Nintendo Switch 2 Welcome Tour"},
         {"welcome-tour", "Nintendo Switch 2 Welcome Tour"},
         {"ns2wt", "Nintendo Switch 2 Welcome Tour"},
         {"switch-2-welcome-tour", "Nintendo Switch 2 Welcome Tour"},
@@ -293,7 +390,14 @@ std::string ResolveCanonicalSearchTitle(std::string_view raw_name, u64 title_id)
         // Even if raw_name was a filename like "game_dump_final", exact Title ID is authoritative.
         return std::string{exact};
     }
-    return CleanGameSearchQuery(raw_name);
+    const std::string cleaned = CleanGameSearchQuery(raw_name);
+    // Reconstruct the canonical "Series: Subtitle" title for dump filenames that dropped the colon
+    // (e.g. "The Legend of Zelda Ocarina of Time Switch 2" -> "The Legend of Zelda: Ocarina of
+    // Time") so the keyless Libretro/Wikipedia fallbacks can match the real boxart names.
+    if (const auto reconstructed = ReconstructCatalogTitle(cleaned); !reconstructed.empty()) {
+        return reconstructed;
+    }
+    return cleaned;
 }
 
 std::string ExtractSubtitleQuery(std::string_view title) {
