@@ -30,6 +30,7 @@
 #include "common/settings.h"
 #include "video_core/gpu_split.h"
 #include "video_core/renderer_vulkan/fragment_barrier_state.h"
+#include "video_core/renderer_vulkan/frame_pacer.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -291,7 +292,10 @@ public:
     /// into the current chunk while that thread does (corrupt command buffers, crashes). They
     /// wait for the recording thread to submit the tick instead, and give up after 20 ms (it may
     /// be waiting for them).
-    void Wait(u64 tick, double target_fps = 0.0, bool may_flush = true) {
+    /// target_fps paces presents by game frames (FramePacer): each game frame takes 1/target_fps
+    /// and its `game_frame_presents` (generated frames plus the real frame) share that slot evenly.
+    void Wait(u64 tick, double target_fps = 0.0, bool may_flush = true,
+              u32 game_frame_presents = 1) {
         const bool trace = Common::DkbFrameTrace::Enabled() && target_fps > 0.0;
         const auto trace_start = trace ? std::chrono::steady_clock::now()
                                        : std::chrono::steady_clock::time_point{};
@@ -307,19 +311,10 @@ public:
         double trace_sleep_ms{};
         double trace_slept_ms{};
         if (Settings::values.use_speed_limit.GetValue() && target_fps > 0.0) {
-            auto now = std::chrono::steady_clock::now();
-            if (last_target_fps != target_fps) {
-                frame_interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / target_fps));
-                max_frame_count = static_cast<int>(0.1 * target_fps);
-                last_target_fps = target_fps;
-                frame_counter = 0;
-                start_time = now;
-            }
-            frame_counter++;
-            auto target_time = start_time + frame_interval * frame_counter;
-            if (target_time >= now) {
+            const auto now = std::chrono::steady_clock::now();
+            if (const auto target_time = frame_pacer.Next(now, target_fps, game_frame_presents)) {
                 constexpr auto spin_tail = std::chrono::milliseconds(1);
-                auto sleep_time = target_time - now;
+                const auto sleep_time = *target_time - now;
                 if (trace) {
                     trace_requested_ms =
                         std::chrono::duration<double, std::milli>(sleep_time).count();
@@ -337,12 +332,9 @@ public:
                             std::chrono::steady_clock::now() - sleep_start).count();
                     }
                 }
-                while (std::chrono::steady_clock::now() < target_time) {
+                while (std::chrono::steady_clock::now() < *target_time) {
                     std::this_thread::yield();
                 }
-            } else if (frame_counter > max_frame_count) {
-                frame_counter = 0;
-                start_time = now;
             }
         }
         if (trace) {
@@ -635,11 +627,7 @@ private:
     bool worker_waiting{}; ///< The worker is waiting for work (guarded by queue_mutex)
     std::jthread worker_thread;
 
-    std::chrono::steady_clock::duration frame_interval{};
-    std::chrono::steady_clock::time_point start_time{};
-    double last_target_fps{};
-    u64 max_frame_count{};
-    u64 frame_counter{};
+    FramePacer frame_pacer;
 };
 
 } // namespace Vulkan

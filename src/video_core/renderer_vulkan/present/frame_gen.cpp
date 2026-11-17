@@ -410,6 +410,9 @@ void FrameGen::LogActivity() {
     const auto now = std::chrono::steady_clock::now();
     ++activity.frames;
     activity.generated += GeneratedFrameCount();
+    if (plan.hitch_skipped) {
+        ++activity.hitch_skips;
+    }
     if (activity.since == std::chrono::steady_clock::time_point{}) {
         activity.since = now;
         return;
@@ -422,32 +425,46 @@ void FrameGen::LogActivity() {
         10.0f;
     if (per_frame != activity.logged_per_frame) {
         const f32 seconds = std::chrono::duration<f32>(now - activity.since).count();
+        const f32 game_fps = static_cast<f32>(activity.frames) / seconds;
+        const f32 gen_fps = static_cast<f32>(activity.generated) / seconds;
+        const f32 output_fps = game_fps + gen_fps;
         if (activity.generated == 0) {
             LOG_INFO(Render_Vulkan,
-                     "Frame generation ({}) idle: {:.0f} game FPS, no frames generated. It waits "
-                     "while the game is below 10 FPS, after hitches and once the target is met",
-                     ModeText(built_type), static_cast<f32>(activity.frames) / seconds);
+                     "Frame generation ({}) idle: {:.1f} game FPS + 0.0 generated = {:.1f} output "
+                     "FPS (limit {}, {} hitch skips, {} display trims). It waits while the game is "
+                     "below 10 FPS, after loading stalls, once the target is met, or while the "
+                     "display takes no more presents",
+                     ModeText(built_type), game_fps, output_fps, pacer.CurrentLimit(),
+                     activity.hitch_skips, activity.display_trims);
         } else {
             LOG_INFO(Render_Vulkan,
-                     "Frame generation ({}) generating: {:.0f} game FPS + {:.0f} generated, {:.1f} "
-                     "per game frame",
-                     ModeText(built_type), static_cast<f32>(activity.frames) / seconds,
-                     static_cast<f32>(activity.generated) / seconds, per_frame);
+                     "Frame generation ({}) active: {:.1f} game FPS + {:.1f} generated = {:.1f} "
+                     "output FPS ({:.1f} per game frame, limit {}, {} hitch skips, {} display "
+                     "trims)",
+                     ModeText(built_type), game_fps, gen_fps, output_fps, per_frame,
+                     pacer.CurrentLimit(), activity.hitch_skips, activity.display_trims);
         }
         activity.logged_per_frame = per_frame;
     }
     activity.since = now;
     activity.frames = 0;
     activity.generated = 0;
+    activity.hitch_skips = 0;
+    activity.display_trims = 0;
 }
 
-size_t FrameGen::WantedGenerations(size_t capacity,
+size_t FrameGen::WantedGenerations(size_t capacity, size_t free_frames,
                                    std::chrono::steady_clock::duration blocked) {
     if (unavailable) {
         plan = {};
         return 0;
     }
     plan = pacer.Plan(capacity, blocked);
+    const size_t without_waiting = GenerationsWithoutWaiting(plan.generations, free_frames);
+    if (without_waiting < plan.generations) {
+        ++activity.display_trims;
+    }
+    plan.generations = without_waiting;
     return plan.generations;
 }
 

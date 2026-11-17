@@ -734,7 +734,7 @@ void NupEditDialog::SetIconFromFile(const QString& path) {
 }
 
 void NupEditDialog::FindIcon() {
-    icon_search->Start(name_edit->text());
+    icon_search->Start(name_edit->text(), current.title_id);
 }
 
 void NupEditDialog::OnIconFound(const QByteArray& png, const QString& resolved_title) {

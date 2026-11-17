@@ -28,4 +28,20 @@ constexpr u64 MinEvictionAge = 150;
     return (std::max)({mode_age, MinEvictionAge, override_age});
 }
 
+/// How far the budget RetentionBudget follows may rise at each budget check (every 30 frames).
+constexpr u64 RetentionBudgetRise = u64{16} << 20;
+
+/// The driver budget the retention limit is taken from: the lowest one read lately. It follows
+/// a drop at once and a rise by RetentionBudgetRise per check (about 1 GiB in 2000 frames).
+/// Windows moves the budget with other programs' video memory: tracking the low-water mark with
+/// slow upward hysteresis prevents DXGI budget fluctuations from pushing textures over budget and
+/// causing eviction/re-upload oscillation.
+/// `held` is the last value (0 before the first check), `budget` the one read now.
+[[nodiscard]] constexpr u64 RetentionBudget(u64 held, u64 budget) {
+    if (held == 0 || budget <= held) {
+        return budget;
+    }
+    return (std::min)(budget, held + RetentionBudgetRise);
+}
+
 } // namespace VideoCommon

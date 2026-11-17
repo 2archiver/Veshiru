@@ -58,6 +58,10 @@ TEST_CASE("Artwork lookup prioritizes exact Program ID and cleans dump filenames
           "Donkey Kong Bananza");
     CHECK(CleanGameSearchQuery("dkb") == "Donkey Kong Bananza");
     CHECK(CleanGameSearchQuery("welcome-tour") == "Nintendo Switch 2 Welcome Tour");
+    CHECK(CleanGameSearchQuery("oot") == "The Legend of Zelda: Ocarina of Time");
+    CHECK(CleanGameSearchQuery("Ocarina_of_Time_[0400486024DEC000].nup") ==
+          "The Legend of Zelda: Ocarina of Time");
+    CHECK(CleanGameSearchQuery("zelda-oot") == "The Legend of Zelda: Ocarina of Time");
 }
 
 TEST_CASE("Artwork candidate scoring avoids wrong editions, demos, and sequel mismatches",
@@ -75,15 +79,62 @@ TEST_CASE("Artwork candidate scoring avoids wrong editions, demos, and sequel mi
     const int dkb_exact = ScoreArtworkCandidate("Donkey Kong Bananza", "Donkey Kong Bananza");
     const int dkb_demo = ScoreArtworkCandidate("Donkey Kong Bananza Demo", "Donkey Kong Bananza");
     CHECK(dkb_exact > dkb_demo + 500);
+
+    // Regression: Ocarina of Time must never match bare "The Legend of Zelda" or unrelated Zelda
+    // games (the v1.4.0 bug where franchise prefix matching scored +528 >= 300).
+    const std::string oot = "The Legend of Zelda: Ocarina of Time";
+    const int oot_exact = ScoreArtworkCandidate("The Legend of Zelda: Ocarina of Time", oot);
+    const int oot_3d = ScoreArtworkCandidate("The Legend of Zelda: Ocarina of Time 3D", oot);
+    const int oot_short = ScoreArtworkCandidate("Ocarina of Time", oot);
+    const int oot_zelda_short = ScoreArtworkCandidate("Zelda: Ocarina of Time", oot);
+    const int oot_ost = ScoreArtworkCandidate("Ocarina of Time Soundtrack", oot);
+    const int zelda_bare = ScoreArtworkCandidate("The Legend of Zelda", oot);
+    const int zelda_botw = ScoreArtworkCandidate("The Legend of Zelda: Breath of the Wild", oot);
+    const int zelda_totk = ScoreArtworkCandidate("The Legend of Zelda: Tears of the Kingdom", oot);
+    const int zelda_la = ScoreArtworkCandidate("The Legend of Zelda: Link's Awakening", oot);
+    const int zelda_eow = ScoreArtworkCandidate("The Legend of Zelda: Echoes of Wisdom", oot);
+    CHECK(oot_exact > 1000);
+    CHECK(oot_3d >= 300);
+    CHECK(oot_short >= 300);
+    CHECK(oot_zelda_short >= 300);
+    CHECK(oot_exact > oot_3d);
+    CHECK(oot_exact > oot_zelda_short);
+    CHECK(oot_ost < 300);
+    CHECK(zelda_bare < 300);
+    CHECK(zelda_botw < 300);
+    CHECK(zelda_totk < 300);
+    CHECK(zelda_la < 300);
+    CHECK(zelda_eow < 300);
+
+    // Subtitle guard also separates distinct entries in other colon-separated series
+    const std::string aoi = "Hyrule Warriors: Age of Imprisonment";
+    CHECK(ScoreArtworkCandidate("Hyrule Warriors: Age of Imprisonment", aoi) > 1000);
+    CHECK(ScoreArtworkCandidate("Hyrule Warriors: Age of Calamity", aoi) < 300);
+    CHECK(ScoreArtworkCandidate("Hyrule Warriors", aoi) < 300);
 }
 
-TEST_CASE("Sidecar artwork cache stores validated PNGs and enforces failure cooldown",
+TEST_CASE("Artwork subtitle extraction and Libretro No-Intro name variants", "[artwork_cache]") {
+    using namespace Common::ArtworkCache;
+
+    CHECK(ExtractSubtitleQuery("The Legend of Zelda: Ocarina of Time") == "Ocarina of Time");
+    CHECK(ExtractSubtitleQuery("Hyrule Warriors: Age of Imprisonment") == "Age of Imprisonment");
+    CHECK(ExtractSubtitleQuery("Mario Kart World").empty());
+
+    const auto oot_variants = BuildLibretroNameVariants("The Legend of Zelda: Ocarina of Time");
+    REQUIRE(oot_variants.size() >= 2);
+    CHECK(oot_variants[0] == "Legend of Zelda, The - Ocarina of Time");
+    CHECK(oot_variants[1] == "The Legend of Zelda - Ocarina of Time");
+
+    const auto mkw_variants = BuildLibretroNameVariants("Mario Kart World");
+    REQUIRE(mkw_variants.size() == 1);
+    CHECK(mkw_variants[0] == "Mario Kart World");
+}
+
+TEST_CASE("Sidecar artwork cache stores validated PNGs, clears cleanly, and enforces cooldown",
           "[artwork_cache]") {
     using namespace Common::ArtworkCache;
     constexpr u64 test_tid = 0x0400BEEF12340000ULL;
-    std::error_code ec;
-    std::filesystem::remove(ArtworkPngPath(test_tid), ec);
-    std::filesystem::remove(ArtworkMetaPath(test_tid), ec);
+    ClearCachedArtwork(test_tid);
 
     CHECK(ShouldAutoFetchArtwork(test_tid, 1000));
 
@@ -96,6 +147,10 @@ TEST_CASE("Sidecar artwork cache stores validated PNGs and enforces failure cool
     RecordArtworkFailure(test_tid, "HTTP 503", 600);
     CHECK_FALSE(ShouldAutoFetchArtwork(test_tid, 0));
 
+    // Clearing cached artwork removes failure cooldown immediately
+    ClearCachedArtwork(test_tid);
+    CHECK(ShouldAutoFetchArtwork(test_tid, 0));
+
     // Valid HD PNG succeeds and populates sidecar metadata
     const auto png = MakeValidMinimalPngHeader(512, 512);
     REQUIRE(IsValidImageBytes(png));
@@ -104,6 +159,8 @@ TEST_CASE("Sidecar artwork cache stores validated PNGs and enforces failure cool
     CHECK(ReadSidecarTitle(test_tid) == "Donkey Kong Bananza");
     CHECK_FALSE(ShouldAutoFetchArtwork(test_tid, 9999999999ULL));
 
-    std::filesystem::remove(ArtworkPngPath(test_tid), ec);
-    std::filesystem::remove(ArtworkMetaPath(test_tid), ec);
+    // Clearing cached artwork removes both the cached PNG and sidecar metadata
+    ClearCachedArtwork(test_tid);
+    CHECK(ReadCachedArtwork(test_tid).empty());
+    CHECK(ReadSidecarTitle(test_tid).empty());
 }

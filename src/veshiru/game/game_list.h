@@ -153,7 +153,8 @@ private:
     void AddFavoritesPopup(QMenu& context_menu);
     void AutoFetchMissingArtwork();
     void RefreshGameArtwork(u64 program_id, const std::string& path);
-    void ApplyArtworkToModel(u64 program_id, const QByteArray& png, const QString& resolved_title);
+    void ApplyArtworkToModel(u64 program_id, const QByteArray& png, const QString& resolved_title,
+                             bool force_title = false);
 
     void RetranslateUI();
 

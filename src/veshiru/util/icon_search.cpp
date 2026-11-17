@@ -99,16 +99,24 @@ std::string UrlEncode(std::string_view value) {
     return out;
 }
 
-constexpr std::chrono::seconds SearchDeadline{15};
+constexpr std::chrono::seconds SearchDeadline{20};
 constexpr std::size_t MaxHttpBodySize = 6 * 1024 * 1024;
 constexpr std::chrono::seconds TitleIdProbeDeadline{3};
 constexpr std::chrono::seconds PrimarySourceDeadline{4};
-constexpr std::chrono::seconds FallbackSourceDeadline{4};
+constexpr std::chrono::seconds FallbackSourceDeadline{6};
 constexpr std::string_view IconSiteHost = "https://switchiconshowdown.com";
 constexpr std::string_view TitleIdApiHost = "https://api.nlib.cc";
-constexpr std::string_view LibretroBoxartBase =
-    "https://thumbnails.libretro.com/Nintendo%20-%20Nintendo%20Switch/Named_Boxarts/";
-constexpr std::string_view WikipediaSummaryBase = "https://en.wikipedia.org/api/rest_v1/page/summary/";
+constexpr std::array<std::string_view, 4> LibretroBoxartBases{{
+    "https://thumbnails.libretro.com/Nintendo%20-%20Nintendo%20Switch/Named_Boxarts/",
+    "https://thumbnails.libretro.com/Nintendo%20-%20Nintendo%2064/Named_Boxarts/",
+    "https://thumbnails.libretro.com/Nintendo%20-%20Nintendo%203DS/Named_Boxarts/",
+    "https://thumbnails.libretro.com/Nintendo%20-%20GameCube/Named_Boxarts/",
+}};
+constexpr std::string_view WikipediaSummaryBase =
+    "https://en.wikipedia.org/api/rest_v1/page/summary/";
+constexpr std::string_view WikipediaApiBase =
+    "https://en.wikipedia.org/w/api.php?action=query&format=json&redirects=1&prop=pageimages&"
+    "pithumbsize=512&titles=";
 constexpr std::string_view SgdbApiBase = "https://www.steamgriddb.com/api/v2";
 
 bool IsAllowedIconHost(std::string_view host) {
@@ -129,71 +137,109 @@ struct HttpResult {
 };
 
 // Every request shares one deadline and cancel flag, so a whole search can never run past it.
+// Redirects are followed manually so VESHIRU_BUNDLED_OPENSSL reloads the bundled CA store on
+// cross-host hops (cpp-httplib's internal follow_location creates a fresh Client without it)
+// and every hop is validated against IsAllowedIconHost.
 HttpResult HttpGet(const std::string& full_url, std::chrono::steady_clock::time_point deadline,
                    const std::atomic_bool& cancel, const std::string& bearer_token = {}) {
     using namespace std::chrono;
-    HttpResult result;
-    if (cancel) {
-        result.status = HttpStatus::Cancelled;
-        return result;
-    }
+    constexpr int MaxRedirectHops = 4;
     constexpr std::string_view scheme = "https://";
-    if (!full_url.starts_with(scheme)) {
-        result.detail = "unsupported URL";
-        return result;
-    }
-    const auto path_start = full_url.find('/', scheme.size());
-    const std::string origin =
-        path_start == std::string::npos ? full_url : full_url.substr(0, path_start);
-    const std::string path =
-        path_start == std::string::npos ? std::string{"/"} : full_url.substr(path_start);
-    if (!IsAllowedIconHost(std::string_view{origin}.substr(scheme.size()))) {
-        result.detail = "unexpected host";
-        return result;
-    }
-    const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now());
-    if (remaining.count() <= 0) {
-        result.status = HttpStatus::Timeout;
-        return result;
-    }
-    try {
-        httplib::Client client(origin);
-        client.set_connection_timeout(remaining);
-        client.set_read_timeout(remaining);
-        client.set_write_timeout(remaining);
-        client.set_max_timeout(remaining);
-        client.set_follow_location(true);
+    HttpResult result;
+    std::string current_url = full_url;
+
+    for (int hop = 0; hop <= MaxRedirectHops; ++hop) {
+        if (cancel) {
+            result.status = HttpStatus::Cancelled;
+            return result;
+        }
+        if (!current_url.starts_with(scheme)) {
+            result.detail = "unsupported URL";
+            return result;
+        }
+        const auto path_start = current_url.find('/', scheme.size());
+        const std::string origin =
+            path_start == std::string::npos ? current_url : current_url.substr(0, path_start);
+        const std::string path =
+            path_start == std::string::npos ? std::string{"/"} : current_url.substr(path_start);
+        const std::string_view host = std::string_view{origin}.substr(scheme.size());
+        if (!IsAllowedIconHost(host)) {
+            result.detail = "unexpected host";
+            return result;
+        }
+        const auto remaining = duration_cast<milliseconds>(deadline - steady_clock::now());
+        if (remaining.count() <= 0) {
+            result.status = HttpStatus::Timeout;
+            return result;
+        }
+        try {
+            httplib::Client client(origin);
+            client.set_connection_timeout(remaining);
+            client.set_read_timeout(remaining);
+            client.set_write_timeout(remaining);
+            client.set_max_timeout(remaining);
+            client.set_follow_location(false);
 #ifdef VESHIRU_BUNDLED_OPENSSL
-        client.load_ca_cert_store(kCert, sizeof(kCert));
+            client.load_ca_cert_store(kCert, sizeof(kCert));
 #endif
-        httplib::Headers headers{{"User-Agent", "Veshiru/1.4.0 (https://github.com/2archiver/Veshiru)"}};
-        if (!bearer_token.empty()) {
-            headers.emplace("Authorization", "Bearer " + bearer_token);
-        }
-        auto res = client.Get(path, headers);
-        if (!res) {
-            result.status = res.error() == httplib::Error::Canceled || steady_clock::now() >= deadline
-                                ? HttpStatus::Timeout
-                                : HttpStatus::NetworkError;
-            result.detail = httplib::to_string(res.error());
+            httplib::Headers headers{
+                {"User-Agent", "Veshiru/1.5.0 (https://github.com/2archiver/Veshiru)"}};
+            if (!bearer_token.empty() &&
+                (host == "steamgriddb.com" || host.ends_with(".steamgriddb.com"))) {
+                headers.emplace("Authorization", "Bearer " + bearer_token);
+            }
+            auto res = client.Get(path, headers);
+            if (!res) {
+                result.status =
+                    res.error() == httplib::Error::Canceled || steady_clock::now() >= deadline
+                        ? HttpStatus::Timeout
+                        : HttpStatus::NetworkError;
+                result.detail = httplib::to_string(res.error());
+                return result;
+            }
+            if (res->status == 301 || res->status == 302 || res->status == 303 ||
+                res->status == 307 || res->status == 308) {
+                if (hop == MaxRedirectHops) {
+                    result.detail = "too many redirects";
+                    return result;
+                }
+                const std::string location = res->get_header_value("Location");
+                if (location.empty()) {
+                    result.detail = fmt::format("HTTP {} without Location", res->status);
+                    return result;
+                }
+                if (location.starts_with(scheme)) {
+                    current_url = location;
+                } else if (location.starts_with("//")) {
+                    current_url = "https:" + location;
+                } else if (location.starts_with('/')) {
+                    current_url = origin + location;
+                } else {
+                    result.detail = "unsupported redirect URL";
+                    return result;
+                }
+                continue;
+            }
+            if (res->status != 200) {
+                result.status = res->status == 401 || res->status == 403 ? HttpStatus::Unauthorized
+                                                                         : HttpStatus::NetworkError;
+                result.detail = fmt::format("HTTP {}", res->status);
+                return result;
+            }
+            if (res->body.empty() || res->body.size() > MaxHttpBodySize) {
+                result.detail = "unexpected response size";
+                return result;
+            }
+            result.status = HttpStatus::Ok;
+            result.body = std::move(res->body);
+            return result;
+        } catch (const std::exception& e) {
+            result.detail = e.what();
+            return result;
+        } catch (...) {
+            result.detail = "unknown error";
             return result;
         }
-        if (res->status != 200) {
-            result.status = res->status == 401 || res->status == 403 ? HttpStatus::Unauthorized
-                                                                      : HttpStatus::NetworkError;
-            result.detail = fmt::format("HTTP {}", res->status);
-            return result;
-        }
-        if (res->body.empty() || res->body.size() > MaxHttpBodySize) {
-            result.detail = "unexpected response size";
-            return result;
-        }
-        result.status = HttpStatus::Ok;
-        result.body = std::move(res->body);
-    } catch (const std::exception& e) {
-        result.detail = e.what();
-    } catch (...) {
-        result.detail = "unknown error";
     }
     return result;
 }
@@ -255,32 +301,6 @@ std::string UrlEncodePathSegment(std::string value) {
     auto encoded = UrlEncode(value);
     boost::replace_all(encoded, "+", "%20");
     return encoded;
-}
-
-std::string SanitizeLibretroTitle(std::string_view title) {
-    std::string out;
-    out.reserve(title.size());
-    for (const char c : title) {
-        switch (c) {
-        case '&':
-        case '*':
-        case '/':
-        case ':':
-        case '`':
-        case '<':
-        case '>':
-        case '?':
-        case '\\':
-        case '|':
-        case '"':
-            out.push_back('_');
-            break;
-        default:
-            out.push_back(c);
-            break;
-        }
-    }
-    return out;
 }
 
 std::string EncodeWikipediaTitle(std::string_view title) {
@@ -350,9 +370,11 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
         const auto start = steady_clock::now();
         const auto deadline = start + SearchDeadline;
         const u64 base_tid = Common::ArtworkCache::BaseProgramId(tid);
+        const bool has_catalog_title =
+            base_tid != 0 && !Common::ArtworkCache::LookupTitleByProgramId(base_tid).empty();
         std::string search_name =
             Common::ArtworkCache::ResolveCanonicalSearchTitle(raw_query, base_tid);
-        if (!search_name.empty() && search_name != raw_query) {
+        if (!search_name.empty() && (has_catalog_title || search_name != raw_query)) {
             out.resolved_title = search_name;
         }
 
@@ -381,8 +403,6 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
         //    official HD eShop icon when available, avoiding wrong editions completely. Always
         //    probe even for titles present in the local catalog so we still fetch the official
         //    eShop CDN icon directly by Title ID.
-        const bool has_catalog_title =
-            base_tid != 0 && !Common::ArtworkCache::LookupTitleByProgramId(base_tid).empty();
         if (base_tid != 0) {
             const auto tid_deadline = std::min(deadline, start + TitleIdProbeDeadline);
             const auto tid_res = HttpGet(
@@ -430,9 +450,12 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             std::min(deadline, steady_clock::now() + PrimarySourceDeadline);
         do {
             std::vector<std::string> queries{search_name};
-            if (const auto colon = search_name.find(':');
-                colon != std::string::npos && colon > 0) {
-                queries.push_back(search_name.substr(0, colon));
+            // Never fall back to the bare franchise prefix before ':' (e.g. "The Legend of
+            // Zelda"), which returns unrelated Zelda games. Search the distinctive subtitle
+            // after ':' (e.g. "Ocarina of Time") instead.
+            if (auto subtitle = Common::ArtworkCache::ExtractSubtitleQuery(search_name);
+                !subtitle.empty()) {
+                queries.push_back(std::move(subtitle));
             }
             std::vector<IconCandidate> candidates;
             for (const auto& query : queries) {
@@ -496,38 +519,56 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             return out;
         }
 
-        // 3. Keyless fallback HD boxart: Libretro Nintendo Switch thumbnails CDN.
+        // 3. Keyless fallback HD boxart: Libretro Thumbnails CDN (Switch, N64, 3DS, GameCube)
+        //    using No-Intro naming normalization (": " -> " - ", leading "The " -> ", The").
         bool any_keyless_succeeded_cleanly = (primary == IconSearchStatus::NotFound);
         {
             const auto libretro_deadline =
                 std::min(deadline, steady_clock::now() + FallbackSourceDeadline);
-            const std::string sanitized = SanitizeLibretroTitle(search_name);
-            for (const std::string& candidate_name :
-                 {sanitized, sanitized + " (USA)", sanitized + " (World)"}) {
+            const auto variants = Common::ArtworkCache::BuildLibretroNameVariants(search_name);
+            for (const std::string_view base_url : LibretroBoxartBases) {
                 if (steady_clock::now() >= libretro_deadline) {
                     break;
                 }
-                const auto res =
-                    HttpGet(std::string{LibretroBoxartBase} + UrlEncodePathSegment(candidate_name) +
-                                ".png",
-                            libretro_deadline, cancel);
-                if (res.status == HttpStatus::Cancelled) {
-                    out.status = IconSearchStatus::Cancelled;
-                    return out;
-                }
-                if (res.status == HttpStatus::Ok && decode_icon(res.body)) {
-                    out.status = IconSearchStatus::Found;
-                    out.source = "libretro_thumbnails";
-                    return out;
-                }
-                if (res.detail == "HTTP 404") {
-                    any_keyless_succeeded_cleanly = true;
+                const bool is_switch = base_url == LibretroBoxartBases[0];
+                for (const std::string& variant : variants) {
+                    std::vector<std::string> names;
+                    if (is_switch) {
+                        names = {variant, variant + " (USA)", variant + " (World)"};
+                    } else {
+                        // Classic No-Intro archives (N64/3DS/GC) almost always include a region tag.
+                        names = {variant + " (USA)", variant + " (USA, Europe)", variant + " (World)"};
+                        if (base_url == LibretroBoxartBases[2]) {
+                            names.push_back(variant + " 3D (USA)");
+                        }
+                    }
+                    for (const std::string& candidate_name : names) {
+                        if (steady_clock::now() >= libretro_deadline) {
+                            break;
+                        }
+                        const auto res =
+                            HttpGet(std::string{base_url} + UrlEncodePathSegment(candidate_name) +
+                                        ".png",
+                                    libretro_deadline, cancel);
+                        if (res.status == HttpStatus::Cancelled) {
+                            out.status = IconSearchStatus::Cancelled;
+                            return out;
+                        }
+                        if (res.status == HttpStatus::Ok && decode_icon(res.body)) {
+                            out.status = IconSearchStatus::Found;
+                            out.source = "libretro_thumbnails";
+                            return out;
+                        }
+                        if (res.detail == "HTTP 404") {
+                            any_keyless_succeeded_cleanly = true;
+                        }
+                    }
                 }
             }
         }
 
-        // 4. Keyless fallback HD cover art: Wikipedia REST summary API (works out of the box for
-        //    Switch 2 launch titles such as Mario Kart World and Donkey Kong Bananza with no key).
+        // 4. Keyless fallback HD cover art: Wikipedia REST summary API + MediaWiki pageimages API
+        //    (works out of the box for Switch 2 launch titles and classic titles with no key).
         {
             const auto wiki_deadline =
                 std::min(deadline, steady_clock::now() + FallbackSourceDeadline);
@@ -574,6 +615,51 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
                         out.status = IconSearchStatus::Found;
                         out.source = "wikipedia";
                         return out;
+                    }
+                }
+            }
+            // MediaWiki Action API pageimages fallback handles redirected article titles cleanly.
+            if (steady_clock::now() < wiki_deadline) {
+                const auto api_res =
+                    HttpGet(std::string{WikipediaApiBase} + UrlEncode(search_name), wiki_deadline,
+                            cancel);
+                if (api_res.status == HttpStatus::Cancelled) {
+                    out.status = IconSearchStatus::Cancelled;
+                    return out;
+                }
+                if (api_res.status == HttpStatus::Ok) {
+                    any_keyless_succeeded_cleanly = true;
+                    const auto parsed_api = nlohmann::json::parse(api_res.body, nullptr, false);
+                    if (!parsed_api.is_discarded() && parsed_api.is_object() &&
+                        parsed_api.contains("query") && parsed_api["query"].is_object() &&
+                        parsed_api["query"].contains("pages") &&
+                        parsed_api["query"]["pages"].is_object()) {
+                        for (const auto& [page_id, page] : parsed_api["query"]["pages"].items()) {
+                            if (page_id == "-1" || !page.is_object() ||
+                                !page.contains("thumbnail") || !page["thumbnail"].is_object() ||
+                                !page["thumbnail"].contains("source") ||
+                                !page["thumbnail"]["source"].is_string()) {
+                                continue;
+                            }
+                            if (page.contains("title") && page["title"].is_string()) {
+                                const std::string page_title = page["title"].get<std::string>();
+                                if (ScoreCandidateTitle(page_title, search_name) <
+                                    MinCandidateScore) {
+                                    continue;
+                                }
+                            }
+                            const auto img_url = page["thumbnail"]["source"].get<std::string>();
+                            const auto img_res = HttpGet(img_url, wiki_deadline, cancel);
+                            if (img_res.status == HttpStatus::Cancelled) {
+                                out.status = IconSearchStatus::Cancelled;
+                                return out;
+                            }
+                            if (img_res.status == HttpStatus::Ok && decode_icon(img_res.body)) {
+                                out.status = IconSearchStatus::Found;
+                                out.source = "wikipedia";
+                                return out;
+                            }
+                        }
                     }
                 }
             }

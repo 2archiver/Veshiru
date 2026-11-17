@@ -158,7 +158,9 @@ add_executable(tests
     video_core/native_qmd.cpp
     video_core/fast_draw.cpp
     video_core/gpu_command_safety.cpp
+    video_core/mesh_vertex_input.cpp
     video_core/syncpoint_actions.cpp
+    video_core/due_composites.cpp
     video_core/nx2_video_av1.cpp
     video_core/nx2_video_render.cpp
     video_core/ampere_matrix.cpp

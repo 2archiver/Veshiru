@@ -28,6 +28,7 @@
 #include "video_core/control/channel_state.h"
 #include "video_core/control/scheduler.h"
 #include "video_core/dma_pusher.h"
+#include "video_core/due_composites.h"
 #include "video_core/engines/fermi_2d.h"
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/kepler_memory.h"
@@ -35,6 +36,7 @@
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/gpu.h"
+#include "video_core/gpu_split.h"
 #include "video_core/pending_maps.h"
 #include "video_core/gpu_thread.h"
 #include "video_core/gpu_timestamp.h"
@@ -342,18 +344,13 @@ struct GPU::Impl {
             return raster_area;
         }
         raster_area.preemtive = true;
-        // A guest CPU read of GPU-written memory (reactive flushing): count them, they decide
-        // whether buffer data must be copied back at every fence (EDEN_NX2_BUFFER_DOWNLOADS).
-        if (static std::atomic<u64> reads{}; (reads.fetch_add(1, std::memory_order_relaxed) & 63) == 0) {
-            LOG_INFO(HW_GPU, "CPU read of GPU-written memory [{:#x}, {:#x}) ({} so far)",
-                     raster_area.start_address, raster_area.end_address,
-                     reads.load(std::memory_order_relaxed));
-        }
         namespace AsyncReadback = VideoCore::AsyncReadback;
         const u64 request = AsyncReadback::Now();
         const u64 area_size = raster_area.end_address - raster_area.start_address;
+        u64 sync_wait_ns = 0;
         // In flight: an earlier read's downloads cover the area, only FinishRead is left.
         if (!raster_area.in_flight) {
+            const u64 wait_start = AsyncReadback::Now();
             const u64 fence = RequestSyncOperation([this, raster_area, area_size]() {
                 const u64 start = AsyncReadback::Now();
                 // Apply collected guest writes before downloading GPU data over guest memory.
@@ -365,15 +362,80 @@ struct GPU::Impl {
             });
             gpu_thread.TickGPU(is_async);
             WaitForSyncOperation(fence);
+            sync_wait_ns = AsyncReadback::Now() - wait_start;
         }
         // The GPU thread submitted the downloads without waiting for the host GPU: this thread
         // waits for them and writes them to guest memory, while the GPU thread goes on.
         AsyncReadback::t_reading = true;
         renderer->ReadRasterizer()->FinishRead(raster_area.start_address, area_size);
         AsyncReadback::t_reading = false;
+        const u64 finish = AsyncReadback::Now();
+        const u64 total_ns = finish - request;
         AsyncReadback::CountRead(raster_area.in_flight ? AsyncReadback::Read::InFlight
                                                        : AsyncReadback::Read::Async,
-                                 AsyncReadback::Now() - request);
+                                 total_ns);
+        // Sampled periodic readback summary (replaces noisy 1-in-64 unconditional INFO spam).
+        struct ReadbackSummary {
+            std::atomic<u64> total_reads{};
+            std::atomic<u64> sync_waits{};
+            std::atomic<u64> in_flight_hits{};
+            std::atomic<u64> total_bytes{};
+            std::atomic<u64> sync_wait_ns{};
+            std::atomic<u64> total_ns{};
+            std::atomic<u64> max_sync_wait_ns{};
+            std::atomic<u64> max_total_ns{};
+            std::atomic<u64> last_report_ns{};
+        };
+        static ReadbackSummary summary{};
+        const auto update_max = [](std::atomic<u64>& target, u64 value) {
+            u64 current = target.load(std::memory_order_relaxed);
+            while (value > current &&
+                   !target.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
+            }
+        };
+        summary.total_reads.fetch_add(1, std::memory_order_relaxed);
+        if (raster_area.in_flight) {
+            summary.in_flight_hits.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            summary.sync_waits.fetch_add(1, std::memory_order_relaxed);
+            summary.sync_wait_ns.fetch_add(sync_wait_ns, std::memory_order_relaxed);
+            update_max(summary.max_sync_wait_ns, sync_wait_ns);
+        }
+        summary.total_bytes.fetch_add(area_size, std::memory_order_relaxed);
+        summary.total_ns.fetch_add(total_ns, std::memory_order_relaxed);
+        update_max(summary.max_total_ns, total_ns);
+
+        constexpr u64 REPORT_INTERVAL_NS = 10'000'000'000ULL;
+        u64 last = summary.last_report_ns.load(std::memory_order_relaxed);
+        if (last == 0) {
+            summary.last_report_ns.compare_exchange_strong(last, finish, std::memory_order_relaxed);
+        } else if (finish > last && finish - last >= REPORT_INTERVAL_NS &&
+                   summary.last_report_ns.compare_exchange_strong(last, finish,
+                                                                  std::memory_order_relaxed)) {
+            const u64 reads = summary.total_reads.exchange(0, std::memory_order_relaxed);
+            const u64 syncs = summary.sync_waits.exchange(0, std::memory_order_relaxed);
+            const u64 in_flight = summary.in_flight_hits.exchange(0, std::memory_order_relaxed);
+            const u64 bytes = summary.total_bytes.exchange(0, std::memory_order_relaxed);
+            const u64 wait_ns = summary.sync_wait_ns.exchange(0, std::memory_order_relaxed);
+            const u64 dur_ns = summary.total_ns.exchange(0, std::memory_order_relaxed);
+            const u64 max_wait_ns = summary.max_sync_wait_ns.exchange(0, std::memory_order_relaxed);
+            const u64 max_dur_ns = summary.max_total_ns.exchange(0, std::memory_order_relaxed);
+            if (reads > 0) {
+                const double avg_wait_us =
+                    syncs > 0 ? static_cast<double>(wait_ns) / (static_cast<double>(syncs) * 1e3)
+                              : 0.0;
+                const double avg_total_us =
+                    static_cast<double>(dur_ns) / (static_cast<double>(reads) * 1e3);
+                LOG_INFO(HW_GPU,
+                         "CPU readback summary (10 s): {} reads ({} sync GPU waits, {} async "
+                         "in-flight), {:.2f} MiB, avg/max sync wait {:.1f}/{:.1f} us, avg/max "
+                         "total {:.1f}/{:.1f} us, last [{:#x}, {:#x})",
+                         reads, syncs, in_flight, static_cast<double>(bytes) / (1024.0 * 1024.0),
+                         avg_wait_us, static_cast<double>(max_wait_ns) / 1e3, avg_total_us,
+                         static_cast<double>(max_dur_ns) / 1e3, raster_area.start_address,
+                         raster_area.end_address);
+            }
+        }
         if (VideoCommon::Nx2Profile::Enabled()) {
             AsyncReadback::MaybeReport();
         }
@@ -424,7 +486,7 @@ struct GPU::Impl {
             [this, current_request_counter, num_fences, composite_layers = std::move(layers),
              composite_fences = std::move(fences)] {
                 if (num_fences == 0) {
-                    renderer->Composite(composite_layers);
+                    CompositeOnOwner(composite_layers);
                     return;
                 }
                 auto& syncpoint_manager = system.Host1x().GetSyncpointManager();
@@ -436,7 +498,7 @@ struct GPU::Impl {
                         }
                         free_swap_counters.push_back(current_request_counter);
                     }
-                    renderer->Composite(composite_layers);
+                    CompositeOnOwner(composite_layers);
                 };
                 for (size_t i = 0; i < num_fences; i++) {
                     syncpoint_manager.RegisterGuestAction(composite_fences[i].id,
@@ -444,6 +506,21 @@ struct GPU::Impl {
                 }
             });
         gpu_thread.TickGPU(is_async);
+    }
+
+    /// A present whose fences were all reached, on the thread that reached the last one. Every
+    /// present goes through due_composites, so none overtakes one queued for the owner.
+    void CompositeOnOwner(const VideoCommon::DueComposites::Layers& layers) {
+        const auto composite = [this](const VideoCommon::DueComposites::Layers& due) {
+            renderer->Composite(due);
+        };
+        // A fence another thread reached waits for the owner's next tick. That thread may be one
+        // the GPU threads wait for, so it doesn't wait.
+        due_composites.Reached(
+            layers, VideoCommon::GpuSplit::OwnsScheduler(), composite, [this, composite] {
+                (void)RequestSyncOperation([this, composite] { due_composites.Run(composite); });
+                gpu_thread.TickGPU(true);
+            });
     }
 
     void WaitForComposite() {
@@ -521,6 +598,7 @@ struct GPU::Impl {
     std::deque<size_t> free_swap_counters;
     std::deque<size_t> request_swap_counters;
     std::mutex request_swap_mutex;
+    VideoCommon::DueComposites due_composites;
     u64 pending_composite_fence{};
 };
 

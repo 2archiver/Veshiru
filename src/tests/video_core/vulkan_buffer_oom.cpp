@@ -6,7 +6,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+// Before the Vulkan headers: Xlib defines Success, which NvResult (nvdata.h) declares.
+#include "video_core/renderer_vulkan/vk_state_tracker.h"
+
 #include "common/common_types.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
 #include "video_core/vulkan_common/vulkan_library.h"
@@ -70,4 +75,50 @@ TEST_CASE("Vulkan buffers: TryCreateBuffer returns a null buffer when no heap ca
     const Vulkan::vk::Buffer buffer = allocator.TryCreateBuffer(fits, Vulkan::MemoryUsage::Upload);
     REQUIRE(buffer);
     REQUIRE(buffer.IsHostVisible());
+}
+
+// #1993: the recovery runs while a draw is set up, after its index and vertex binds were
+// recorded. A submit there left those binds in the submitted command buffer.
+TEST_CASE("Vulkan buffers: staging memory recovery does not submit the open command buffer",
+          "[vulkan_buffer_oom]") {
+    const auto library = Vulkan::OpenLibrary();
+    if (!library) {
+        SKIP("No Vulkan library");
+    }
+    Vulkan::vk::InstanceDispatch dld;
+    std::optional<Vulkan::vk::Instance> instance;
+    try {
+        instance.emplace(Vulkan::CreateInstance(*library, dld, VK_API_VERSION_1_1));
+    } catch (const Vulkan::vk::Exception&) {
+        SKIP("No Vulkan instance");
+    }
+    std::optional<Vulkan::Device> device;
+    for (const VkPhysicalDevice physical : instance->EnumeratePhysicalDevices()) {
+        try {
+            device.emplace(**instance, Vulkan::vk::PhysicalDevice(physical, dld), VK_NULL_HANDLE,
+                           dld);
+            break;
+        } catch (const Vulkan::vk::Exception&) {
+            continue;
+        }
+    }
+    if (!device) {
+        SKIP("No Vulkan device");
+    }
+    Vulkan::MemoryAllocator allocator(*device);
+    Vulkan::StateTracker state_tracker;
+    Vulkan::Scheduler scheduler(*device, state_tracker);
+    Vulkan::StagingBufferPool pool(*device, allocator, scheduler);
+
+    constexpr size_t size = 1 << 20;
+    const Vulkan::StagingBufferRef in_use = pool.Request(size, Vulkan::MemoryUsage::Download);
+    REQUIRE(in_use.buffer != VK_NULL_HANDLE);
+    const u64 tick = scheduler.CurrentTick();
+    const u64 epoch = scheduler.RecordingEpoch();
+
+    pool.ReleaseMemory();
+
+    CHECK(scheduler.CurrentTick() == tick);
+    CHECK(scheduler.RecordingEpoch() == epoch);
+    CHECK(pool.CachedBytes(Vulkan::MemoryUsage::Download) == size);
 }

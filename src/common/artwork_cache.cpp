@@ -255,6 +255,14 @@ std::string CleanGameSearchQuery(std::string_view raw_name) {
         {"mk8", "Mario Kart 8 Deluxe"},
         {"mk8d", "Mario Kart 8 Deluxe"},
         {"smo", "Super Mario Odyssey"},
+        {"oot", "The Legend of Zelda: Ocarina of Time"},
+        {"ocarina", "The Legend of Zelda: Ocarina of Time"},
+        {"ocarina-of-time", "The Legend of Zelda: Ocarina of Time"},
+        {"ocarinaoftime", "The Legend of Zelda: Ocarina of Time"},
+        {"zelda-oot", "The Legend of Zelda: Ocarina of Time"},
+        {"zeldaoot", "The Legend of Zelda: Ocarina of Time"},
+        {"tloz-oot", "The Legend of Zelda: Ocarina of Time"},
+        {"tlozoot", "The Legend of Zelda: Ocarina of Time"},
         {"botw", "The Legend of Zelda: Breath of the Wild"},
         {"totk", "The Legend of Zelda: Tears of the Kingdom"},
         {"ssbu", "Super Smash Bros. Ultimate"},
@@ -288,6 +296,96 @@ std::string ResolveCanonicalSearchTitle(std::string_view raw_name, u64 title_id)
     return CleanGameSearchQuery(raw_name);
 }
 
+std::string ExtractSubtitleQuery(std::string_view title) {
+    const auto colon = title.find(':');
+    if (colon == std::string_view::npos || colon + 1 >= title.size()) {
+        return {};
+    }
+    std::string_view sub = title.substr(colon + 1);
+    while (!sub.empty() && std::isspace(static_cast<unsigned char>(sub.front()))) {
+        sub.remove_prefix(1);
+    }
+    while (!sub.empty() && std::isspace(static_cast<unsigned char>(sub.back()))) {
+        sub.remove_suffix(1);
+    }
+    std::size_t alnum_count = 0;
+    for (const unsigned char c : sub) {
+        if (std::isalnum(c)) {
+            ++alnum_count;
+        }
+    }
+    if (alnum_count < 4) {
+        return {};
+    }
+    return std::string{sub};
+}
+
+std::vector<std::string> BuildLibretroNameVariants(std::string_view title) {
+    const auto sanitize = [](std::string_view input) {
+        std::string out;
+        out.reserve(input.size());
+        for (const char c : input) {
+            switch (c) {
+            case '&':
+            case '*':
+            case '/':
+            case ':':
+            case '`':
+            case '<':
+            case '>':
+            case '?':
+            case '\\':
+            case '|':
+            case '"':
+                out.push_back('_');
+                break;
+            default:
+                out.push_back(c);
+                break;
+            }
+        }
+        return out;
+    };
+
+    // Replace ": " or ":" with " - " (No-Intro / Libretro convention).
+    std::string dash_form;
+    dash_form.reserve(title.size() + 4);
+    for (std::size_t i = 0; i < title.size(); ++i) {
+        if (title[i] == ':') {
+            while (!dash_form.empty() && dash_form.back() == ' ') {
+                dash_form.pop_back();
+            }
+            dash_form += " - ";
+            while (i + 1 < title.size() && title[i + 1] == ' ') {
+                ++i;
+            }
+        } else {
+            dash_form.push_back(title[i]);
+        }
+    }
+
+    std::vector<std::string> variants;
+    const auto add_unique = [&variants](std::string s) {
+        if (!s.empty() && std::ranges::find(variants, s) == variants.end()) {
+            variants.push_back(std::move(s));
+        }
+    };
+
+    // Leading "The " moves to ", The" before " - " (e.g. "Legend of Zelda, The - Ocarina of Time").
+    if (dash_form.size() > 4 && Common::ToLower(dash_form.substr(0, 4)) == "the ") {
+        const std::string rest = dash_form.substr(4);
+        if (const auto sep = rest.find(" - "); sep != std::string::npos) {
+            add_unique(sanitize(rest.substr(0, sep) + ", The" + rest.substr(sep)));
+        } else {
+            add_unique(sanitize(rest + ", The"));
+        }
+    }
+
+    add_unique(sanitize(dash_form));
+    add_unique(sanitize(title));
+    return variants;
+}
+
 int ScoreArtworkCandidate(std::string_view candidate, std::string_view target_query) {
     const std::string c_slug = NormalizeSlug(candidate);
     const std::string q_slug = NormalizeSlug(target_query);
@@ -295,24 +393,52 @@ int ScoreArtworkCandidate(std::string_view candidate, std::string_view target_qu
         return -1000;
     }
     if (c_slug == q_slug) {
-        return 1200;
-    }
-
-    int score = 0;
-    if (c_slug == q_slug + "-nintendo-switch-2-edition" ||
-        q_slug == c_slug + "-nintendo-switch-2-edition") {
-        score += 950;
-    } else if (c_slug.starts_with(q_slug + "-") || q_slug.starts_with(c_slug + "-")) {
-        score += 750 - static_cast<int>(std::abs(static_cast<long>(c_slug.size()) -
-                                                 static_cast<long>(q_slug.size()))) *
-                           4;
-    } else if (c_slug.find(q_slug) != std::string::npos) {
-        score += 550;
+        return 2000;
     }
 
     const auto q_words = SplitSlugWords(q_slug);
     const auto c_words = SplitSlugWords(c_slug);
     static const std::set<std::string_view> stop_words{"the", "of", "and", "a", "for", "to", "in"};
+    static const std::set<std::string_view> benign_edition_words{
+        "nintendo", "switch", "edition", "hd", "3d", "deluxe", "remastered", "dx",
+    };
+
+    int score = 0;
+    if (c_slug == q_slug + "-nintendo-switch-2-edition" ||
+        q_slug == c_slug + "-nintendo-switch-2-edition") {
+        score += 750;
+    } else if (c_slug.starts_with(q_slug + "-")) {
+        // Candidate extends the full target query (e.g. "Ocarina of Time 3D").
+        const auto suffix_words = SplitSlugWords(std::string_view{c_slug}.substr(q_slug.size() + 1));
+        int non_edition_extra = 0;
+        for (const auto& w : suffix_words) {
+            if (!stop_words.contains(w) && !benign_edition_words.contains(w)) {
+                ++non_edition_extra;
+            }
+        }
+        if (non_edition_extra == 0) {
+            score += 450 - static_cast<int>(c_slug.size() - q_slug.size()) * 4;
+        } else {
+            score += 200;
+        }
+    } else if (q_slug.starts_with(c_slug + "-")) {
+        // Candidate is a shorter prefix of target query: ONLY reward if the omitted suffix is
+        // harmless edition metadata, NEVER when it drops significant subtitle words (such as
+        // matching bare "The Legend of Zelda" against "The Legend of Zelda: Ocarina of Time").
+        const auto missing_suffix =
+            SplitSlugWords(std::string_view{q_slug}.substr(c_slug.size() + 1));
+        int dropped_significant = 0;
+        for (const auto& w : missing_suffix) {
+            if (!stop_words.contains(w) && !benign_edition_words.contains(w)) {
+                ++dropped_significant;
+            }
+        }
+        if (dropped_significant == 0) {
+            score += 450 - static_cast<int>(q_slug.size() - c_slug.size()) * 4;
+        }
+    } else if (c_slug.find(q_slug) != std::string::npos) {
+        score += 450;
+    }
 
     int overlap = 0;
     int missing_significant = 0;
@@ -323,7 +449,53 @@ int ScoreArtworkCandidate(std::string_view candidate, std::string_view target_qu
             ++missing_significant;
         }
     }
-    score += overlap - missing_significant * 220 - static_cast<int>(c_words.size()) * 12;
+
+    // Penalize significant candidate words absent from target query (e.g. "Breath of the Wild"
+    // or "Age of Calamity" when searching for "Ocarina of Time" or "Age of Imprisonment").
+    int extra_significant = 0;
+    for (const auto& w : c_words) {
+        if (q_words.contains(w) || stop_words.contains(w)) {
+            continue;
+        }
+        if (missing_significant == 0 && benign_edition_words.contains(w)) {
+            continue;
+        }
+        ++extra_significant;
+    }
+
+    score += overlap - missing_significant * 240 - extra_significant * 220 -
+             static_cast<int>(c_words.size()) * 12;
+
+    // Subtitle guard: when target query specifies a subtitle after ':' (or " - "), require
+    // meaningful subtitle word overlap so a franchise base title or a different sequel in the
+    // same series cannot score high just from sharing the franchise prefix ("The Legend of Zelda").
+    const std::string target_sub = ExtractSubtitleQuery(target_query);
+    if (!target_sub.empty()) {
+        const auto sub_words = SplitSlugWords(NormalizeSlug(target_sub));
+        int sub_sig_total = 0;
+        int sub_sig_matched = 0;
+        for (const auto& w : sub_words) {
+            if (stop_words.contains(w)) {
+                continue;
+            }
+            ++sub_sig_total;
+            if (c_words.contains(w)) {
+                ++sub_sig_matched;
+            }
+        }
+        if (sub_sig_total > 0 && sub_sig_matched == 0) {
+            score -= 900;
+        } else if (sub_sig_total > 1 && sub_sig_matched < sub_sig_total) {
+            score -= (sub_sig_total - sub_sig_matched) * 180;
+        } else if (sub_sig_total > 0 && sub_sig_matched == sub_sig_total &&
+                   extra_significant == 0 && missing_significant > 0 &&
+                   (sub_sig_total >= 2 || target_sub.size() >= 5)) {
+            // Candidate cleanly matches the full distinctive subtitle with no conflicting words
+            // (e.g. "Ocarina of Time" or "Zelda: Ocarina of Time" when searching for
+            // "The Legend of Zelda: Ocarina of Time").
+            score += 580;
+        }
+    }
 
     // Guard against wrong editions, demos, soundtracks, or DLC packs unless explicitly queried.
     static constexpr std::array<std::string_view, 10> bad_edition_tokens{
@@ -507,6 +679,17 @@ bool WriteCachedArtwork(u64 title_id, std::span<const u8> png_bytes,
         }
     }
     return true;
+}
+
+void ClearCachedArtwork(u64 title_id) {
+    const u64 base = BaseProgramId(title_id);
+    if (base == 0) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::remove(ArtworkPngPath(base), ec);
+    ec.clear();
+    std::filesystem::remove(ArtworkMetaPath(base), ec);
 }
 
 void RecordArtworkFailure(u64 title_id, std::string_view reason, u64 cooldown_seconds) {

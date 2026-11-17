@@ -215,7 +215,8 @@ public:
         setData(valid_icon, HasIconRole);
     }
 
-    void ApplyArtwork(const QByteArray& png, const QString& resolved_title = {}) {
+    void ApplyArtwork(const QByteArray& png, const QString& resolved_title = {},
+                      bool force_title = false) {
         const u32 size = UISettings::CurrentGameIconSize().GetValue();
         bool valid_icon = false;
         const QPixmap pixmap = FormatHiDpiGameIcon(reinterpret_cast<const u8*>(png.constData()),
@@ -228,7 +229,7 @@ public:
         if (!resolved_title.isEmpty()) {
             const QString current_title = data(TitleRole).toString();
             const QString base_filename = QFileInfo(data(FullPathRole).toString()).completeBaseName();
-            if (current_title.isEmpty() || current_title == QStringLiteral(" ") ||
+            if (force_title || current_title.isEmpty() || current_title == QStringLiteral(" ") ||
                 current_title == base_filename) {
                 setData(resolved_title, TitleRole);
             }

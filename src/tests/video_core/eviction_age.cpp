@@ -39,3 +39,23 @@ TEST_CASE("EDEN_NX2_TC_MIN_AGE can't stop eviction when the device runs short",
     REQUIRE(EvictionAge(10, 600, 6268 * MiB, 7678 * MiB, true) == 10);
     REQUIRE(EvictionAge(10, 9000, 6268 * MiB, 0, false) == 10);
 }
+
+TEST_CASE("The retention limit follows the lowest budget read lately",
+          "[video_core][texture_cache][eviction_age]") {
+    using VideoCommon::RetentionBudget;
+    using VideoCommon::RetentionBudgetRise;
+    // Budget falls and bounces back: drops immediately, recovers 16 MiB per check.
+    REQUIRE(RetentionBudget(0, 3120 * MiB) == 3120 * MiB);
+    REQUIRE(RetentionBudget(3120 * MiB, 2800 * MiB) == 2800 * MiB);
+    REQUIRE(RetentionBudget(2800 * MiB, 3120 * MiB) == 2800 * MiB + RetentionBudgetRise);
+    u64 held = 2800 * MiB;
+    u64 checks = 0;
+    while (held < 3120 * MiB) {
+        held = RetentionBudget(held, 3120 * MiB);
+        ++checks;
+    }
+    REQUIRE(held == 3120 * MiB);
+    REQUIRE(checks == 20);
+    // Steady budget is followed as is.
+    REQUIRE(RetentionBudget(3120 * MiB, 3120 * MiB) == 3120 * MiB);
+}

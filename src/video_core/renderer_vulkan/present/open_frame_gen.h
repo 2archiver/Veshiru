@@ -113,6 +113,20 @@ private:
     vk::DescriptorPool m_static_desc_pool;
     vk::DescriptorSets m_static_sets;
 
+    /// Cached warp descriptor sets keyed by (prev_slot, destination image, storage view) to avoid
+    /// allocating and rewriting descriptors on every generated frame (PresentManager reuses <= 8
+    /// Frame objects, so 16 slots cover both ping-pong directions with zero per-frame allocations).
+    static constexpr size_t MaxCachedWarpSets = 16;
+    struct CachedWarpSet {
+        u32 prev_slot{};
+        VkImage destination{VK_NULL_HANDLE};
+        VkImageView destination_view{VK_NULL_HANDLE};
+        VkDescriptorSet set{VK_NULL_HANDLE};
+    };
+    vk::DescriptorSets m_warp_cached_sets;
+    std::array<CachedWarpSet, MaxCachedWarpSets> m_warp_cache{};
+    size_t m_warp_cache_count{};
+
     std::optional<DescriptorPool> m_warp_pool;
     DescriptorAllocator m_warp_allocator;
 
