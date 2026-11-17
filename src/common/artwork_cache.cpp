@@ -220,6 +220,20 @@ std::string CleanGameSearchQuery(std::string_view raw_name) {
             break;
         }
     }
+    // Trademark (U+2122) and registered (U+00AE) signs are display noise for search (e.g.
+    // "Zelda\u2122: Ocarina of Time" must still resolve to the canonical article/search title).
+    // They are removed as their UTF-8 byte sequences here, because decomposing already-cleaned
+    // UTF-8 into code points would shift every index the byte-oriented filename parsing below
+    // relies on. The rest of this function and the output stay untouched.
+    std::string owned_name{raw_name};
+    for (const std::string_view symbol : {"\xE2\x84\xA2", "\xC2\xAE"}) {
+        for (std::size_t at = owned_name.find(symbol); at != std::string::npos;
+             at = owned_name.find(symbol, at)) {
+            owned_name.erase(at, symbol.size());
+        }
+    }
+    raw_name = owned_name;
+
     // Strip [...] tags completely and strip noisy (...) tags such as (USA), (v1.0), (Rev 1).
     std::string stripped;
     stripped.reserve(raw_name.size());
@@ -242,12 +256,7 @@ std::string CleanGameSearchQuery(std::string_view raw_name) {
                 }
             }
         }
-        // Trademark/registered symbols are display noise for search (e.g. "Zelda\u2122: Ocarina of
-        // Time" must still resolve to the canonical article/search title).
-        if (raw_name[i] == '\u2122' || raw_name[i] == '\u00AE') {
-            ++i;
-            continue;
-        }
+        // Trademark/registered symbols were already removed above, as UTF-8 byte sequences.
         stripped.push_back(raw_name[i]);
         ++i;
     }

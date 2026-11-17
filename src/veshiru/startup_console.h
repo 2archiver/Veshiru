@@ -40,7 +40,6 @@ private:
     void PrintHeader();
 
     [[nodiscard]] QString FormatLine(const Common::Log::ConsoleEntry& entry) const;
-    [[nodiscard]] static QString LevelColor(Common::Log::Level level);
 
     QTimer* poll_timer{};
     QPlainTextEdit* view{};

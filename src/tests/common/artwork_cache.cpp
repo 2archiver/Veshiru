@@ -97,6 +97,38 @@ TEST_CASE("Artwork OOT refresh resolves dump filenames and platform-tagged title
           "The Legend of Zelda: Breath of the Wild");
 }
 
+TEST_CASE("Artwork queries strip UTF-8 trademark and registered signs", "[artwork_cache]") {
+    using Common::ArtworkCache::CleanGameSearchQuery;
+    using Common::ArtworkCache::NormalizeSlug;
+    using Common::ArtworkCache::ResolveCanonicalSearchTitle;
+
+    // The signs are removed as their UTF-8 byte sequences (U+2122 is E2 84 A2, U+00AE is C2 AE).
+    // Comparing single bytes to a Unicode code point does not compile with clang-cl, so these
+    // cases pin the behaviour as text a dump filename can actually contain.
+    CHECK(CleanGameSearchQuery("The Legend of Zelda\u2122: Ocarina of Time") ==
+          "The Legend of Zelda: Ocarina of Time");
+    CHECK(CleanGameSearchQuery("Nintendo\u00AE Switch Sports") == "Nintendo Switch Sports");
+    CHECK(CleanGameSearchQuery("Mario Kart World\u2122\u00AE") == "Mario Kart World");
+
+    // Both signs in one title, once with a dump suffix and platform tag.
+    CHECK(CleanGameSearchQuery("Kirby\u2122 Air Riders\u00AE [040077201BE50000](USA).nup") ==
+          "Kirby Air Riders");
+    // A sign in the middle of a word must not leave a gap or join the surrounding words.
+    CHECK(CleanGameSearchQuery("Pok\u00E9mon\u2122 Pokopia") == "Pok\u00E9mon Pokopia");
+
+    // A sign never changes resolution: the canonical Ocarina of Time title still comes out.
+    CHECK(ResolveCanonicalSearchTitle("The Legend of Zelda\u2122 Ocarina of Time Switch 2", 0) ==
+          "The Legend of Zelda: Ocarina of Time");
+    CHECK(ResolveCanonicalSearchTitle("Zelda\u2122: Ocarina of Time", 0x0400486024DEC000ULL) ==
+          "The Legend of Zelda: Ocarina of Time");
+
+    // Ordinary ASCII titles are unchanged, so the sign handling cannot rewrite normal queries.
+    CHECK(CleanGameSearchQuery("Switch Sports") == "Switch Sports");
+    CHECK(CleanGameSearchQuery("Donkey Kong Bananza") == "Donkey Kong Bananza");
+    CHECK(NormalizeSlug("The Legend of Zelda\u2122") == "the-legend-of-zelda");
+    CHECK(NormalizeSlug("Mario Kart World") == "mario-kart-world");
+}
+
 TEST_CASE("Artwork candidate scoring avoids wrong editions, demos, and sequel mismatches",
           "[artwork_cache]") {
     using Common::ArtworkCache::ScoreArtworkCandidate;
