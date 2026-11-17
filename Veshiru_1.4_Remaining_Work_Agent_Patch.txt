@@ -1,0 +1,28 @@
+VESH​​IRU 1.4 — REMAINING WORK PATCH
+====================================
+
+Arena Agent: continue the existing Veshiru 1.4 work. Use the 1.3 audit and all diagnostic logs, profiling notes, and implementation requirements already supplied in this task/conversation as the source of truth. Re-read and cross-reference them against the current repository before changing code. Do not ask the user to resend material already provided.
+
+IMPORTANT SCOPE
+The OpenFrameGen / FSR3 Optical Flow regression work described in the latest implementation report has been addressed at source/test level. Do not blindly redo it. Verify the current tree and preserve those fixes. The sandbox tests are not proof of full Windows/Vulkan runtime correctness; keep hardware validation explicitly outstanding until actually run.
+
+Finish the remaining 1.4 items identified by the audit/logs, including (where still outstanding after checking HEAD):
+
+1. Three-stage GPU thread splitting and its synchronization/ownership boundaries.
+2. Native asynchronous shader and pipeline compilation; eliminate avoidable render-thread compilation stalls.
+3. ASTC decode performance improvements, with correctness tests and representative texture coverage.
+4. Balanced multi-session PGO: use representative game/menu workloads, inspect profile coverage, and avoid overfitting to one session.
+5. Resolve the retained ~352 KiB staging-buffer issue identified in the audit, including lifetime/reuse and synchronization correctness.
+6. Resolve the HDR output clamp issue identified in the audit; preserve correct SDR/HDR behavior and validate formats/ranges.
+7. Finish general VRAM budgeting and GTX 1650 4 GB behavior beyond the frame-generation pyramid caps already implemented.
+8. Complete the Windows/MSVC + Vulkan GPU acceptance tests and record actual base FPS, generated FPS, frame pacing, GPU/VRAM use, and validation-layer results.
+
+WORKFLOW / ACCEPTANCE
+- Start by reading the existing audit and logs, then map each outstanding finding to the current source files and tests. Mark findings already fixed in HEAD as verified rather than reimplementing them.
+- Prioritize correctness, measurable performance, and compatibility with the established target machine (i7-10750H, GTX 1650 4 GB, 32 GB RAM).
+- Implement the remaining fixes, add/update focused regression tests, and run the available full build and test suite. Do not claim a test or hardware result that was not actually obtained.
+- Inspect the final diff for regressions and ensure the completed work preserves the already-fixed frame-generation, Vulkan barrier, and pacing behavior.
+- Push the finished implementation to the existing `main` branch only after the applicable CI checks pass. If CI fails, fix the failure and rerun it; do not bypass checks or force-push.
+- Report exactly what changed, tests/builds and CI results, and which hardware-only checks remain outstanding.
+
+This file is a continuation reminder, not authorization to mark 1.4 complete without evidence.
