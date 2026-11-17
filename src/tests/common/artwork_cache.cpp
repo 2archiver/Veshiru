@@ -43,6 +43,9 @@ TEST_CASE("Artwork lookup prioritizes exact Program ID and cleans dump filenames
     // Exact Title ID overrides noisy dump filename or update bit suffix
     CHECK(ResolveCanonicalSearchTitle("0400C3F00006E000_USA_dump_v131072", 0x0400C3F00006E800ULL) ==
           "Mario Kart World");
+    CHECK(ResolveCanonicalSearchTitle("dkb_dump", 0x040074A01BF12000ULL) ==
+          "Donkey Kong Bananza");
+    CHECK(ResolveCanonicalSearchTitle("", 0x0400D4201C6EA000ULL) == "Mario Tennis Fever");
     CHECK(ResolveCanonicalSearchTitle("", 0x0400486024DEC000ULL) ==
           "The Legend of Zelda: Ocarina of Time");
     CHECK(ResolveCanonicalSearchTitle("fast_fusion_repack", 0x040041E0212AE000ULL) ==

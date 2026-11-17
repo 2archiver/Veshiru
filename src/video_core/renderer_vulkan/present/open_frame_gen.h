@@ -17,7 +17,7 @@ namespace Vulkan {
 class Device;
 class Scheduler;
 
-/// Experimental in-process neural frame generator porting Deadly-pro/Open-Frame-gen's NanoModel
+/// In-process neural frame generator porting Deadly-pro/Open-Frame-gen's NanoModel
 /// (v17, 89.9K parameters, depthwise-separable encoder/bottleneck/SE/decoder + bidirectional warp
 /// + local-clamped CAS) directly to Vulkan compute shaders with zero external TensorRT/CUDA/DXGI
 /// dependencies.
@@ -28,7 +28,8 @@ public:
     ~OpenFrameGen();
 
     void Process(const Device& device, Scheduler& scheduler, VkImage current_frame,
-                 VkImageView current_view, u64 frame_count);
+                 VkImageView current_view, u64 frame_count, bool capture_history,
+                 bool compute_flow);
 
     void Generate(const Device& device, Scheduler& scheduler, VkImage destination,
                   VkImageView destination_storage_view, float blend_factor);
@@ -42,10 +43,11 @@ private:
     void CreateShaders(const Device& device);
     void CreatePipelines(const Device& device);
     void WriteStaticDescriptors(const Device& device);
+    void ReleaseWeightsUploadIfFree(Scheduler& scheduler);
 
     MemoryAllocator& m_allocator;
     VkExtent2D m_extent{};
-    VkExtent2D m_net_extent{};  // Base NanoModel coordinate extent (multiple of 16, <= 1280x720)
+    VkExtent2D m_net_extent{}; // Base NanoModel coordinate extent (multiple of 16)
     VkFormat m_format{VK_FORMAT_UNDEFINED};
 
     u32 m_w2{}, m_h2{};
@@ -55,14 +57,20 @@ private:
 
     vk::Sampler m_linear_sampler;
 
-    vk::Image m_history_image;
-    vk::ImageView m_history_view;
-    vk::Image m_current_image;
-    vk::ImageView m_current_view;
+    // Ping-pong pair holding previous and current presented frames (avoids an extra full-res copy
+    // per frame). Slot m_curr_slot holds the newest captured frame; slot (m_curr_slot ^ 1) holds
+    // the immediately preceding frame.
+    std::array<vk::Image, 2> m_frame_images;
+    std::array<vk::ImageView, 2> m_frame_views;
+    std::array<bool, 2> m_frame_initialized{};
+    u32 m_curr_slot{0};
+
     vk::Image m_flow_mask_image;
     vk::ImageView m_flow_mask_view;
+    bool m_flow_mask_initialized{};
 
     vk::Buffer m_weights_upload;
+    u64 m_weights_upload_tick{0};
     vk::Buffer m_weights_buffer;
     vk::Buffer m_buf_xs;
     vk::Buffer m_buf_s1;

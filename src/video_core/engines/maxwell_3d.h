@@ -3096,6 +3096,8 @@ public:
             size_t buffer_size;
             size_t max_draw_counts;
             size_t stride;
+            /// The arguments are a GPU-written record the host GPU reads (FrontTakeIndirectRecord).
+            bool from_record;
         };
         void ProcessMethodCall(Maxwell3D& maxwell3d, u32 method, u32 argument);
         void Clear(Maxwell3D& maxwell3d, u32 layer_count);
@@ -3225,6 +3227,12 @@ public:
                          u32 argument, bool is_last_call);
     void FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit& split, u32 method,
                               const u32* base_start, u32 amount, u32 methods_pending);
+    /// Split front, before an entry holding the remaining 5 parameters (at `record`) of the
+    /// pending macro call: true when that macro is DrawIndexedIndirect with a topology the host
+    /// draws indirectly. The host GPU then reads the record itself (the words may still be
+    /// written by queued GPU work: culling): the caller needs neither to wait for the back nor
+    /// to read the words fresh.
+    bool FrontTakeIndirectRecord(u32 parameter_method, GPUVAddr record);
 
     bool ShouldExecute() const {
         return execute_on;
@@ -3507,6 +3515,15 @@ private:
     bool FrontTakeOver(VideoCommon::GpuSplit& split, FrontState& state, u32 method);
     void FrontTrackInstanceLoop(FrontState& state, u32 method, u32 value);
     bool FrontSkipsLoopWrite(FrontState& state, u32 method, u32 value, bool shadow_kept);
+    /// Whether the native macro `method` starts is NVN's DrawIndexedIndirect (parameters:
+    /// topology, then a 5-word VkDrawIndexedIndirectCommand-style record), told by a dry run.
+    bool IsIndirectDrawMacro(FrontState& state, u32 method);
+    /// Front: draws the pending DrawIndexedIndirect call from its record (FrontTakeIndirectRecord).
+    void FrontRunIndirectRecord(Core::System& system, VideoCommon::GpuSplit& split,
+                                FrontState& state, GPUVAddr record);
+    /// Back: one indexed draw whose count, instances, first index, base vertex and base instance
+    /// the host GPU reads from the guest record at `record` (as HLE_DrawIndexedIndirect).
+    void BackDrawIndexedIndirect(Core::System& system, u32 topology, GPUVAddr record);
     void FrontNoteWrites(VideoCommon::GpuSplit& split, const FrontState& state, u32 method,
                          u32 amount);
     void FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& state, u32 macro, u32 method,

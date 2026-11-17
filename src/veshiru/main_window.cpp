@@ -3261,6 +3261,14 @@ void MainWindow::OnGameListOpenPerGameProperties(const std::string& file) {
 void MainWindow::OnLinkToEglantine(const u64& program_id) {
     namespace fs = std::filesystem;
 
+    if (program_id == 0) {
+        QMessageBox::warning(
+            this, tr("Link to Eglantine"),
+            tr("This entry does not have a valid Switch title ID, so its save data cannot be "
+               "linked to Eglantine."));
+        return;
+    }
+
     if (QtCommon::system && QtCommon::system->IsPoweredOn()) {
         QMessageBox::warning(
             this, tr("Link to Eglantine"),
@@ -3281,10 +3289,16 @@ void MainWindow::OnLinkToEglantine(const u64& program_id) {
         return;
     }
 
+    const std::string eglantine_user_id =
+        EglantineLink::ResolveEglantineUserId(eglantine_root, user_id, program_id, this);
+    if (eglantine_user_id.empty()) {
+        return;
+    }
+
     const std::string hex_program = fmt::format("{:016X}", program_id);
 
     const fs::path eglantine_dir =
-        EglantineLink::GetSaveDir(eglantine_root, user_id, program_id);
+        EglantineLink::GetSaveDir(eglantine_root, eglantine_user_id, program_id);
     const fs::path veshiru_dir = FrontendCommon::DataManager::GetDataDir(
                                      FrontendCommon::DataManager::DataDir::Saves, user_id) /
                                  hex_program;

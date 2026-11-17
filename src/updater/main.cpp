@@ -41,19 +41,48 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     const fs::path program{argv[4]};
     LocalFree(argv);
 
+    auto abort_timeout = [&] {
+        Log(install_dir, "Veshiru did not close in time, the update was not installed");
+        if (staging.filename() == ".update-staging") {
+            std::error_code ignored;
+            fs::remove_all(staging, ignored);
+        }
+        MessageBoxW(nullptr,
+                    L"Veshiru did not close in time, so the update was not installed. Your "
+                    L"installation was not changed. Try the update again.",
+                    L"Veshiru update", MB_OK | MB_ICONINFORMATION);
+    };
+
     if (HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid)) {
         const DWORD wait = WaitForSingleObject(process, 120000);
         CloseHandle(process);
         if (wait != WAIT_OBJECT_0) {
-            Log(install_dir, "Veshiru did not close in time, the update was not installed");
-            if (staging.filename() == ".update-staging") {
-                std::error_code ignored;
-                fs::remove_all(staging, ignored);
+            abort_timeout();
+            return 1;
+        }
+    } else if (GetLastError() == ERROR_ACCESS_DENIED) {
+        // Parent process is still running with restricted ACLs (e.g. elevated/sandboxed).
+        // Poll until it exits or 120 seconds elapse instead of racing file replacement.
+        const ULONGLONG deadline = GetTickCount64() + 120000ULL;
+        bool exited = false;
+        while (GetTickCount64() < deadline) {
+            HANDLE query = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (query) {
+                DWORD exit_code = 0;
+                const BOOL ok = GetExitCodeProcess(query, &exit_code);
+                CloseHandle(query);
+                if (!ok || exit_code != STILL_ACTIVE) {
+                    exited = true;
+                    break;
+                }
+            } else if (GetLastError() == ERROR_INVALID_PARAMETER) {
+                exited = true;
+                break;
             }
-            MessageBoxW(nullptr,
-                        L"Veshiru did not close in time, so the update was not installed. Your "
-                        L"installation was not changed. Try the update again.",
-                        L"Veshiru update", MB_OK | MB_ICONINFORMATION);
+            Sleep(100);
+        }
+        if (!exited) {
+            abort_timeout();
             return 1;
         }
     }

@@ -2109,6 +2109,7 @@ private:
             frames_ahead = 1;
         }
         const auto entered = std::chrono::steady_clock::now();
+        m_host_while_suspended = frames_ahead != 0;
         static const bool fence_trace = [] {
             const char* value = std::getenv("EDEN_NX2_PRESENT_FENCE_TRACE");
             return value != nullptr && value[0] == '1';
@@ -2563,6 +2564,15 @@ private:
     Kernel::KEvent* m_frame_wait_event{};
     std::optional<Nx2ScopedGuestFenceAction> m_frame_wait_action;
     bool m_frame_wait_event_attempted{};
+    bool m_host_while_suspended{true};
+
+    static bool GuestFenceWait() {
+        static const bool guest = [] {
+            const char* value = std::getenv("EDEN_NX2_FENCE_WAIT");
+            return value == nullptr || std::string_view{value} != "host";
+        }();
+        return guest;
+    }
 
     /// Waits until the fence is reached. With `unless_gpu_waits`, gives up after a few ms once a
     /// GPU channel was seen suspended on a semaphore (it may be one this thread releases later).
@@ -2575,11 +2585,25 @@ private:
         const auto start = std::chrono::steady_clock::now();
         // Long enough to cover shader/pipeline compile stalls: a game that gets more than a few
         // command buffers ahead misses the equal-value gates its other channels acquire.
-        const auto deadline = start + std::chrono::milliseconds{4000};
+        auto deadline = start + std::chrono::milliseconds{4000};
         if (!syncpoints.IsReadyGuest(fence_id, fence_value)) {
+            u32 last_syncpoint = syncpoints.GetGuestSyncpointValue(fence_id);
+            const auto extend_if_advancing = [&] {
+                if (unless_gpu_waits) {
+                    return;
+                }
+                const u32 current_syncpoint = syncpoints.GetGuestSyncpointValue(fence_id);
+                if (current_syncpoint != last_syncpoint) {
+                    last_syncpoint = current_syncpoint;
+                    deadline = (std::max)(deadline, std::chrono::steady_clock::now() +
+                                                        std::chrono::milliseconds{4000});
+                }
+            };
             // Fixed waits suspend the guest service thread so its core can run other work.
-            // Adaptive waits retain their semaphore escape path below.
-            if (!unless_gpu_waits && EnsureFrameWaitEvent()) {
+            // In frames-ahead modes, fall back to a host wait while a GPU channel is suspended on
+            // a semaphore so titles whose channels wait on post-present CPU releases cannot
+            // deadlock on boot. Adaptive waits retain their semaphore escape path below.
+            if (!unless_gpu_waits && GuestFenceWait() && EnsureFrameWaitEvent()) {
                 m_frame_wait_event->Clear(kernel);
                 m_frame_wait_action.emplace(
                     syncpoints, fence_id, fence_value,
@@ -2589,6 +2613,10 @@ private:
                 Kernel::KSynchronizationObject* event = &m_frame_wait_event->GetReadableEvent();
                 while (!syncpoints.IsReadyGuest(fence_id, fence_value) && system.IsPoweredOn() &&
                        std::chrono::steady_clock::now() < deadline) {
+                    extend_if_advancing();
+                    if (m_host_while_suspended && system.GPU().HasSuspendedChannels()) {
+                        break;
+                    }
                     s32 index = -1;
                     // Retain bounded shutdown checks and the existing four-second deadline.
                     const auto timeout = kernel.HardwareTimer().GetTick() + 50'000'000;
@@ -2600,7 +2628,9 @@ private:
                 }
                 // Join any in-progress signal before the next request clears the event.
                 m_frame_wait_action.reset();
-            } else {
+            }
+            if (!syncpoints.IsReadyGuest(fence_id, fence_value) && system.IsPoweredOn() &&
+                std::chrono::steady_clock::now() < deadline) {
                 // Woken by the GPU thread as it reaches the fence. Polling with 200 us sleeps slept
                 // about 1 ms per check on Windows, added to every frame. An action left registered
                 // after a timeout fires later on a state nobody waits on.
@@ -2629,6 +2659,8 @@ private:
                             std::chrono::steady_clock::now() - start > std::chrono::milliseconds{3}) {
                             return false;
                         }
+                    } else {
+                        extend_if_advancing();
                     }
                     wake->cv.wait_for(lk, std::chrono::milliseconds{unless_gpu_waits ? 1 : 50});
                 }
@@ -2637,7 +2669,8 @@ private:
         if (unless_gpu_waits && !syncpoints.IsReadyGuest(fence_id, fence_value)) {
             return false;
         }
-        if (!syncpoints.IsReadyGuest(fence_id, fence_value) && m_wait_timeouts++ < 64) {
+        if (!syncpoints.IsReadyGuest(fence_id, fence_value) && system.IsPoweredOn() &&
+            m_wait_timeouts++ < 64) {
             LOG_WARNING(Service, "nx2:vi2 present #{} fence ({}, {}) not reached in 4 s (now {})",
                         m_presents, fence_id, fence_value, syncpoints.GetGuestSyncpointValue(fence_id));
         }

@@ -87,6 +87,8 @@ std::string_view LookupTitleByProgramId(u64 title_id) noexcept {
     static const std::unordered_map<u64, std::string_view> catalog{
         // Nintendo Switch 2 titles
         {0x0400C3F00006E000ULL, "Mario Kart World"},
+        {0x040074A01BF12000ULL, "Donkey Kong Bananza"},
+        {0x0400D4201C6EA000ULL, "Mario Tennis Fever"},
         {0x0400486024DEC000ULL, "The Legend of Zelda: Ocarina of Time"},
         {0x04003F40232DE000ULL, "Hyrule Warriors: Age of Imprisonment"},
         {0x040041E0212AE000ULL, "Fast Fusion"},

@@ -15,7 +15,20 @@ layout(std430, binding = 2) writeonly buffer OutTensor {
 layout(push_constant) uniform PushConstants {
     uint out_w;
     uint out_h;
+    uint is_scrgb_hdr;
 } pc;
+
+vec3 NormalizeSample(vec3 c) {
+    if (pc.is_scrgb_hdr != 0u) {
+        // Linear scRGB (VK_FORMAT_R16G16B16A16_SFLOAT) stores HDR highlights well above 1.0
+        // (1.0 == 80 nits, 12.5 == 1000 nits) and may hold small negative wide-gamut values.
+        // Apply a smooth, monotonic perceptual roll-off into [0, 1) so NanoModel tracks motion
+        // across bright HDR speculars and skies without clipping everything > 80 nits to white.
+        const vec3 pos = max(c, vec3(0.0));
+        return sqrt(pos / (vec3(1.0) + pos));
+    }
+    return clamp(c, 0.0, 1.0);
+}
 
 void main() {
     const uint x = gl_GlobalInvocationID.x;
@@ -30,14 +43,14 @@ void main() {
     const vec2 uv01 = (vec2(float(x * 2u), float(y * 2u + 1u)) + 0.5) * inv_full;
     const vec2 uv11 = (vec2(float(x * 2u + 1u), float(y * 2u + 1u)) + 0.5) * inv_full;
 
-    const vec3 p = 0.25 * (clamp(textureLod(PrevFrame, uv00, 0.0).rgb, 0.0, 1.0) +
-                           clamp(textureLod(PrevFrame, uv10, 0.0).rgb, 0.0, 1.0) +
-                           clamp(textureLod(PrevFrame, uv01, 0.0).rgb, 0.0, 1.0) +
-                           clamp(textureLod(PrevFrame, uv11, 0.0).rgb, 0.0, 1.0));
-    const vec3 c = 0.25 * (clamp(textureLod(CurrFrame, uv00, 0.0).rgb, 0.0, 1.0) +
-                           clamp(textureLod(CurrFrame, uv10, 0.0).rgb, 0.0, 1.0) +
-                           clamp(textureLod(CurrFrame, uv01, 0.0).rgb, 0.0, 1.0) +
-                           clamp(textureLod(CurrFrame, uv11, 0.0).rgb, 0.0, 1.0));
+    const vec3 p = 0.25 * (NormalizeSample(textureLod(PrevFrame, uv00, 0.0).rgb) +
+                           NormalizeSample(textureLod(PrevFrame, uv10, 0.0).rgb) +
+                           NormalizeSample(textureLod(PrevFrame, uv01, 0.0).rgb) +
+                           NormalizeSample(textureLod(PrevFrame, uv11, 0.0).rgb));
+    const vec3 c = 0.25 * (NormalizeSample(textureLod(CurrFrame, uv00, 0.0).rgb) +
+                           NormalizeSample(textureLod(CurrFrame, uv10, 0.0).rgb) +
+                           NormalizeSample(textureLod(CurrFrame, uv01, 0.0).rgb) +
+                           NormalizeSample(textureLod(CurrFrame, uv11, 0.0).rgb));
 
     const uint plane = pc.out_w * pc.out_h;
     const uint idx = y * pc.out_w + x;

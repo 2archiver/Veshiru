@@ -36,6 +36,7 @@
 #include "common/fs/path_util.h"
 #include "common/literals.h"
 #include "common/polyfill_thread.h"
+#include "common/terminate_handler.h"
 #include "common/thread.h"
 
 #include "common/logging.h"
@@ -883,6 +884,7 @@ void Initialize() {
         void(CreateDir(log_dir));
         logging_instance->file_backend.emplace(log_dir / LOG_FILE);
 #endif
+        InstallTerminateHandler();
     }
 }
 

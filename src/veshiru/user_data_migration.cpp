@@ -31,23 +31,31 @@
 
 UserDataMigrator::UserDataMigrator(QMainWindow* main_window) {
     // NOTE: Logging is not initialized yet, do not produce logs here.
-
-    if (FrontendCommon::NeedsLegacyProfileImport()) {
-        namespace Migration = Common::FS::ProfileMigration;
-        const auto state_dir = FrontendCommon::ProfileImportStateDirectory();
-        if (Migration::GetState(state_dir) == Migration::State::Pending) {
-            const auto answer = QMessageBox::question(
-                main_window, QObject::tr("Recover unfinished import"),
-                QObject::tr("An earlier import did not finish. Recover the previous profile "
-                            "and retry? No source or backup data will be deleted."),
-                QMessageBox::Retry | QMessageBox::Close, QMessageBox::Retry);
-            if (answer != QMessageBox::Retry) {
-                throw std::runtime_error(
-                    "Import recovery was postponed. Relaunch Veshiru to retry.");
+    // Never let an exception escape from MainWindow's member initializer list: catch and surface
+    // any failure cleanly so Veshiru cannot crash on launch when migration is postponed or fails.
+    try {
+        if (FrontendCommon::NeedsLegacyProfileImport()) {
+            namespace Migration = Common::FS::ProfileMigration;
+            const auto state_dir = FrontendCommon::ProfileImportStateDirectory();
+            if (Migration::GetState(state_dir) == Migration::State::Pending) {
+                const auto answer = QMessageBox::question(
+                    main_window, QObject::tr("Recover unfinished import"),
+                    QObject::tr("An earlier import did not finish. Recover the previous profile "
+                                "and retry? No source or backup data will be deleted."),
+                    QMessageBox::Retry | QMessageBox::Close, QMessageBox::Retry);
+                if (answer != QMessageBox::Retry) {
+                    return;
+                }
+                Migration::Recover(state_dir);
             }
-            Migration::Recover(state_dir);
+            ShowMigrationPrompt(main_window);
         }
-        ShowMigrationPrompt(main_window);
+    } catch (const std::exception& e) {
+        QMessageBox::warning(
+            main_window, QObject::tr("Profile Import Failed"),
+            QObject::tr("Could not complete profile import:\n\n%1\n\nVeshiru will continue with "
+                        "its own profile. Your previous emulator data was not modified.")
+                .arg(QString::fromUtf8(e.what())));
     }
 }
 
@@ -135,7 +143,7 @@ void UserDataMigrator::ShowMigrationPrompt(QMainWindow* main_window) {
     QAbstractButton* button = migration_prompt.clickedButton();
 
     if (button == nullptr) {
-        throw std::runtime_error("Import was postponed. Relaunch Veshiru to choose a profile.");
+        return;
     }
     if (button == fresh) {
         Common::FS::ProfileMigration::MarkFresh(FrontendCommon::ProfileImportStateDirectory());

@@ -8,6 +8,7 @@ add_executable(tests
     common/artwork_cache.cpp
     video_core/vulkan_overlay_filter.cpp
     video_core/open_frame_gen_weights.cpp
+    video_core/astc_decode.cpp
     video_core/buffer_cache_ports.cpp
     video_core/unswizzle_workers.cpp
     video_core/block_linear_swizzle.cpp
@@ -93,6 +94,7 @@ add_executable(tests
     video_core/native_pending_policy.cpp
     video_core/framebuffer_clear_layers.cpp
     video_core/framebuffer_limits.cpp
+    video_core/texture_swizzle.cpp
     video_core/unbacked_fallback.cpp
     video_core/eviction_age.cpp
     video_core/host_memory_limit.cpp
@@ -100,6 +102,7 @@ add_executable(tests
     video_core/dlss_contract.cpp
     video_core/dlss_mode.cpp
     video_core/frame_gen_choice.cpp
+    video_core/frame_gen_pacer.cpp
     video_core/ampere_fast_fusion.cpp
     video_core/ampere_async_copy.cpp
     video_core/ampere_trap_guards.cpp

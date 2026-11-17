@@ -3248,10 +3248,12 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     // Shader cache v2: two or more stages translate at once on the shader jobs' CPU workers while
     // this thread waits. Only this thread may flush guest memory, as reading a texture descriptor
     // does, so the descriptor pool is flushed here first; with this thread waiting nothing can
-    // make it dirty again. A pool too large to flush on every miss translates here as before.
+    // make it dirty again. Switch 2 titles commonly allocate 4+ MiB texture descriptor pools
+    // (e.g. 4,203,904 bytes in Mario Kart World), so allow flushing up to 8 MiB before falling
+    // back to single-threaded GPU-thread translation.
     if (std::ranges::count_if(graphics_key.unique_hashes, [](u64 hash) { return hash != 0; }) >=
         2) {
-        constexpr u64 MaxFlushedTexturePoolBytes = u64{1} << 20;
+        constexpr u64 MaxFlushedTexturePoolBytes = u64{8} << 20;
         const auto& tex_header = maxwell3d->regs.tex_header;
         const u64 pool_bytes = (u64{tex_header.limit} + 1) * sizeof(Tegra::Texture::TICEntry);
         if (pool_bytes <= MaxFlushedTexturePoolBytes) {

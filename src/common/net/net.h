@@ -85,4 +85,12 @@ ReleaseList GetReleases();
 // Get the latest releases as text.
 std::optional<std::string> GetReleasesBody();
 
+// Populates missing asset SHA-256 digests in `release` from a SHA256SUMS.txt payload
+// ("<64-hex>  <filename>" lines). Existing non-empty digests are preserved.
+void ApplySha256SumsText(Release& release, std::string_view sums_text);
+
+// If `release` has any asset lacking an API-provided SHA-256 digest and publishes a
+// SHA256SUMS.txt asset, fetches SHA256SUMS.txt and fills the missing digests.
+void PopulateMissingAssetDigests(Release& release);
+
 }

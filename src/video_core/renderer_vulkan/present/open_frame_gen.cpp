@@ -27,7 +27,8 @@ namespace Vulkan {
 namespace {
 
 enum StaticSetIndex : u32 {
-    SetPrep = 0,
+    SetPrepSlot0 = 0, // prev = slot 1, curr = slot 0
+    SetPrepSlot1,     // prev = slot 0, curr = slot 1
     SetE1Dw,
     SetE1Pw,
     SetE2Dw,
@@ -51,6 +52,7 @@ enum StaticSetIndex : u32 {
 struct PrepPushConstants {
     u32 out_w;
     u32 out_h;
+    u32 is_scrgb_hdr;
 };
 
 struct DwPushConstants {
@@ -105,16 +107,18 @@ constexpr u32 DivUp(u32 a, u32 b) noexcept {
     return (a + b - 1u) / b;
 }
 
-VkExtent2D ComputeNanoExtent(VkExtent2D extent, f32 flow_scale) {
+VkExtent2D ComputeNanoExtent(VkExtent2D extent, f32 flow_scale, u64 device_vram_bytes) {
     const f32 clamped_scale = std::clamp(flow_scale, 0.25f, 1.0f);
     f32 scaled_w = static_cast<f32>(extent.width) * clamped_scale;
     f32 scaled_h = static_cast<f32>(extent.height) * clamped_scale;
-    // Cap NanoModel pyramid base at 1280x720 so inference stays sub-millisecond while full-res
-    // frame textures are warped at native output resolution.
-    constexpr f32 kMaxW = 1280.0f;
-    constexpr f32 kMaxH = 720.0f;
-    const f32 cap_ratio = std::min({1.0f, kMaxW / std::max(1.0f, scaled_w),
-                                    kMaxH / std::max(1.0f, scaled_h)});
+    // Cap the NanoModel pyramid base so FP32 tensor footprint (~14 MiB at 640x368 vs ~57 MiB at
+    // 1280x720) and compute bandwidth stay fast even on 4-6 GiB GPUs, while full-res frame
+    // textures are still warped at native output resolution.
+    constexpr u64 kLowVramThreshold = 6ULL * 1024ULL * 1024ULL * 1024ULL;
+    const f32 max_w = device_vram_bytes <= kLowVramThreshold ? 640.0f : 768.0f;
+    const f32 max_h = device_vram_bytes <= kLowVramThreshold ? 360.0f : 432.0f;
+    const f32 cap_ratio =
+        std::min({1.0f, max_w / std::max(1.0f, scaled_w), max_h / std::max(1.0f, scaled_h)});
     scaled_w *= cap_ratio;
     scaled_h *= cap_ratio;
     const u32 w = std::max(64u, (static_cast<u32>(std::lround(scaled_w)) + 15u) & ~15u);
@@ -148,8 +152,8 @@ void ComputeMemoryBarrier(vk::CommandBuffer cmdbuf) {
                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, kBarrier);
 }
 
-void CopyImageToTwo(vk::CommandBuffer cmdbuf, VkImage source, VkImage dest_a, VkImage dest_b,
-                    VkExtent2D extent) {
+void CopyFrameToSlot(vk::CommandBuffer cmdbuf, VkImage source, VkImage destination,
+                     VkExtent2D extent, bool dst_initialized) {
     const VkImageCopy region{
         .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
         .srcOffset = {0, 0, 0},
@@ -157,75 +161,43 @@ void CopyImageToTwo(vk::CommandBuffer cmdbuf, VkImage source, VkImage dest_a, Vk
         .dstOffset = {0, 0, 0},
         .extent = {extent.width, extent.height, 1},
     };
-    const std::array before{
-        MakeImageBarrier(source,
-                         VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                             VK_ACCESS_TRANSFER_WRITE_BIT,
-                         VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
-                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL),
-        MakeImageBarrier(dest_a, 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL),
-        MakeImageBarrier(dest_b, 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL),
-    };
-    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+    const auto src_before = MakeImageBarrier(
+        source,
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+            VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                                VK_PIPELINE_STAGE_TRANSFER_BIT,
-                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, {}, {}, before);
-    cmdbuf.CopyImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dest_a,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
-    cmdbuf.CopyImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dest_b,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
-    const std::array after{
-        MakeImageBarrier(source, VK_ACCESS_TRANSFER_READ_BIT,
-                         VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-        MakeImageBarrier(dest_a, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-        MakeImageBarrier(dest_b, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-    };
-    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           0, {}, {}, after);
-}
+                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, src_before);
 
-void CopyImageToImage(vk::CommandBuffer cmdbuf, VkImage source, VkImage destination,
-                      VkExtent2D extent) {
-    const VkImageCopy region{
-        .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-        .srcOffset = {0, 0, 0},
-        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-        .dstOffset = {0, 0, 0},
-        .extent = {extent.width, extent.height, 1},
-    };
-    const std::array before{
-        MakeImageBarrier(source,
-                         VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                             VK_ACCESS_TRANSFER_WRITE_BIT,
-                         VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
-                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL),
-        MakeImageBarrier(destination, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL),
-    };
-    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                               VK_PIPELINE_STAGE_TRANSFER_BIT,
-                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, {}, {}, before);
+    // WAR execution dependency when reusing a previously sampled slot: read accesses do not
+    // require srcAccessMask bits under Vulkan synchronization rules.
+    const auto dst_before = MakeImageBarrier(
+        destination, 0U, VK_ACCESS_TRANSFER_WRITE_BIT,
+        dst_initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    cmdbuf.PipelineBarrier(dst_initialized ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                           : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, dst_before);
+
     cmdbuf.CopyImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region);
-    const std::array after{
-        MakeImageBarrier(source, VK_ACCESS_TRANSFER_READ_BIT,
-                         VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-        MakeImageBarrier(destination, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
-    };
+
+    const auto src_after = MakeImageBarrier(
+        source, 0U, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
     cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                           VK_PIPELINE_STAGE_TRANSFER_BIT |
                                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           0, {}, {}, after);
+                           0, src_after);
+
+    const auto dst_after =
+        MakeImageBarrier(destination, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                           dst_after);
 }
 
 vk::Buffer CreateStorageBuffer(MemoryAllocator& allocator, std::size_t float_count,
@@ -245,8 +217,8 @@ vk::Buffer CreateStorageBuffer(MemoryAllocator& allocator, std::size_t float_cou
 OpenFrameGen::OpenFrameGen(const Device& device, MemoryAllocator& memory_allocator,
                            VkExtent2D extent, VkFormat format, f32 flow_scale)
     : m_allocator{memory_allocator}, m_extent{extent},
-      m_net_extent{ComputeNanoExtent(extent, flow_scale)}, m_format{format},
-      m_w2{m_net_extent.width / 2u}, m_h2{m_net_extent.height / 2u},
+      m_net_extent{ComputeNanoExtent(extent, flow_scale, device.GetDeviceLocalMemory())},
+      m_format{format}, m_w2{m_net_extent.width / 2u}, m_h2{m_net_extent.height / 2u},
       m_w4{m_net_extent.width / 4u}, m_h4{m_net_extent.height / 4u},
       m_w8{m_net_extent.width / 8u}, m_h8{m_net_extent.height / 8u},
       m_w16{m_net_extent.width / 16u}, m_h16{m_net_extent.height / 16u} {
@@ -262,44 +234,34 @@ OpenFrameGen::~OpenFrameGen() = default;
 void OpenFrameGen::CreateResources(const Device& device) {
     m_linear_sampler = CreateBilinearSampler(device);
 
-    m_history_image = CreateWrappedImage(m_allocator, m_extent, m_format);
-    m_history_view = CreateWrappedImageView(device, m_history_image, m_format);
-
-    m_current_image = m_allocator.CreateImage(VkImageCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-        .imageType = VK_IMAGE_TYPE_2D,
-        .format = m_format,
-        .extent = {m_extent.width, m_extent.height, 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                 VK_IMAGE_USAGE_SAMPLED_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-    });
-    m_current_view = CreateWrappedImageView(device, m_current_image, m_format);
+    for (std::size_t i = 0; i < m_frame_images.size(); ++i) {
+        m_frame_images[i] = m_allocator.CreateImage(VkImageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = m_format,
+            .extent = {m_extent.width, m_extent.height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        });
+        m_frame_views[i] = CreateWrappedImageView(device, m_frame_images[i], m_format);
+        m_frame_initialized[i] = false;
+    }
 
     m_flow_mask_image = CreateWrappedImage(m_allocator, {m_w4, m_h4}, VK_FORMAT_R16G16B16A16_SFLOAT);
     m_flow_mask_view =
         CreateWrappedImageView(device, m_flow_mask_image, VK_FORMAT_R16G16B16A16_SFLOAT);
+    m_flow_mask_initialized = false;
 
-    const auto weights = OpenFrameGenWeights::UnpackWeights();
-    const VkDeviceSize weights_bytes = weights.size() * sizeof(f32);
-    m_weights_upload = m_allocator.CreateBuffer(
-        VkBufferCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .size = weights_bytes,
-            .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        },
-        MemoryUsage::Upload);
-    std::memcpy(m_weights_upload.Mapped().data(), weights.data(), weights_bytes);
-    m_weights_upload.Flush();
-
-    m_weights_buffer =
-        CreateStorageBuffer(m_allocator, weights.size(), VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    // Only allocate the device-local weights buffer eagerly. The ~352 KiB host-visible staging
+    // buffer (m_weights_upload) is allocated lazily on the first actual optical-flow dispatch
+    // and released as soon as the upload tick retires.
+    m_weights_buffer = CreateStorageBuffer(m_allocator, OpenFrameGenWeights::kTotalFloatCount,
+                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 
     const std::size_t p2 = static_cast<std::size_t>(m_w2) * m_h2;
     const std::size_t p4 = static_cast<std::size_t>(m_w4) * m_h4;
@@ -315,8 +277,8 @@ void OpenFrameGen::CreateResources(const Device& device) {
     m_buf_scratch_b = CreateStorageBuffer(m_allocator, std::max({32u * p4, 64u * p8, 96u * p16}));
 
     const std::array pool_sizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 64},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 68},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
     };
     m_static_desc_pool = device.GetLogical().CreateDescriptorPool(VkDescriptorPoolCreateInfo{
@@ -443,7 +405,8 @@ void OpenFrameGen::CreatePipelines(const Device& device) {
               m_warp_pipe_layout, m_warp_pipeline);
 
     const std::array<VkDescriptorSetLayout, StaticSetCount> layouts{
-        *m_prep_desc_layout, // SetPrep
+        *m_prep_desc_layout, // SetPrepSlot0
+        *m_prep_desc_layout, // SetPrepSlot1
         *m_dw_desc_layout,   // SetE1Dw
         *m_pw_desc_layout,   // SetE1Pw
         *m_dw_desc_layout,   // SetE2Dw
@@ -467,11 +430,11 @@ void OpenFrameGen::CreatePipelines(const Device& device) {
 
 void OpenFrameGen::WriteStaticDescriptors(const Device& device) {
     std::vector<VkDescriptorBufferInfo> buf_infos;
-    buf_infos.reserve(64);
+    buf_infos.reserve(68);
     std::vector<VkDescriptorImageInfo> img_infos;
     img_infos.reserve(8);
     std::vector<VkWriteDescriptorSet> writes;
-    writes.reserve(64);
+    writes.reserve(68);
 
     const auto bind_buf = [&](VkDescriptorSet set, u32 binding, VkBuffer buffer) {
         buf_infos.push_back(VkDescriptorBufferInfo{
@@ -500,12 +463,19 @@ void OpenFrameGen::WriteStaticDescriptors(const Device& device) {
         bind_buf(m_static_sets[idx], 2, out);
     };
 
-    // SetPrep: prev_frame (0), curr_frame (1), buf_xs (2)
-    writes.push_back(CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_history_view,
-                                              m_static_sets[SetPrep], 0));
-    writes.push_back(CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_current_view,
-                                              m_static_sets[SetPrep], 1));
-    bind_buf(m_static_sets[SetPrep], 2, *m_buf_xs);
+    // SetPrepSlot0: prev = slot 1, curr = slot 0, buf_xs (2)
+    writes.push_back(CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_frame_views[1],
+                                              m_static_sets[SetPrepSlot0], 0));
+    writes.push_back(CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_frame_views[0],
+                                              m_static_sets[SetPrepSlot0], 1));
+    bind_buf(m_static_sets[SetPrepSlot0], 2, *m_buf_xs);
+
+    // SetPrepSlot1: prev = slot 0, curr = slot 1, buf_xs (2)
+    writes.push_back(CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_frame_views[0],
+                                              m_static_sets[SetPrepSlot1], 0));
+    writes.push_back(CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_frame_views[1],
+                                              m_static_sets[SetPrepSlot1], 1));
+    bind_buf(m_static_sets[SetPrepSlot1], 2, *m_buf_xs);
 
     // Encoder + Bottleneck + SE
     bind_dw(SetE1Dw, *m_buf_xs, *m_buf_xs, *m_buf_scratch_a);
@@ -567,62 +537,107 @@ void OpenFrameGen::WriteStaticDescriptors(const Device& device) {
     device.GetLogical().UpdateDescriptorSets(writes, {});
 }
 
+void OpenFrameGen::ReleaseWeightsUploadIfFree(Scheduler& scheduler) {
+    if (m_weights_upload && m_weights_uploaded && scheduler.IsFree(m_weights_upload_tick)) {
+        m_weights_upload.reset();
+    }
+}
+
 void OpenFrameGen::Process(const Device&, Scheduler& scheduler, VkImage current_frame, VkImageView,
-                           u64 frame_count) {
+                           u64 frame_count, bool capture_history, bool compute_flow) {
+    ReleaseWeightsUploadIfFree(scheduler);
+
     if (frame_count == 0) {
         m_has_history = false;
         m_flow_valid = false;
     }
 
-    if (!m_has_history) {
-        const bool need_upload = !m_weights_uploaded;
-        m_weights_uploaded = true;
-        scheduler.Record([this, current_frame, need_upload](vk::CommandBuffer cmdbuf) {
-            if (need_upload) {
-                const VkBufferCopy copy{
-                    .srcOffset = 0,
-                    .dstOffset = 0,
-                    .size = OpenFrameGenWeights::kTotalFloatCount * sizeof(f32),
-                };
-                cmdbuf.CopyBuffer(*m_weights_upload, *m_weights_buffer, copy);
-                static constexpr VkMemoryBarrier kWeightBarrier{
-                    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                    .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-                };
-                cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, kWeightBarrier);
-            }
-            CopyImageToTwo(cmdbuf, current_frame, *m_history_image, *m_current_image, m_extent);
-            const auto discard = MakeImageBarrier(*m_flow_mask_image, 0, VK_ACCESS_SHADER_WRITE_BIT,
-                                                  VK_IMAGE_LAYOUT_UNDEFINED,
-                                                  VK_IMAGE_LAYOUT_GENERAL);
-            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, {}, {}, discard);
-        });
-        m_has_history = true;
-        m_last_frame_count = frame_count;
+    // Idle / at-target bypass: record zero GPU work so menus or at-target gameplay suffer no
+    // GPU overhead or VRAM bandwidth cost.
+    if (!capture_history && !compute_flow) {
+        m_has_history = false;
+        m_flow_valid = false;
         return;
     }
 
-    if (frame_count == m_last_frame_count) {
+    // Duplicate-frame detection
+    if (m_has_history && frame_count == m_last_frame_count) {
         return;
     }
     m_last_frame_count = frame_count;
 
+    // Warm-up or fractional-cadence skip frame: capture current frame into the next ping-pong
+    // slot without executing any neural network passes.
+    if (!m_has_history || !compute_flow) {
+        const u32 dst_slot = m_has_history ? (m_curr_slot ^ 1u) : 0u;
+        const bool dst_init = m_frame_initialized[dst_slot];
+        m_frame_initialized[dst_slot] = true;
+        m_curr_slot = dst_slot;
+        m_has_history = true;
+        m_flow_valid = false;
+
+        scheduler.Record([this, current_frame, dst_slot, dst_init](vk::CommandBuffer cmdbuf) {
+            CopyFrameToSlot(cmdbuf, current_frame, *m_frame_images[dst_slot], m_extent, dst_init);
+        });
+        return;
+    }
+
+    const u32 dst_slot = m_curr_slot ^ 1u;
+    const bool dst_init = m_frame_initialized[dst_slot];
+    m_frame_initialized[dst_slot] = true;
+    m_curr_slot = dst_slot;
+
+    const bool need_upload = !m_weights_uploaded;
+    if (need_upload && !m_weights_upload) {
+        const auto weights = OpenFrameGenWeights::UnpackWeights();
+        const VkDeviceSize weights_bytes = weights.size() * sizeof(f32);
+        m_weights_upload = m_allocator.CreateBuffer(
+            VkBufferCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .size = weights_bytes,
+                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            },
+            MemoryUsage::Upload);
+        std::memcpy(m_weights_upload.Mapped().data(), weights.data(), weights_bytes);
+        m_weights_upload.Flush();
+    }
+    const VkBuffer upload_buf = need_upload ? *m_weights_upload : VK_NULL_HANDLE;
+    const bool flow_init = m_flow_mask_initialized;
+    m_flow_mask_initialized = true;
+    const StaticSetIndex prep_set = dst_slot == 0u ? SetPrepSlot0 : SetPrepSlot1;
+    const u32 is_scrgb_hdr = m_format == VK_FORMAT_R16G16B16A16_SFLOAT ? 1u : 0u;
+
     namespace W = OpenFrameGenWeights;
 
-    scheduler.Record([this, current_frame](vk::CommandBuffer cmdbuf) {
-        CopyImageToImage(cmdbuf, *m_current_image, *m_history_image, m_extent);
-        CopyImageToImage(cmdbuf, current_frame, *m_current_image, m_extent);
+    scheduler.Record([this, current_frame, dst_slot, dst_init, need_upload, upload_buf, flow_init,
+                      prep_set, is_scrgb_hdr](vk::CommandBuffer cmdbuf) {
+        if (need_upload) {
+            const VkBufferCopy copy{
+                .srcOffset = 0,
+                .dstOffset = 0,
+                .size = OpenFrameGenWeights::kTotalFloatCount * sizeof(f32),
+            };
+            cmdbuf.CopyBuffer(upload_buf, *m_weights_buffer, copy);
+            static constexpr VkMemoryBarrier kWeightBarrier{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            };
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, kWeightBarrier);
+        }
 
-        const auto flow_write_barrier =
-            MakeImageBarrier(*m_flow_mask_image,
-                             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                             VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL,
-                             VK_IMAGE_LAYOUT_GENERAL);
-        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, {}, {}, flow_write_barrier);
+        CopyFrameToSlot(cmdbuf, current_frame, *m_frame_images[dst_slot], m_extent, dst_init);
+
+        const auto flow_write_barrier = MakeImageBarrier(
+            *m_flow_mask_image, flow_init ? VK_ACCESS_SHADER_WRITE_BIT : 0U,
+            VK_ACCESS_SHADER_WRITE_BIT,
+            flow_init ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_GENERAL);
+        cmdbuf.PipelineBarrier(flow_init ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                         : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, flow_write_barrier);
 
         const auto run_dw = [&](StaticSetIndex set_idx, u32 in_w, u32 in_h, u32 out_w, u32 out_h,
                                 u32 ch, u32 stride, u32 mode, u32 ch_a, u32 w_off, u32 b_off) {
@@ -641,15 +656,15 @@ void OpenFrameGen::Process(const Device&, Scheduler& scheduler, VkImage current_
             cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *m_pw_pipe_layout, 0,
                                       m_static_sets[set_idx], {});
             cmdbuf.PushConstants(*m_pw_pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, pc);
-            cmdbuf.Dispatch(DivUp(w, 8u), DivUp(h, 8u), DivUp(out_ch, 4u));
+            cmdbuf.Dispatch(DivUp(w, 8u), DivUp(h, 8u), DivUp(out_ch, 16u));
             ComputeMemoryBarrier(cmdbuf);
         };
 
         // 1. Prep: avg_pool2d(x, 2) -> [6, m_h2, m_w2]
-        const PrepPushConstants prep_pc{m_w2, m_h2};
+        const PrepPushConstants prep_pc{m_w2, m_h2, is_scrgb_hdr};
         cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *m_prep_pipeline);
         cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *m_prep_pipe_layout, 0,
-                                  m_static_sets[SetPrep], {});
+                                  m_static_sets[prep_set], {});
         cmdbuf.PushConstants(*m_prep_pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, prep_pc);
         cmdbuf.Dispatch(DivUp(m_w2, 16u), DivUp(m_h2, 16u), 1u);
         ComputeMemoryBarrier(cmdbuf);
@@ -687,12 +702,13 @@ void OpenFrameGen::Process(const Device&, Scheduler& scheduler, VkImage current_
         run_pw(SetD3Pw, m_w4, m_h4, 112u, 32u, W::kD3PwW, W::kD3PwB);
 
         // 5. Head (32 -> 32 -> (flow_uv_x, flow_uv_y, sigmoid(mask)))
+        // head.0 computes 4 output channels per workgroup (local_size_z = 4 -> 8 Z groups for 32ch)
         cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *m_head_pipeline);
         const HeadPushConstants head0_pc{m_w4, m_h4, 0u, W::kHead0W, W::kHead0B, 0.0f, 0.0f};
         cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *m_head_pipe_layout, 0,
                                   m_static_sets[SetHead0], {});
         cmdbuf.PushConstants(*m_head_pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, head0_pc);
-        cmdbuf.Dispatch(DivUp(m_w4, 8u), DivUp(m_h4, 8u), 32u);
+        cmdbuf.Dispatch(DivUp(m_w4, 8u), DivUp(m_h4, 8u), 8u);
         ComputeMemoryBarrier(cmdbuf);
 
         const f32 flow_norm_x = 4.0f / static_cast<f32>(std::max(1u, m_net_extent.width - 1u));
@@ -711,11 +727,17 @@ void OpenFrameGen::Process(const Device&, Scheduler& scheduler, VkImage current_
                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, {}, {}, flow_read_barrier);
     });
 
+    if (need_upload) {
+        m_weights_uploaded = true;
+        m_weights_upload_tick = scheduler.CurrentTick();
+    }
     m_flow_valid = true;
 }
 
 void OpenFrameGen::Generate(const Device& device, Scheduler& scheduler, VkImage destination,
                             VkImageView destination_storage_view, float blend_factor) {
+    ReleaseWeightsUploadIfFree(scheduler);
+
     if (!m_has_history || !m_flow_valid) {
         return;
     }
@@ -725,12 +747,13 @@ void OpenFrameGen::Generate(const Device& device, Scheduler& scheduler, VkImage 
         m_warp_allocator = m_warp_pool->Allocator(device, scheduler, *m_warp_desc_layout,
                                                   DescriptorBankInfo{.textures = 3, .images = 1});
     }
+    const u32 prev_slot = m_curr_slot ^ 1u;
     const VkDescriptorSet set = m_warp_allocator.Commit();
     std::vector<VkDescriptorImageInfo> img_infos;
     img_infos.reserve(4);
     std::vector<VkWriteDescriptorSet> updates{
-        CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_history_view, set, 0),
-        CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_current_view, set, 1),
+        CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_frame_views[prev_slot], set, 0),
+        CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_frame_views[m_curr_slot], set, 1),
         CreateWriteDescriptorSet(img_infos, *m_linear_sampler, *m_flow_mask_view, set, 2),
     };
     const VkDescriptorImageInfo dest_info{
@@ -760,14 +783,20 @@ void OpenFrameGen::Generate(const Device& device, Scheduler& scheduler, VkImage 
 
     scheduler.Record([this, pc, out_w, out_h, set, destination](vk::CommandBuffer cmdbuf) {
         const auto discard =
-            MakeImageBarrier(destination, 0, VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+            MakeImageBarrier(destination, 0U, VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                              VK_IMAGE_LAYOUT_GENERAL);
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, {}, {}, discard);
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, discard);
         cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *m_warp_pipeline);
         cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *m_warp_pipe_layout, 0, set, {});
         cmdbuf.PushConstants(*m_warp_pipe_layout, VK_SHADER_STAGE_COMPUTE_BIT, pc);
         cmdbuf.Dispatch(DivUp(out_w, 16u), DivUp(out_h, 16u), 1u);
+
+        const auto after =
+            MakeImageBarrier(destination, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                               0, after);
     });
 }
 

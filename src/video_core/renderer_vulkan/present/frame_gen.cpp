@@ -314,20 +314,29 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
 
     const bool warm = plan.warm && count + 1 >= LSFG_REQUIRED_FRAMES;
     warm_streak = warm ? warm_streak + 1 : 0;
-    generated = warm && warm_streak >= LSFG_RECURRENCE_FRAMES && plan.generations > 0;
-    generated_frames.fetch_add(GeneratedFrameCount(), std::memory_order_relaxed);
-    LogActivity();
+    const bool want_generate = warm && warm_streak >= LSFG_RECURRENCE_FRAMES && plan.generations > 0;
 
     const bool use_fsr3 = type == Settings::FrameGenType::Fsr3;
     const bool use_open_fg = type == Settings::FrameGenType::OpenFrameGen;
+    const bool capture_history = plan.warm;
+    const bool compute_flow = want_generate;
 
     if (use_fsr3 && fsr3_chain) {
-        scheduler.RequestOutsideRenderPassOperationContext();
-        fsr3_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count);
+        if (capture_history || compute_flow) {
+            scheduler.RequestOutsideRenderPassOperationContext();
+        }
+        fsr3_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count,
+                            capture_history, compute_flow);
+        generated = want_generate && fsr3_chain->IsReady();
     } else if (use_open_fg && open_fg_chain) {
-        scheduler.RequestOutsideRenderPassOperationContext();
-        open_fg_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count);
+        if (capture_history || compute_flow) {
+            scheduler.RequestOutsideRenderPassOperationContext();
+        }
+        open_fg_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count,
+                               capture_history, compute_flow);
+        generated = want_generate && open_fg_chain->IsReady();
     } else if (chain) {
+        generated = want_generate;
         scheduler.RequestOutsideRenderPassOperationContext();
         scheduler.Record([this, source = *frame->image, extent, count,
                           dispatch = warm](vk::CommandBuffer cmdbuf) {
@@ -345,6 +354,9 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
             dumped = true;
         }
     }
+
+    generated_frames.fetch_add(GeneratedFrameCount(), std::memory_order_relaxed);
+    LogActivity();
 }
 
 void FrameGen::SetState(VideoCore::FrameGenState new_state, VkFormat format) {
@@ -487,7 +499,7 @@ void FrameGen::Rebuild(const Device& device, VkExtent2D extent, VkFormat format,
     built_type = type;
 
     if (built_type == Settings::FrameGenType::Fsr3) {
-        fsr3_chain.emplace(device, memory_allocator, extent, format);
+        fsr3_chain.emplace(device, memory_allocator, extent, format, built_flow_scale);
     } else if (built_type == Settings::FrameGenType::OpenFrameGen) {
         open_fg_chain.emplace(device, memory_allocator, extent, format, built_flow_scale);
     } else {

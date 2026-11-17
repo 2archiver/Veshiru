@@ -226,6 +226,43 @@ TEST_CASE("Asset digest and size come from the release JSON", "[updater]") {
     CHECK(archive[0].size == 0);
 }
 
+TEST_CASE("SHA256SUMS.txt fallback populates missing digests without overwriting API digests",
+          "[updater]") {
+    const std::string api_sha(64, 'a');
+    const std::string fallback_sha(64, 'B');
+    const nlohmann::json json{
+        {"tag_name", "v1.4.0"},
+        {"assets",
+         {{{"browser_download_url",
+            "https://github.com/2archiver/Veshiru/releases/download/v1.4.0/"
+            "veshiru-windows-x86_64.zip"},
+           {"size", u64{100}},
+           {"digest", "sha256:" + api_sha}},
+          {{"browser_download_url",
+            "https://github.com/2archiver/Veshiru/releases/download/v1.4.0/"
+            "veshiru-windows-x86_64-pgo.zip"},
+           {"size", u64{200}}},
+          {{"browser_download_url",
+            "https://github.com/2archiver/Veshiru/releases/download/v1.4.0/SHA256SUMS.txt"},
+           {"size", u64{300}}}}},
+    };
+    auto release =
+        Common::Net::Release::FromJson(json, "https://api.github.com", "2archiver/Veshiru").value();
+    const std::string sums =
+        std::string(64, 'c') + "  veshiru-windows-x86_64.zip\r\n" +
+        fallback_sha + " *./veshiru-windows-x86_64-pgo.zip\n" +
+        "not-a-valid-sha256  ignored.zip\n";
+    Common::Net::ApplySha256SumsText(release, sums);
+
+    const auto std_assets = release.GetPlatformAssets("windows-x86_64");
+    REQUIRE(std_assets.size() == 1);
+    CHECK(std_assets[0].sha256 == api_sha); // Existing API digest preserved.
+
+    const auto pgo_assets = release.GetPlatformAssets("windows-x86_64-pgo");
+    REQUIRE(pgo_assets.size() == 1);
+    CHECK(pgo_assets[0].sha256 == std::string(64, 'b')); // Fallback filled & lowercased.
+}
+
 TEST_CASE("Failed release requests are classified by status", "[updater]") {
     CHECK(UpdateChecker::ClassifyFailure(403) == UpdateChecker::Failure::RateLimited);
     CHECK(UpdateChecker::ClassifyFailure(429) == UpdateChecker::Failure::RateLimited);

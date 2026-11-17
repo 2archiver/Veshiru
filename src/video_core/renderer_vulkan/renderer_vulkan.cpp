@@ -310,6 +310,7 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
         frame_gen.GenerateInto(device, generated, generation);
         scheduler.Flush(*generated->render_ready);
         present_manager.Present(generated);
+        scheduler.DispatchWork();
     }
 #endif
 

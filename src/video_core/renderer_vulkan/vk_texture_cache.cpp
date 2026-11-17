@@ -33,6 +33,7 @@
 #include "video_core/render_trace.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/texture_cache/host_mip_limits.h"
+#include "video_core/texture_cache/memory_limits.h"
 
 #include "video_core/engines/fermi_2d.h"
 #include "video_core/renderer_vulkan/blit_image.h"
@@ -433,7 +434,8 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
     if (forced != 0) {
         return forced;
     }
-    return device.GetDeviceLocalMemory() < (u64{7} << 30) ? (u64{256} << 20) : (u64{512} << 20);
+    return VideoCommon::TextureCacheMemory::ResolveTrimmedAstcArrayLimit(
+        device.GetDeviceLocalMemory());
 }
 
 // The host shape of an image whose decoded copy would not fit in VRAM: a GPU-decoded ASTC array
@@ -3747,6 +3749,8 @@ bool Image::BindZeroBlock() {
     if (s.zero_block == VK_NULL_HANDLE) {
         return false;
     }
+    s.zero_memory = memory;
+    s.zero_offset = offset;
     s.bound_bytes += tile;
     std::vector<VkSparseImageMemoryBind> image_binds;
     for (u32 level = 0; level < s.tail_level; ++level) {
@@ -3904,6 +3908,96 @@ bool Image::BackTilesWhole() {
     s.allocator->FreeSparseMemory(s.zero_block);
     s.zero_block = VK_NULL_HANDLE;
     s.bound_bytes -= s.requirements.alignment;
+    ClearTiles();
+    return true;
+}
+
+bool Image::ResetTiles() {
+    SparseLayerMemory& s = sparse_layers;
+    if (s.allocator == nullptr || s.zero_block == VK_NULL_HANDLE) {
+        return false;
+    }
+    const Device& device = runtime->device;
+    const u64 tile = s.requirements.alignment;
+    std::vector<VkSparseImageMemoryBind> image_binds;
+    std::vector<VmaAllocation*> released;
+    for (u32 level = 0; level < s.tail_level; ++level) {
+        const u32 width = (std::max)(s.width >> level, 1U);
+        const u32 height = (std::max)(s.height >> level, 1U);
+        const u32 tiles_x = Common::DivCeil(width, s.tile_width);
+        const size_t tiles = size_t{tiles_x} * Common::DivCeil(height, s.tile_height);
+        auto& level_tiles = s.level_tiles[level];
+        if (level_tiles.size() != tiles) {
+            return false; // the zeroed block is only used for single-layer images
+        }
+        for (size_t index = 0; index < tiles; ++index) {
+            if (level_tiles[index] == VK_NULL_HANDLE) {
+                continue;
+            }
+            const u32 x = static_cast<u32>(index % tiles_x) * s.tile_width;
+            const u32 y = static_cast<u32>(index / tiles_x) * s.tile_height;
+            image_binds.push_back(VkSparseImageMemoryBind{
+                .subresource{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel = level,
+                    .arrayLayer = 0,
+                },
+                .offset{static_cast<s32>(x), static_cast<s32>(y), 0},
+                .extent{(std::min)(s.tile_width, width - x), (std::min)(s.tile_height, height - y),
+                        1},
+                .memory = s.zero_memory,
+                .memoryOffset = s.zero_offset,
+                .flags = 0,
+            });
+            released.push_back(&level_tiles[index]);
+        }
+    }
+    if (!image_binds.empty()) {
+        const VkSparseImageMemoryBindInfo image_bind_info{
+            .image = *original_image,
+            .bindCount = static_cast<u32>(image_binds.size()),
+            .pBinds = image_binds.data(),
+        };
+        const VkBindSparseInfo bind_info{
+            .sType = VK_STRUCTURE_TYPE_BIND_SPARSE_INFO,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = nullptr,
+            .bufferBindCount = 0,
+            .pBufferBinds = nullptr,
+            .imageOpaqueBindCount = 0,
+            .pImageOpaqueBinds = nullptr,
+            .imageBindCount = 1,
+            .pImageBinds = &image_bind_info,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = nullptr,
+        };
+        vk::Fence fence = device.GetLogical().CreateFence(VkFenceCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+        });
+        // Earlier work may still read the blocks, and sparse binds aren't ordered against command
+        // buffers on the queue: wait for it before rebinding and freeing them.
+        scheduler->Finish();
+        VkResult result;
+        {
+            std::scoped_lock lock{scheduler->submit_mutex};
+            result = device.GetGraphicsQueue().BindSparse(bind_info, *fence);
+        }
+        if (result != VK_SUCCESS) {
+            LOG_ERROR(Render_Vulkan, "Sparse tiled image {:#x}: resetting blocks failed ({})",
+                      gpu_addr, static_cast<int>(result));
+            return false;
+        }
+        fence.Wait();
+        for (VmaAllocation* const allocation : released) {
+            s.allocator->FreeSparseMemory(*allocation);
+            *allocation = VK_NULL_HANDLE;
+            s.bound_bytes -= tile;
+        }
+    }
+    // Zero the shared block (written by nothing, but cleared as at creation) and the mip tail.
     ClearTiles();
     return true;
 }

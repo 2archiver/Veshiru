@@ -481,17 +481,19 @@ ResultStatus AppLoader_NUP::ReadProgramIds(std::vector<u64>& out_program_ids) {
 }
 
 ResultStatus AppLoader_NUP::ReadIcon(std::vector<u8>& buffer) {
-    if (icon_file != nullptr) {
-        auto embedded = icon_file->ReadAllBytes();
-        if (!embedded.empty()) {
-            buffer = std::move(embedded);
-            return ResultStatus::Success;
-        }
-    }
+    // Prefer user-refreshed or sidecar cached HD artwork when present, falling back to the
+    // container's embedded icon without ever mutating the .nup archive on disk.
     if (base_title_id != 0) {
         auto cached = Common::ArtworkCache::ReadCachedArtwork(base_title_id);
         if (!cached.empty()) {
             buffer = std::move(cached);
+            return ResultStatus::Success;
+        }
+    }
+    if (icon_file != nullptr) {
+        auto embedded = icon_file->ReadAllBytes();
+        if (!embedded.empty()) {
+            buffer = std::move(embedded);
             return ResultStatus::Success;
         }
     }

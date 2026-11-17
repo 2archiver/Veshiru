@@ -4,6 +4,7 @@
 #include "veshiru/util/icon_search.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cctype>
@@ -98,18 +99,25 @@ std::string UrlEncode(std::string_view value) {
     return out;
 }
 
-constexpr std::chrono::seconds SearchDeadline{10};
+constexpr std::chrono::seconds SearchDeadline{15};
 constexpr std::size_t MaxHttpBodySize = 6 * 1024 * 1024;
 constexpr std::chrono::seconds TitleIdProbeDeadline{3};
-constexpr std::chrono::seconds PrimarySourceDeadline{6};
+constexpr std::chrono::seconds PrimarySourceDeadline{4};
+constexpr std::chrono::seconds FallbackSourceDeadline{4};
 constexpr std::string_view IconSiteHost = "https://switchiconshowdown.com";
 constexpr std::string_view TitleIdApiHost = "https://api.nlib.cc";
+constexpr std::string_view LibretroBoxartBase =
+    "https://thumbnails.libretro.com/Nintendo%20-%20Nintendo%20Switch/Named_Boxarts/";
+constexpr std::string_view WikipediaSummaryBase = "https://en.wikipedia.org/api/rest_v1/page/summary/";
 constexpr std::string_view SgdbApiBase = "https://www.steamgriddb.com/api/v2";
 
 bool IsAllowedIconHost(std::string_view host) {
     return host == "switchiconshowdown.com" || host == "api.nlib.cc" ||
            host == "img-eshop.cdn.nintendo.net" || host.ends_with(".nintendo.net") ||
-           host == "steamgriddb.com" || host.ends_with(".steamgriddb.com");
+           host == "assets.nintendo.com" || host.ends_with(".nintendo.com") ||
+           host == "thumbnails.libretro.com" || host == "en.wikipedia.org" ||
+           host == "upload.wikimedia.org" || host == "steamgriddb.com" ||
+           host.ends_with(".steamgriddb.com");
 }
 
 enum class HttpStatus { Ok, NetworkError, Timeout, Cancelled, Unauthorized };
@@ -158,7 +166,7 @@ HttpResult HttpGet(const std::string& full_url, std::chrono::steady_clock::time_
 #ifdef VESHIRU_BUNDLED_OPENSSL
         client.load_ca_cert_store(kCert, sizeof(kCert));
 #endif
-        httplib::Headers headers{{"User-Agent", "Veshiru"}};
+        httplib::Headers headers{{"User-Agent", "Veshiru/1.4.0 (https://github.com/2archiver/Veshiru)"}};
         if (!bearer_token.empty()) {
             headers.emplace("Authorization", "Bearer " + bearer_token);
         }
@@ -249,6 +257,68 @@ std::string UrlEncodePathSegment(std::string value) {
     return encoded;
 }
 
+std::string SanitizeLibretroTitle(std::string_view title) {
+    std::string out;
+    out.reserve(title.size());
+    for (const char c : title) {
+        switch (c) {
+        case '&':
+        case '*':
+        case '/':
+        case ':':
+        case '`':
+        case '<':
+        case '>':
+        case '?':
+        case '\\':
+        case '|':
+        case '"':
+            out.push_back('_');
+            break;
+        default:
+            out.push_back(c);
+            break;
+        }
+    }
+    return out;
+}
+
+std::string EncodeWikipediaTitle(std::string_view title) {
+    std::string normalized(title);
+    std::ranges::replace(normalized, ' ', '_');
+    return UrlEncode(normalized);
+}
+
+bool LooksLikeVideoGameSummary(const nlohmann::json& summary, bool explicit_game_suffix) {
+    if (!summary.is_object()) {
+        return false;
+    }
+    if (summary.contains("type") && summary["type"].is_string() &&
+        summary["type"].get<std::string>() != "standard") {
+        return false;
+    }
+    if (explicit_game_suffix) {
+        return true;
+    }
+    std::string haystack;
+    if (summary.contains("description") && summary["description"].is_string()) {
+        haystack += Common::ToLower(summary["description"].get<std::string>());
+        haystack.push_back(' ');
+    }
+    if (summary.contains("extract") && summary["extract"].is_string()) {
+        haystack += Common::ToLower(summary["extract"].get<std::string>());
+    }
+    for (const std::string_view kw : {"video game", "nintendo", "switch", "racing game",
+                                      "platform game", "action-adventure", "role-playing",
+                                      "fighting game", "sports game", "developed by",
+                                      "published by"}) {
+        if (haystack.find(kw) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Icon image URLs from a SteamGridDB response, best size first.
 std::vector<std::string> ParseSgdbIconUrls(const std::string& body) {
     std::vector<std::string> urls;
@@ -308,15 +378,19 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
         };
 
         // 1. Exact Title ID lookup when the Program ID is known: resolves canonical title and
-        //    official HD eShop icon when available, avoiding wrong editions completely.
-        if (base_tid != 0 && Common::ArtworkCache::LookupTitleByProgramId(base_tid).empty()) {
+        //    official HD eShop icon when available, avoiding wrong editions completely. Always
+        //    probe even for titles present in the local catalog so we still fetch the official
+        //    eShop CDN icon directly by Title ID.
+        const bool has_catalog_title =
+            base_tid != 0 && !Common::ArtworkCache::LookupTitleByProgramId(base_tid).empty();
+        if (base_tid != 0) {
             const auto tid_deadline = std::min(deadline, start + TitleIdProbeDeadline);
             const auto tid_res = HttpGet(
                 fmt::format("{}/nx/{:016X}", TitleIdApiHost, base_tid), tid_deadline, cancel);
             if (tid_res.status == HttpStatus::Ok) {
                 const auto meta = nlohmann::json::parse(tid_res.body, nullptr, false);
                 if (!meta.is_discarded() && meta.is_object()) {
-                    if (meta.contains("name") && meta["name"].is_string()) {
+                    if (!has_catalog_title && meta.contains("name") && meta["name"].is_string()) {
                         const auto exact_name = meta["name"].get<std::string>();
                         if (!exact_name.empty()) {
                             search_name = exact_name;
@@ -422,10 +496,92 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
             return out;
         }
 
-        // 3. Fallback HD source: SteamGridDB (scored by title relevance to avoid wrong editions).
+        // 3. Keyless fallback HD boxart: Libretro Nintendo Switch thumbnails CDN.
+        bool any_keyless_succeeded_cleanly = (primary == IconSearchStatus::NotFound);
+        {
+            const auto libretro_deadline =
+                std::min(deadline, steady_clock::now() + FallbackSourceDeadline);
+            const std::string sanitized = SanitizeLibretroTitle(search_name);
+            for (const std::string& candidate_name :
+                 {sanitized, sanitized + " (USA)", sanitized + " (World)"}) {
+                if (steady_clock::now() >= libretro_deadline) {
+                    break;
+                }
+                const auto res =
+                    HttpGet(std::string{LibretroBoxartBase} + UrlEncodePathSegment(candidate_name) +
+                                ".png",
+                            libretro_deadline, cancel);
+                if (res.status == HttpStatus::Cancelled) {
+                    out.status = IconSearchStatus::Cancelled;
+                    return out;
+                }
+                if (res.status == HttpStatus::Ok && decode_icon(res.body)) {
+                    out.status = IconSearchStatus::Found;
+                    out.source = "libretro_thumbnails";
+                    return out;
+                }
+                if (res.detail == "HTTP 404") {
+                    any_keyless_succeeded_cleanly = true;
+                }
+            }
+        }
+
+        // 4. Keyless fallback HD cover art: Wikipedia REST summary API (works out of the box for
+        //    Switch 2 launch titles such as Mario Kart World and Donkey Kong Bananza with no key).
+        {
+            const auto wiki_deadline =
+                std::min(deadline, steady_clock::now() + FallbackSourceDeadline);
+            const std::array<std::pair<std::string, bool>, 2> wiki_queries{{
+                {search_name + " (video game)", true},
+                {search_name, false},
+            }};
+            for (const auto& [title_query, explicit_suffix] : wiki_queries) {
+                if (steady_clock::now() >= wiki_deadline) {
+                    break;
+                }
+                const auto summary_res =
+                    HttpGet(std::string{WikipediaSummaryBase} + EncodeWikipediaTitle(title_query),
+                            wiki_deadline, cancel);
+                if (summary_res.status == HttpStatus::Cancelled) {
+                    out.status = IconSearchStatus::Cancelled;
+                    return out;
+                }
+                if (summary_res.status != HttpStatus::Ok) {
+                    if (summary_res.detail == "HTTP 404") {
+                        any_keyless_succeeded_cleanly = true;
+                    }
+                    continue;
+                }
+                any_keyless_succeeded_cleanly = true;
+                const auto summary = nlohmann::json::parse(summary_res.body, nullptr, false);
+                if (summary.is_discarded() ||
+                    !LooksLikeVideoGameSummary(summary, explicit_suffix)) {
+                    continue;
+                }
+                for (const char* image_obj : {"originalimage", "thumbnail"}) {
+                    if (!summary.contains(image_obj) || !summary[image_obj].is_object() ||
+                        !summary[image_obj].contains("source") ||
+                        !summary[image_obj]["source"].is_string()) {
+                        continue;
+                    }
+                    const auto img_url = summary[image_obj]["source"].get<std::string>();
+                    const auto img_res = HttpGet(img_url, wiki_deadline, cancel);
+                    if (img_res.status == HttpStatus::Cancelled) {
+                        out.status = IconSearchStatus::Cancelled;
+                        return out;
+                    }
+                    if (img_res.status == HttpStatus::Ok && decode_icon(img_res.body)) {
+                        out.status = IconSearchStatus::Found;
+                        out.source = "wikipedia";
+                        return out;
+                    }
+                }
+            }
+        }
+
+        // 5. Optional HD source: SteamGridDB (scored by title relevance to avoid wrong editions).
         if (api_key.empty()) {
-            out.status = primary == IconSearchStatus::NotFound ? IconSearchStatus::NeedsApiKey
-                                                               : primary;
+            out.status = any_keyless_succeeded_cleanly ? IconSearchStatus::NeedsApiKey : primary;
             out.error = primary_error;
             return out;
         }
@@ -581,9 +737,14 @@ void IconSearch::FetchSilentAsync(
                     },
                     Qt::QueuedConnection);
             }
-        } else {
+        } else if (res.status != IconSearchStatus::Cancelled) {
+            // Use a short retry window for transient network/timeout failures so offline startups
+            // recover promptly once connectivity returns.
+            const bool transient = res.status == IconSearchStatus::Timeout ||
+                                   res.status == IconSearchStatus::NetworkError;
+            const u64 cooldown_s = transient ? 120ULL : 3600ULL;
             Common::ArtworkCache::RecordArtworkFailure(
-                title_id, res.error.empty() ? "not_found" : res.error);
+                title_id, res.error.empty() ? "not_found" : res.error, cooldown_s);
         }
     });
 }

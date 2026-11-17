@@ -481,8 +481,9 @@ bool DmaPusher::Step() {
         if (fetch_drain && g_nx2_ampere.load(std::memory_order_relaxed)) {
             VideoCommon::GpuSplit::Get().Drain(VideoCommon::DrainSite::FetchDrain);
         }
-        bool gpu_written = IsGpuWrittenCommands(dma_state.dma_get,
-                                                 size_t{header.size} * sizeof(u32));
+        // The entry is the 5-word record of a DrawIndexedIndirect call the host GPU draws from
+        // guest memory (Maxwell3D::FrontTakeIndirectRecord): its words are not needed fresh.
+        bool skip_record_read = false;
         if (subchannels[dma_state.subchannel] && dma_state.method_count) {
             const auto engine = subchannel_type[dma_state.subchannel];
             const bool kepler_payload = engine == Engines::EngineTypes::KeplerCompute && dma_state.method == ComputeInline && dma_state.non_incrementing;
@@ -490,6 +491,13 @@ bool DmaPusher::Step() {
             if (kepler_payload || macro_payload) {
                 const size_t words = std::min<size_t>(dma_state.method_count, header.size);
                 auto* const engine_state = subchannels[dma_state.subchannel];
+                if (macro_payload && words == 5 && header.size == 5 &&
+                    dma_state.method_count == 5 && command_resume_offset == 0 &&
+                    VideoCommon::GpuSplit::Get().Active() &&
+                    static_cast<Engines::Maxwell3D*>(engine_state)
+                        ->FrontTakeIndirectRecord(dma_state.method, dma_state.dma_get)) {
+                    skip_record_read = true;
+                }
                 if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
                     // The caches behind IsMemoryDirty belong to the split's back thread.
                     split.Defer([engine_state, memory = &memory_manager, address = GPUVAddr{dma_state.dma_get},
@@ -501,6 +509,9 @@ bool DmaPusher::Step() {
                 }
             }
         }
+        bool gpu_written =
+            !skip_record_read &&
+            IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
         if (command_resume_offset == 0) {
             // A method's data continues across GP entries, whatever their level: title 4 ends a
             // main entry after a macro's first word and supplies the remaining parameters in a
@@ -540,7 +551,7 @@ bool DmaPusher::Step() {
         // queued before it. The GPU fetches the list after that work only past a host-level wait
         // (NoteSync): later work is not ordered before the fetch, and the list does not wait for
         // it (nor for draws, which write memory too; draw-written lists wait for the last sync).
-        if (!gpu_written && VideoCommon::GpuSplit::Get().Active()) {
+        if (!skip_record_read && !gpu_written && VideoCommon::GpuSplit::Get().Active()) {
             VideoCommon::GpuSplit::Get().WaitForSyncedWriters();
             gpu_written =
                 IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
@@ -631,6 +642,14 @@ bool DmaPusher::Step() {
                 CheckLiveRead(live_read_reason, header, commands, submitted_copy);
             }
             Nx2CmdPageDiag::CountEntry(Nx2CmdPageDiag::Path::Safe);
+            command_resume_offset +=
+                ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
+        } else if (skip_record_read) {
+            Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader,
+                                          Tegra::Memory::GuestMemoryFlags::UnsafeRead>
+                headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
+            const std::span<const CommandHeader> commands{headers.data(), headers.size()};
+            RecordParsedEntry(header, commands);
             command_resume_offset +=
                 ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
         } else if (bool pending = false;

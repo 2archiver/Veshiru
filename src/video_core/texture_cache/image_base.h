@@ -60,6 +60,10 @@ enum class ImageFlagBits : u32 {
     /// device memory when the guest memory under it can hold data (Image::BindTiles), and only
     /// the parts written are uploaded.
     SparseTiles = 1 << 23,
+    /// A SparseTiles image whose guest tiles were unmapped: before its next use its blocks go
+    /// back to the zeroed one and the tiles mapped then are loaded again (TextureCache::
+    /// RefreshUnmappedSparseTiles), instead of deleting and re-creating the image.
+    SparseTilesUnmapped = 1 << 24,
 };
 DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
 

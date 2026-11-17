@@ -15,6 +15,11 @@ endif()
 if (MSVC)
     set_property(TARGET veshiru-updater PROPERTY MSVC_RUNTIME_LIBRARY
                  "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    # Override global /MD flags set by the root CMakeLists.txt so veshiru-updater.exe links
+    # statically against the CRT and can run standalone from %TEMP% without vcruntime140.dll.
+    target_compile_options(veshiru-updater PRIVATE
+        $<$<CONFIG:Debug>:/MTd>
+        $<$<NOT:$<CONFIG:Debug>>:/MT>)
 else()
     target_link_options(veshiru-updater PRIVATE -static)
 endif()

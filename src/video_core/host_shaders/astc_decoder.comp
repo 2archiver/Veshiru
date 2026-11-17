@@ -1375,20 +1375,38 @@ void DecompressBlock(ivec3 coord) {
     if (num_partitions > 1) {
         partition_setup = SetupPartition(partition_index, num_partitions);
     }
+    uvec4 scaled_ep0[4];
+    uvec4 scaled_ep1[4];
+    bool partition_is_hdr[4];
+    for (uint p = 0; p < num_partitions; ++p) {
+        const uint cem = color_endpoint_mode[p];
+        const bool is_hdr = IsHDRColorEndpointMode(cem);
+        partition_is_hdr[p] = is_hdr;
+        if (is_hdr) {
+            scaled_ep0[p] = endpoints0[p] << 4u;
+            scaled_ep1[p] = endpoints1[p] << 4u;
+            if (cem == 14u) {
+                scaled_ep0[p].x = ReplicateByteTo16(uvec4(endpoints0[p].x)).x;
+                scaled_ep1[p].x = ReplicateByteTo16(uvec4(endpoints1[p].x)).x;
+            }
+        } else {
+            scaled_ep0[p] = ReplicateByteTo16(endpoints0[p]);
+            scaled_ep1[p] = ReplicateByteTo16(endpoints1[p]);
+        }
+    }
     for (uint j = 0; j < block_dims.y; j++) {
         for (uint i = 0; i < block_dims.x; i++) {
             uint local_partition = 0;
             if (num_partitions > 1) {
                 local_partition = Select2DPartition(partition_setup, i, j);
             }
-            const uint local_cem = color_endpoint_mode[local_partition];
             const uvec4 weight_vec = GetUnquantizedWeightVector(j, i, size_params, plane_index, dual_plane);
+            const uvec4 C0 = scaled_ep0[local_partition];
+            const uvec4 C1 = scaled_ep1[local_partition];
+            const uvec4 C = (C0 * (uvec4(64u) - weight_vec) + C1 * weight_vec + uvec4(32u)) >> 6u;
 
             vec4 p;
-            if (IsHDRColorEndpointMode(local_cem)) {
-                const uvec4 C0 = endpoints0[local_partition] << 4u;
-                const uvec4 C1 = endpoints1[local_partition] << 4u;
-                const uvec4 C = (C0 * (uvec4(64) - weight_vec) + C1 * weight_vec + uvec4(32)) / 64u;
+            if (partition_is_hdr[local_partition]) {
                 const uvec4 E = (C & uvec4(0xF800u)) >> 11u;
                 const uvec4 M = C & uvec4(0x7FFu);
                 const uvec4 Mt_lo = 3u * M;
@@ -1402,18 +1420,11 @@ void DecompressBlock(ivec3 coord) {
                 p = vec4(unpackHalf2x16(half_bits.x).x, unpackHalf2x16(half_bits.y).x,
                         unpackHalf2x16(half_bits.z).x, unpackHalf2x16(half_bits.w).x);
 
-                if (local_cem == 14u) {
-                    const uint a0 = ReplicateByteTo16(uvec4(endpoints0[local_partition].x)).x;
-                    const uint a1 = ReplicateByteTo16(uvec4(endpoints1[local_partition].x)).x;
-                    const uint Ca = (a0 * (64u - weight_vec.x) + a1 * weight_vec.x + 32u) / 64u;
-                    p.x = float(Ca) / 65535.0f;
+                if (color_endpoint_mode[local_partition] == 14u) {
+                    p.x = float(C.x) / 65535.0f;
                 }
             } else {
-                const uvec4 C0 = ReplicateByteTo16(endpoints0[local_partition]);
-                const uvec4 C1 = ReplicateByteTo16(endpoints1[local_partition]);
-                const vec4 Cf =
-                    vec4((C0 * (uvec4(64) - weight_vec) + C1 * weight_vec + uvec4(32)) / 64);
-                p = Cf / 65535.0f;
+                p = vec4(C) * (1.0f / 65535.0f);
             }
 
             imageStore(dest_image, coord + ivec3(i, j, 0), clamp(p, 0.0f, 1.0f).gbar);

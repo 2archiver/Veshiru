@@ -31,6 +31,14 @@ std::filesystem::path FindEglantineRoot();
 /// installation could be detected. Returns an empty path if none was found or selected.
 std::filesystem::path ResolveEglantineRoot(QWidget* parent);
 
+/// Resolves the Eglantine user profile UUID (32-hex-char string) to pair with \p veshiru_user_id
+/// for \p program_id. Checks an exact UUID match first, then inspects Eglantine's profiles.dat
+/// and existing save directories so freshly created Veshiru profiles (different random UUIDs)
+/// still map cleanly to Eglantine's save folder. Returns an empty string if cancelled.
+std::string ResolveEglantineUserId(const std::filesystem::path& eglantine_root,
+                                   const std::string& veshiru_user_id, u64 program_id,
+                                   QWidget* parent);
+
 /// Expands a profile root to the save directory for a given user/title. The directory
 /// itself may not exist yet (the title may never have been played there).
 std::filesystem::path GetSaveDir(const std::filesystem::path& root, const std::string& user_id,
