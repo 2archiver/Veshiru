@@ -27,6 +27,8 @@ add_executable(veshiru
     compatibility_report.h
     console_window.cpp
     console_window.h
+    startup_console.cpp
+    startup_console.h
     applets/qt_amiibo_settings.cpp
     applets/qt_amiibo_settings.h
     applets/qt_amiibo_settings.ui

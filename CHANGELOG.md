@@ -6,6 +6,46 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-17
+
+### Ryujinx-Inspired Startup Console
+
+- **Authentic terminal console at launch**: Veshiru now opens a dedicated startup console window
+  automatically when the emulator launches, recreating the simple console experience of
+  Ryujinx/Ryubing.
+  - Pure black background with traditional CMD-style white, yellow and red text on a clean
+    monospaced terminal surface (no gradients, borders or decorative styling).
+  - Large, custom Veshiru ASCII logo printed at startup, followed by a compact system summary
+    (CPU, cores/threads, OS, RAM/swap, Vulkan GPU) and a small version/build identifier
+    (`Veshiru v1.6.0 | build | commit | date`).
+  - Timestamped startup logs streamed live from the existing `Common::Log` live-console backend:
+    white for INFO/SUCCESS, yellow for WARN, red for ERROR.
+  - The console stays open throughout the application's runtime; closing it only hides it while
+    log capture keeps running, and it can be reopened from the View > Console menu.
+  - Reuses the existing logging and startup infrastructure — the live console backend is now
+    refcounted so the diagnostic console window and the startup console can share it without one
+    closing stopping the other.
+
+### Game List Artwork & Ocarina of Time Online Lookup
+
+- **Fixed Ocarina of Time artwork refresh and online lookup (regression from 1.5)**:
+  - Dump-filename and platform-tagged queries such as `The Legend of Zelda Ocarina of Time Switch 2`
+    now resolve to the canonical `The Legend of Zelda: Ocarina of Time` title (trademark symbols
+    stripped, `Switch 2`/`NX2` platform tags dropped, series+subtitle catalog reconstruction), so the
+    keyless Libretro/Wikipedia fallbacks receive the exact boxart name.
+  - Added aliases for the full colon-less Zelda/OOT slugs and the `Nintendo Welcome Tour` form.
+  - Wikipedia image hosts (`thumb.wikimedia.org`) are now allowlisted so REST-summary thumbnails
+    resolve as well as `originalimage`.
+  - nlib Title-ID icon URLs advertised over plain HTTP are upgraded to HTTPS so they pass through
+    the validated, CA-checked request path.
+  - Successful artwork resolutions are logged (`Artwork lookup ... resolved from <source>`) so the
+    startup console and session log show where each icon came from.
+
+### Tests
+
+- Expanded the `artwork_cache` Catch2 suite with OOT refresh regressions: platform-tagged dump
+  filenames, trademark stripping, series+subtitle reconstruction, and the bare-franchise guard.
+
 ## [1.5.0] - 2026-11-16
 
 ### Frame Generation, Pacing & Present Scheduling

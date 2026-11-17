@@ -767,6 +767,9 @@ struct LiveConsoleBackend final : public Backend {
 
     std::atomic_bool enabled{false};
     std::atomic<std::size_t> capacity{10000};
+    /// Number of live console windows sharing this backend. The worker runs while this is > 0 so
+    /// closing one console window never stops logging for the others.
+    std::atomic<std::size_t> refcount{0};
     Common::MPSCQueue<Pending, 4096> queue;
     std::jthread worker;
     std::mutex mutex;
@@ -1039,10 +1042,18 @@ void SetLiveConsoleEnabled(bool enabled) {
     if (!logging_instance) {
         return;
     }
+    auto& backend = logging_instance->live_console_backend;
     if (enabled) {
-        logging_instance->live_console_backend.Enable();
+        // Refcounted: the worker only starts on the first console window and keeps running until
+        // the last one closes, so closing a diagnostic console never stops the startup console.
+        if (backend.refcount.fetch_add(1) == 0) {
+            backend.Enable();
+        }
     } else {
-        logging_instance->live_console_backend.Disable();
+        const auto current = backend.refcount.load(std::memory_order_relaxed);
+        if (current > 0 && backend.refcount.fetch_sub(1) == 1) {
+            backend.Disable();
+        }
     }
 }
 

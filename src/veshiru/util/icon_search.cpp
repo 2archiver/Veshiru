@@ -124,8 +124,8 @@ bool IsAllowedIconHost(std::string_view host) {
            host == "img-eshop.cdn.nintendo.net" || host.ends_with(".nintendo.net") ||
            host == "assets.nintendo.com" || host.ends_with(".nintendo.com") ||
            host == "thumbnails.libretro.com" || host == "en.wikipedia.org" ||
-           host == "upload.wikimedia.org" || host == "steamgriddb.com" ||
-           host.ends_with(".steamgriddb.com");
+           host == "upload.wikimedia.org" || host == "thumb.wikimedia.org" ||
+           host == "steamgriddb.com" || host.ends_with(".steamgriddb.com");
 }
 
 enum class HttpStatus { Ok, NetworkError, Timeout, Cancelled, Unauthorized };
@@ -183,7 +183,7 @@ HttpResult HttpGet(const std::string& full_url, std::chrono::steady_clock::time_
             client.load_ca_cert_store(kCert, sizeof(kCert));
 #endif
             httplib::Headers headers{
-                {"User-Agent", "Veshiru/1.5.0 (https://github.com/2archiver/Veshiru)"}};
+                {"User-Agent", "Veshiru/1.6.0 (https://github.com/2archiver/Veshiru)"}};
             if (!bearer_token.empty() &&
                 (host == "steamgriddb.com" || host.ends_with(".steamgriddb.com"))) {
                 headers.emplace("Authorization", "Bearer " + bearer_token);
@@ -362,8 +362,22 @@ int ScoreCandidateTitle(const std::string& candidate, const std::string& query) 
     return Common::ArtworkCache::ScoreArtworkCandidate(candidate, query);
 }
 
+IconSearchResult RunIconSearchImpl(const std::string& raw_query, u64 tid, const std::string& api_key,
+                                   const std::atomic_bool& cancel, bool silent_first_choice);
+
 IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std::string& api_key,
                                const std::atomic_bool& cancel, bool silent_first_choice = false) {
+    IconSearchResult out = RunIconSearchImpl(raw_query, tid, api_key, cancel, silent_first_choice);
+    if (out.status == IconSearchStatus::Found && !out.icon_bytes.empty()) {
+        LOG_INFO(Frontend, "Artwork lookup for '{}' ({:016X}) resolved from {}",
+                 out.resolved_title.empty() ? raw_query : out.resolved_title, tid,
+                 out.source.empty() ? "online" : out.source);
+    }
+    return out;
+}
+
+IconSearchResult RunIconSearchImpl(const std::string& raw_query, u64 tid, const std::string& api_key,
+                                   const std::atomic_bool& cancel, bool silent_first_choice) {
     using namespace std::chrono;
     IconSearchResult out;
     try {
@@ -419,7 +433,12 @@ IconSearchResult RunIconSearch(const std::string& raw_query, u64 tid, const std:
                     }
                     for (const char* icon_field : {"iconUrl", "icon_url", "icon"}) {
                         if (meta.contains(icon_field) && meta[icon_field].is_string()) {
-                            const auto icon_url = meta[icon_field].get<std::string>();
+                            std::string icon_url = meta[icon_field].get<std::string>();
+                            // The nlib API advertises its media URLs over plain HTTP; upgrade to
+                            // HTTPS so the validated, CA-checked request path is used.
+                            if (icon_url.starts_with("http://api.nlib.cc/")) {
+                                icon_url = "https://" + icon_url.substr(std::string_view{"http://"}.size());
+                            }
                             if (icon_url.starts_with("https://")) {
                                 const auto img_res = HttpGet(icon_url, tid_deadline, cancel);
                                 if (img_res.status == HttpStatus::Ok && decode_icon(img_res.body)) {

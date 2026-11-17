@@ -64,6 +64,39 @@ TEST_CASE("Artwork lookup prioritizes exact Program ID and cleans dump filenames
     CHECK(CleanGameSearchQuery("zelda-oot") == "The Legend of Zelda: Ocarina of Time");
 }
 
+TEST_CASE("Artwork OOT refresh resolves dump filenames and platform-tagged titles",
+          "[artwork_cache]") {
+    using Common::ArtworkCache::CleanGameSearchQuery;
+    using Common::ArtworkCache::ResolveCanonicalSearchTitle;
+
+    // Regression (1.5): "The Legend of Zelda Ocarina of Time Switch 2" style dump filenames must
+    // resolve to the canonical colon title so the Libretro/Wikipedia fallbacks can find the art.
+    CHECK(CleanGameSearchQuery("The.Legend.of.Zelda.Ocarina.of.Time.Switch.2.nup") ==
+          "The Legend of Zelda: Ocarina of Time");
+    CHECK(CleanGameSearchQuery("The.Legend.of.Zelda.Ocarina.of.Time.Switch.nup") ==
+          "The Legend of Zelda: Ocarina of Time");
+    CHECK(CleanGameSearchQuery("The_Legend_of_Zelda_Ocarina_of_Time_[0400486024DEC000][v0](USA).nup") ==
+          "The Legend of Zelda: Ocarina of Time");
+
+    // Trademark symbols are stripped before matching.
+    CHECK(CleanGameSearchQuery("The Legend of Zelda\u2122: Ocarina of Time") ==
+          "The Legend of Zelda: Ocarina of Time");
+
+    // A leading "Switch" that is a real part of a title (not a "Switch 2" platform tag) survives.
+    CHECK(CleanGameSearchQuery("Switch Sports") == "Switch Sports");
+
+    // Reconstruction also works when the Program ID is unknown and the colon was dropped.
+    CHECK(ResolveCanonicalSearchTitle("The Legend of Zelda Ocarina of Time Switch 2", 0) ==
+          "The Legend of Zelda: Ocarina of Time");
+    CHECK(ResolveCanonicalSearchTitle("Hyrule Warriors Age of Imprisonment", 0) ==
+          "Hyrule Warriors: Age of Imprisonment");
+
+    // The bare franchise prefix must NOT be reconstructed into a specific sequel.
+    CHECK(ResolveCanonicalSearchTitle("The Legend of Zelda", 0) == "The Legend of Zelda");
+    CHECK(ResolveCanonicalSearchTitle("The Legend of Zelda Breath of the Wild", 0) ==
+          "The Legend of Zelda: Breath of the Wild");
+}
+
 TEST_CASE("Artwork candidate scoring avoids wrong editions, demos, and sequel mismatches",
           "[artwork_cache]") {
     using Common::ArtworkCache::ScoreArtworkCandidate;
