@@ -464,17 +464,16 @@ private:
                                 oneshot_dctx.get(), member.data.get(),
                                 static_cast<std::size_t>(uncompressed_size), oneshot_in.data(),
                                 static_cast<std::size_t>(extent_size));
-                            if (ZSTD_isError(result)) {
-                                return fail(ZSTD_getErrorName(result));
+                            if (!ZSTD_isError(result) && result == uncompressed_size) {
+                                member.consumed = extent_size;
+                                member.produced = uncompressed_size;
+                                member.decoded.store(uncompressed_size, std::memory_order_release);
+                                finish();
+                                return true;
                             }
-                            if (result != uncompressed_size) {
-                                return fail("the data does not end at the file size");
-                            }
-                            member.consumed = extent_size;
-                            member.produced = uncompressed_size;
-                            member.decoded.store(uncompressed_size, std::memory_order_release);
-                            finish();
-                            return true;
+                            // Fall through to the streaming decoder so truncated extents can still
+                            // serve any intact prefix and corrupt/oversized extents produce the
+                            // exact same incremental errors.
                         }
                     }
                 }
