@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QSettings>
 
+#include "common/artwork_cache.h"
 #include "common/fs/fs.h"
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
@@ -409,6 +410,18 @@ void GameListWorker::AddTitlesToGameList(GameListDir* parent_dir, GameListItemTy
         if (control != nullptr) {
             GetMetadataFromControlNCA(patch, *control, icon, name);
         }
+        if (program_id != 0) {
+            if (auto cached_icon = Common::ArtworkCache::ReadCachedArtwork(program_id);
+                !cached_icon.empty()) {
+                icon = std::move(cached_icon);
+            }
+            if (name.empty() || name == " ") {
+                if (auto sidecar_title = Common::ArtworkCache::ReadSidecarTitle(program_id);
+                    !sidecar_title.empty()) {
+                    name = std::move(sidecar_title);
+                }
+            }
+        }
 
         auto entry = MakeGameListEntry(file->GetFullPath(), name, file->GetSize(), icon, *loader,
                                        program_id, play_time_manager, patch);
@@ -506,10 +519,22 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
                                    parent_dir](std::unique_ptr<Loader::AppLoader>& app_loader,
                                                const u64 id) {
                 std::vector<u8> icon;
-                [[maybe_unused]] const auto res1 = app_loader->ReadIcon(icon);
+                if (id != 0) {
+                    icon = Common::ArtworkCache::ReadCachedArtwork(id);
+                }
+                if (icon.empty()) {
+                    [[maybe_unused]] const auto res1 = app_loader->ReadIcon(icon);
+                }
 
                 std::string name = " ";
                 const auto res3 = app_loader->ReadTitle(name);
+                if ((res3 != Loader::ResultStatus::Success || name.empty() || name == " ") &&
+                    id != 0) {
+                    if (auto sidecar_title = Common::ArtworkCache::ReadSidecarTitle(id);
+                        !sidecar_title.empty()) {
+                        name = std::move(sidecar_title);
+                    }
+                }
                 if ((res3 != Loader::ResultStatus::Success || name.empty() || name == " ") &&
                     IsExtractedNCAMain(physical_name)) {
                     if (const QString loose = LooseExeFSName(physical_name); !loose.isEmpty()) {

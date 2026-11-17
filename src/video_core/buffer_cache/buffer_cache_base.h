@@ -1160,6 +1160,10 @@ private:
     u64 buffer_bytes = 0; ///< The buffers' own size (total_used_memory may be the device's)
     u64 minimum_memory = 0;
     u64 critical_memory = 0;
+    u64 native_gc_expected_bytes = 512ULL << 20;
+    u64 native_gc_critical_bytes = 1ULL << 30;
+    u64 native_gc_pressure_floor_bytes = 512ULL << 20;
+    bool native_gc_tight_vram = false;
     BufferId inline_buffer_id;
 #ifdef VESHIRU_LEGACY
     bool immediately_free = false;

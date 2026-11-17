@@ -17,25 +17,24 @@ namespace Vulkan {
 class Device;
 class Scheduler;
 
-/// AMD FidelityFX Super Resolution 3 (FSR 3) Frame Generation pipeline.
-/// Uses compute-based optical flow and bilateral frame interpolation
-/// to synthesize intermediate frames without requiring engine motion vectors.
+/// Optical Flow Frame Generation pipeline (FSR3-style compute optical flow + bilateral
+/// interpolation).
 ///
 /// Optimizations:
-///  - Quarter-resolution optical flow (16├ù fewer compute invocations)
-///  - Shared-memory tile caching in both shaders
-///  - Early-out for static pixels (skip diamond search)
-///  - Duplicate-frame detection (skip optical flow entirely)
-///  - Precise pipeline barriers instead of full-pipeline TransitionImageLayout
-///  - Descriptor-write caching (only update when image views change)
+///  - Zero GPU work when idle / target FPS is already met
+///  - Ping-pong frame history (single copy per captured frame instead of two)
+///  - Scaled optical flow resolution capped at 640x360
+///  - Shared-memory tile caching + early-out for static pixels in optical flow shader
+///  - Duplicate-frame detection & descriptor caching
 class Fsr3FrameGen {
 public:
     explicit Fsr3FrameGen(const Device& device, MemoryAllocator& memory_allocator,
-                          VkExtent2D extent, VkFormat format);
+                          VkExtent2D extent, VkFormat format, f32 flow_scale);
     ~Fsr3FrameGen();
 
     void Process(const Device& device, Scheduler& scheduler, VkImage current_frame,
-                 VkImageView current_view, u64 frame_count);
+                 VkImageView current_view, u64 frame_count, bool capture_history,
+                 bool compute_flow);
 
     void Generate(const Device& device, Scheduler& scheduler, VkImage destination,
                   VkImageView destination_storage_view, float blend_factor, float flow_scale);
@@ -51,7 +50,7 @@ private:
 
     MemoryAllocator& m_allocator;
     VkExtent2D m_extent;
-    VkExtent2D m_flow_extent;   // half-res for optical flow
+    VkExtent2D m_flow_extent;
     VkFormat m_format;
 
     vk::Sampler m_linear_sampler;
@@ -67,20 +66,19 @@ private:
     vk::Pipeline m_interp_pipeline;
 
     vk::DescriptorPool m_desc_pool;
-    vk::DescriptorSets m_flow_desc_sets;
+    vk::DescriptorSets m_flow_desc_sets; // [0]: curr=slot0/prev=slot1, [1]: curr=slot1/prev=slot0
     std::optional<DescriptorPool> m_interp_pool;
     DescriptorAllocator m_interp_allocator;
 
-    // History and motion vector images
-    vk::Image m_history_image;
-    vk::ImageView m_history_view;
+    // Ping-pong frame history: m_curr_slot holds newest frame, (m_curr_slot ^ 1) holds previous.
+    std::array<vk::Image, 2> m_frame_images;
+    std::array<vk::ImageView, 2> m_frame_views;
+    std::array<bool, 2> m_frame_initialized{};
+    u32 m_curr_slot{0};
 
     vk::Image m_motion_image;
     vk::ImageView m_motion_view;
-
-    // Store the last current-frame view for descriptor caching
-    vk::Image m_current_image;
-    vk::ImageView m_current_view;
+    bool m_motion_initialized{};
 
     bool m_initialized{};
     bool m_has_history{};

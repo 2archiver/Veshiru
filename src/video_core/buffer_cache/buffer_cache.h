@@ -31,6 +31,7 @@
 #include "video_core/nx2_cmdpage_diag.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/texture_cache/memory_limits.h"
 #include "video_core/texture_cache/util.h"
 
 namespace VideoCommon {
@@ -56,7 +57,14 @@ BufferCache<P>::BufferCache(Tegra::MaxwellDeviceMemoryManager& device_memory_, R
         return;
     }
 
-    const s64 device_local_memory = static_cast<s64>(runtime.GetDeviceLocalMemory());
+    const u64 device_local_u64 = runtime.GetDeviceLocalMemory();
+    const auto native_gc = TextureCacheMemory::ResolveNativeBufferGcThresholds(device_local_u64);
+    native_gc_expected_bytes = native_gc.expected_bytes;
+    native_gc_critical_bytes = native_gc.critical_bytes;
+    native_gc_pressure_floor_bytes = native_gc.pressure_floor_bytes;
+    native_gc_tight_vram = native_gc.tight_vram;
+
+    const s64 device_local_memory = static_cast<s64>(device_local_u64);
     const s64 min_spacing_expected = device_local_memory - 1_GiB;
     const s64 min_spacing_critical = device_local_memory - 512_MiB;
     const s64 mem_threshold = (std::min)(device_local_memory, TARGET_THRESHOLD);
@@ -201,13 +209,17 @@ void BufferCache<P>::TickFrame() {
     }
     if (gpu_memory != nullptr && gpu_memory->UsesNativeTiling()) {
         // Switch 2 titles fill the device with textures (their collector watches the budget);
-        // title 1's buffers were ~200 MiB of an 8 GB GPU's ~6.8 GB in use, yet this collector
-        // ran aggressively every frame on the device-wide figure, evicting up to 64 buffers (and
-        // downloading the GPU-written ones, ~5% of the GPU thread) that were recreated later.
-        // Collect when the buffers themselves are large. At 1 GiB it held geometry of scenes
-        // long gone: title 1's title screen grew to ~0.9 GB of buffers in ten minutes.
-        if (buffer_bytes >= 512_MiB) {
-            RunGarbageCollector(buffer_bytes >= 1_GiB);
+        // collect buffers on VRAM-tiered thresholds so 8+ GB GPUs avoid unnecessary GPU-written
+        // readbacks while 4 GB GPUs (e.g. GTX 1650 ~3.04 GiB usable) shed stale geometry/staging
+        // buffers before approaching WDDM VRAM oversubscription.
+        const bool device_pressure =
+            native_gc_tight_vram && total_used_memory >= critical_memory &&
+            buffer_bytes >= native_gc_pressure_floor_bytes;
+        if (buffer_bytes >= native_gc_expected_bytes || device_pressure) {
+            const bool aggressive =
+                buffer_bytes >= native_gc_critical_bytes ||
+                (device_pressure && buffer_bytes >= native_gc_expected_bytes);
+            RunGarbageCollector(aggressive);
         }
     } else if (total_used_memory >= minimum_memory) {
         RunGarbageCollector(total_used_memory >= critical_memory);
@@ -2512,6 +2524,10 @@ void BufferCache<P>::BindHostDrawIndirectBuffers() {
         Buffer& buffer = slot_buffers[binding.buffer_id];
         TouchBuffer(buffer, binding.buffer_id);
         SynchronizeBuffer(buffer, binding.device_addr, binding.size);
+        // The draw reads these words on the GPU: a later upload to them in this batch must not
+        // be reordered ahead of it (DK Bananza resets its terrain draw records with inline
+        // writes right after the draws that read them; hoisted, every record read zero).
+        buffer.MarkUsage(buffer.Offset(binding.device_addr), binding.size);
     };
     if (current_draw_indirect->include_count) {
         bind_buffer(channel_state->count_buffer_binding);

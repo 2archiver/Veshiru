@@ -54,7 +54,8 @@ if(UNIX AND NOT APPLE)
 endif()
 
 if(WIN32)
-    # compile as a win32 gui application instead of a console application
+    # Keep veshiru-cmd as a console application so --help, --version, NUP CLI tools, and logs
+    # write directly to the invoking terminal.
     if(MSVC)
         # SDL's main implementation provides wmain when UNICODE is defined, which src/CMakeLists.txt
         # does for cl.exe but not for clang-cl; forcing mainCRTStartup failed to link with cl.exe.
@@ -63,9 +64,9 @@ if(WIN32)
         else()
             set(VESHIRU_CMD_ENTRY wmainCRTStartup)
         endif()
-        set_target_properties(veshiru-cmd PROPERTIES LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS /ENTRY:${VESHIRU_CMD_ENTRY}")
+        set_target_properties(veshiru-cmd PROPERTIES LINK_FLAGS_RELEASE "/SUBSYSTEM:CONSOLE /ENTRY:${VESHIRU_CMD_ENTRY}")
     elseif(MINGW)
-        set_target_properties(veshiru-cmd PROPERTIES LINK_FLAGS_RELEASE "-Wl,--subsystem,windows")
+        set_target_properties(veshiru-cmd PROPERTIES LINK_FLAGS_RELEASE "-Wl,--subsystem,console")
     endif()
 endif()
 

@@ -278,4 +278,100 @@ std::optional<std::string> GetReleasesBody() {
     return MakeRequest(url, releases_path);
 }
 
+void ApplySha256SumsText(Release& release, std::string_view sums_text) {
+    std::unordered_map<std::string, std::string> by_filename;
+    std::size_t pos = 0;
+    while (pos < sums_text.size()) {
+        const std::size_t end = sums_text.find('\n', pos);
+        std::string_view line =
+            end == std::string_view::npos ? sums_text.substr(pos) : sums_text.substr(pos, end - pos);
+        pos = end == std::string_view::npos ? sums_text.size() : end + 1;
+        if (!line.empty() && line.back() == '\r') {
+            line.remove_suffix(1);
+        }
+        if (line.size() < 66) {
+            continue;
+        }
+        const std::string_view hex = line.substr(0, 64);
+        if (!std::ranges::all_of(hex, [](unsigned char c) { return std::isxdigit(c); })) {
+            continue;
+        }
+        std::size_t name_start = 64;
+        while (name_start < line.size() &&
+               (line[name_start] == ' ' || line[name_start] == '\t' || line[name_start] == '*')) {
+            ++name_start;
+        }
+        if (name_start >= line.size()) {
+            continue;
+        }
+        std::string_view name = line.substr(name_start);
+        if (const std::size_t slash = name.find_last_of("/\\"); slash != std::string_view::npos) {
+            name = name.substr(slash + 1);
+        }
+        if (name.empty()) {
+            continue;
+        }
+        std::string lower_hex{hex};
+        std::ranges::transform(lower_hex, lower_hex.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        by_filename.emplace(std::string{name}, std::move(lower_hex));
+    }
+
+    if (by_filename.empty()) {
+        return;
+    }
+
+    for (const auto& url : release.assets) {
+        const std::size_t slash = url.rfind('/');
+        if (slash == std::string::npos || slash + 1 >= url.size()) {
+            continue;
+        }
+        const std::string filename = url.substr(slash + 1);
+        auto& info = release.asset_info[url];
+        if (!info.sha256.empty()) {
+            continue;
+        }
+        if (const auto it = by_filename.find(filename); it != by_filename.end()) {
+            info.sha256 = it->second;
+        }
+    }
+}
+
+void PopulateMissingAssetDigests(Release& release) {
+    bool any_missing = false;
+    std::string sums_url;
+    for (const auto& url : release.assets) {
+        const std::size_t slash = url.rfind('/');
+        const std::string_view filename =
+            slash == std::string::npos ? std::string_view{url}
+                                       : std::string_view{url}.substr(slash + 1);
+        if (filename == "SHA256SUMS.txt") {
+            sums_url = url;
+            continue;
+        }
+        const auto it = release.asset_info.find(url);
+        if (it == release.asset_info.end() || it->second.sha256.empty()) {
+            any_missing = true;
+        }
+    }
+    if (!any_missing || sums_url.empty()) {
+        return;
+    }
+
+    const std::size_t scheme_end = sums_url.find("://");
+    if (scheme_end == std::string::npos) {
+        return;
+    }
+    const std::size_t path_start = sums_url.find('/', scheme_end + 3);
+    if (path_start == std::string::npos) {
+        return;
+    }
+    const std::string host = sums_url.substr(0, path_start);
+    const std::string path = sums_url.substr(path_start);
+    if (const auto body = MakeRequest(host, path)) {
+        ApplySha256SumsText(release, *body);
+    }
+}
+
 } // namespace Common::Net

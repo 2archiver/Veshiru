@@ -442,6 +442,41 @@ private:
                 } else {
                     member.data = std::make_unique_for_overwrite<u8[]>(
                         static_cast<std::size_t>(uncompressed_size));
+                    // Fast path for single-chunk in-memory members (covers most .bwav audio clips
+                    // and small assets): reuse a thread-local ZSTD_DCtx for a one-shot decode
+                    // instead of allocating and freeing a ~128 KiB streaming context per file.
+                    if (extent_size <= DecodeInputChunk) {
+                        thread_local std::vector<u8> oneshot_in(DecodeInputChunk);
+                        thread_local std::unique_ptr<ZSTD_DCtx, decltype(&ZSTD_freeDCtx)>
+                            oneshot_dctx{nullptr, &ZSTD_freeDCtx};
+                        if (backing->Read(oneshot_in.data(), static_cast<std::size_t>(extent_size),
+                                          static_cast<std::size_t>(extent_offset)) != extent_size) {
+                            return fail("short read of the compressed data");
+                        }
+                        if (!oneshot_dctx) {
+                            oneshot_dctx.reset(ZSTD_createDCtx());
+                        }
+                        if (oneshot_dctx) {
+                            ZSTD_DCtx_reset(oneshot_dctx.get(), ZSTD_reset_session_only);
+                            ZSTD_DCtx_setParameter(oneshot_dctx.get(), ZSTD_d_windowLogMax,
+                                                   ZSTD_WINDOWLOG_MAX);
+                            const std::size_t result = ZSTD_decompressDCtx(
+                                oneshot_dctx.get(), member.data.get(),
+                                static_cast<std::size_t>(uncompressed_size), oneshot_in.data(),
+                                static_cast<std::size_t>(extent_size));
+                            if (ZSTD_isError(result)) {
+                                return fail(ZSTD_getErrorName(result));
+                            }
+                            if (result != uncompressed_size) {
+                                return fail("the data does not end at the file size");
+                            }
+                            member.consumed = extent_size;
+                            member.produced = uncompressed_size;
+                            member.decoded.store(uncompressed_size, std::memory_order_release);
+                            finish();
+                            return true;
+                        }
+                    }
                 }
             }
             // A spilled member whose decoder was freed starts over; output already in its
@@ -585,9 +620,9 @@ NupContainer::NupContainer(VirtualFile file_, std::size_t memory_cache_cap,
         const u64 host_ram_mib = Common::GetMemInfo().TotalPhysicalMemory / MiB;
         const u64 max_cache_mib =
             host_ram_mib >= 256 ? std::clamp<u64>(host_ram_mib / 4, 64, 8192) : 2048;
-        // On ample-RAM hosts (>= 24 GiB, e.g. 32 GiB laptops), keep 1.5 GiB of decompressed NUP
-        // members in memory by default so MKW/DKB course transitions avoid repeated Zstd spikes.
-        if (host_ram_mib >= 24 * 1024) {
+        // On ample-RAM hosts (>= 16 GiB), keep up to 1.5 GiB of decompressed NUP members in
+        // memory by default so MKW/DKB course transitions avoid repeated Zstd decompression spikes.
+        if (host_ram_mib >= 16 * 1024) {
             cache->cap = static_cast<std::size_t>(std::min<u64>(1536, max_cache_mib) * MiB);
         }
         const char* value = std::getenv("VESHIRU_NUP_CACHE_MIB");

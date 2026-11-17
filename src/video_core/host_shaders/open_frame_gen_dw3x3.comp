@@ -33,67 +33,140 @@ layout(push_constant) uniform PushConstants {
 
 shared float s_k[9];
 shared float s_b;
-
-float readIn(int ix, int iy, uint ch) {
-    if (ix < 0 || iy < 0 || ix >= int(pc.in_w) || iy >= int(pc.in_h)) {
-        return 0.0;
-    }
-    const uint ux = uint(ix);
-    const uint uy = uint(iy);
-    if (pc.mode == 0u) {
-        return in_a[(ch * pc.in_h + uy) * pc.in_w + ux];
-    }
-    if (ch >= pc.ch_a) {
-        const uint bc = ch - pc.ch_a;
-        return in_b[(bc * pc.in_h + uy) * pc.in_w + ux];
-    }
-    if (pc.mode == 1u) {
-        return in_a[(ch * pc.in_h + uy) * pc.in_w + ux];
-    }
-    // mode == 2: PyTorch F.interpolate(scale_factor=2, mode='bilinear', align_corners=False)
-    const uint aw = max(1u, pc.in_w >> 1u);
-    const uint ah = max(1u, pc.in_h >> 1u);
-    const float sx = clamp((float(ix) + 0.5) * 0.5 - 0.5, 0.0, float(aw - 1u));
-    const float sy = clamp((float(iy) + 0.5) * 0.5 - 0.5, 0.0, float(ah - 1u));
-    const uint x0 = uint(floor(sx));
-    const uint y0 = uint(floor(sy));
-    const uint x1 = min(x0 + 1u, aw - 1u);
-    const uint y1 = min(y0 + 1u, ah - 1u);
-    const float fx = sx - float(x0);
-    const float fy = sy - float(y0);
-    const uint base = ch * ah * aw;
-    const float v00 = in_a[base + y0 * aw + x0];
-    const float v10 = in_a[base + y0 * aw + x1];
-    const float v01 = in_a[base + y1 * aw + x0];
-    const float v11 = in_a[base + y1 * aw + x1];
-    return mix(mix(v00, v10, fx), mix(v01, v11, fx), fy);
-}
+// Shared spatial halo tile:
+//  - stride == 1: 18x18 (324 floats) covering 16x16 outputs + 1-pixel halo on each side
+//  - stride == 2: 33x33 (1089 floats) covering 16x16 strided outputs + 1-pixel halo
+//  - mode == 2 (c < ch_a): 10x10 (100 floats) coarse in_a patch reused across bilinear2x + 3x3
+shared float s_tile[1089];
+shared float s_coarse[100];
 
 void main() {
     const uint c = gl_WorkGroupID.z;
-    const uint tid = gl_LocalInvocationIndex;
+    const uint lx = gl_LocalInvocationID.x;
+    const uint ly = gl_LocalInvocationID.y;
+    const uint tid = gl_LocalInvocationIndex; // 0..255
+
     if (tid < 9u) {
         s_k[tid] = weights[pc.w_offset + c * 9u + tid];
     }
     if (tid == 0u) {
         s_b = weights[pc.b_offset + c];
     }
-    barrier();
 
     const uint ox = gl_GlobalInvocationID.x;
     const uint oy = gl_GlobalInvocationID.y;
-    if (ox >= pc.out_w || oy >= pc.out_h) {
+
+    if (pc.stride == 1u) {
+        const int tile_x0 = int(gl_WorkGroupID.x * 16u) - 1;
+        const int tile_y0 = int(gl_WorkGroupID.y * 16u) - 1;
+
+        if (pc.mode == 2u && c < pc.ch_a) {
+            // Stage 1: cooperatively load the 10x10 coarse half-res in_a patch once.
+            const uint aw = max(1u, pc.in_w >> 1u);
+            const uint ah = max(1u, pc.in_h >> 1u);
+            const int cx0 = int(gl_WorkGroupID.x * 8u) - 1;
+            const int cy0 = int(gl_WorkGroupID.y * 8u) - 1;
+            const uint base = c * ah * aw;
+
+            if (tid < 100u) {
+                const uint ty = tid / 10u;
+                const uint tx = tid - ty * 10u;
+                const uint sx = uint(clamp(cx0 + int(tx), 0, int(aw) - 1));
+                const uint sy = uint(clamp(cy0 + int(ty), 0, int(ah) - 1));
+                s_coarse[tid] = in_a[base + sy * aw + sx];
+            }
+            barrier();
+
+            // Stage 2: evaluate PyTorch align_corners=False bilinear 2x into the 18x18 halo tile.
+            for (uint idx = tid; idx < 324u; idx += 256u) {
+                const uint ty = idx / 18u;
+                const uint tx = idx - ty * 18u;
+                const int ix = tile_x0 + int(tx);
+                const int iy = tile_y0 + int(ty);
+                if (ix < 0 || iy < 0 || ix >= int(pc.in_w) || iy >= int(pc.in_h)) {
+                    s_tile[idx] = 0.0;
+                } else {
+                    const float sx = clamp((float(ix) + 0.5) * 0.5 - 0.5, 0.0, float(aw - 1u));
+                    const float sy = clamp((float(iy) + 0.5) * 0.5 - 0.5, 0.0, float(ah - 1u));
+                    const int x0 = int(floor(sx));
+                    const int y0 = int(floor(sy));
+                    const int x1 = min(x0 + 1, int(aw) - 1);
+                    const int y1 = min(y0 + 1, int(ah) - 1);
+                    const float fx = sx - float(x0);
+                    const float fy = sy - float(y0);
+                    const uint lx0 = uint(x0 - cx0);
+                    const uint ly0 = uint(y0 - cy0);
+                    const uint lx1 = uint(x1 - cx0);
+                    const uint ly1 = uint(y1 - cy0);
+                    const float v00 = s_coarse[ly0 * 10u + lx0];
+                    const float v10 = s_coarse[ly0 * 10u + lx1];
+                    const float v01 = s_coarse[ly1 * 10u + lx0];
+                    const float v11 = s_coarse[ly1 * 10u + lx1];
+                    s_tile[idx] = mix(mix(v00, v10, fx), mix(v01, v11, fx), fy);
+                }
+            }
+            barrier();
+        } else {
+            const bool use_b = (pc.mode != 0u) && (c >= pc.ch_a);
+            const uint src_c = use_b ? (c - pc.ch_a) : c;
+            const uint base = src_c * pc.in_h * pc.in_w;
+
+            for (uint idx = tid; idx < 324u; idx += 256u) {
+                const uint ty = idx / 18u;
+                const uint tx = idx - ty * 18u;
+                const int ix = tile_x0 + int(tx);
+                const int iy = tile_y0 + int(ty);
+                if (ix < 0 || iy < 0 || ix >= int(pc.in_w) || iy >= int(pc.in_h)) {
+                    s_tile[idx] = 0.0;
+                } else {
+                    const uint off = base + uint(iy) * pc.in_w + uint(ix);
+                    s_tile[idx] = use_b ? in_b[off] : in_a[off];
+                }
+            }
+            barrier();
+        }
+
+        if (ox < pc.out_w && oy < pc.out_h) {
+            const uint r0 = ly * 18u + lx;
+            const uint r1 = r0 + 18u;
+            const uint r2 = r1 + 18u;
+            const float sum = s_b + s_k[0] * s_tile[r0] + s_k[1] * s_tile[r0 + 1u] +
+                              s_k[2] * s_tile[r0 + 2u] + s_k[3] * s_tile[r1] +
+                              s_k[4] * s_tile[r1 + 1u] + s_k[5] * s_tile[r1 + 2u] +
+                              s_k[6] * s_tile[r2] + s_k[7] * s_tile[r2 + 1u] +
+                              s_k[8] * s_tile[r2 + 2u];
+            out_buf[(c * pc.out_h + oy) * pc.out_w + ox] = sum >= 0.0 ? sum : sum * 0.1;
+        }
         return;
     }
 
-    const int base_x = int(ox * pc.stride) - 1;
-    const int base_y = int(oy * pc.stride) - 1;
-    float sum = s_b;
-    for (int ky = 0; ky < 3; ++ky) {
-        for (int kx = 0; kx < 3; ++kx) {
-            sum += s_k[ky * 3 + kx] * readIn(base_x + kx, base_y + ky, c);
+    // stride == 2 (encoder downsampling stages; mode == 0 reads in_a)
+    const int tile_x0 = int(gl_WorkGroupID.x * 32u) - 1;
+    const int tile_y0 = int(gl_WorkGroupID.y * 32u) - 1;
+    const uint base = c * pc.in_h * pc.in_w;
+
+    for (uint idx = tid; idx < 1089u; idx += 256u) {
+        const uint ty = idx / 33u;
+        const uint tx = idx - ty * 33u;
+        const int ix = tile_x0 + int(tx);
+        const int iy = tile_y0 + int(ty);
+        if (ix < 0 || iy < 0 || ix >= int(pc.in_w) || iy >= int(pc.in_h)) {
+            s_tile[idx] = 0.0;
+        } else {
+            s_tile[idx] = in_a[base + uint(iy) * pc.in_w + uint(ix)];
         }
     }
-    const float act = sum >= 0.0 ? sum : sum * 0.1;
-    out_buf[(c * pc.out_h + oy) * pc.out_w + ox] = act;
+    barrier();
+
+    if (ox < pc.out_w && oy < pc.out_h) {
+        const uint r0 = (ly * 2u) * 33u + (lx * 2u);
+        const uint r1 = r0 + 33u;
+        const uint r2 = r1 + 33u;
+        const float sum = s_b + s_k[0] * s_tile[r0] + s_k[1] * s_tile[r0 + 1u] +
+                          s_k[2] * s_tile[r0 + 2u] + s_k[3] * s_tile[r1] +
+                          s_k[4] * s_tile[r1 + 1u] + s_k[5] * s_tile[r1 + 2u] +
+                          s_k[6] * s_tile[r2] + s_k[7] * s_tile[r2 + 1u] +
+                          s_k[8] * s_tile[r2 + 2u];
+        out_buf[(c * pc.out_h + oy) * pc.out_w + ox] = sum >= 0.0 ? sum : sum * 0.1;
+    }
 }

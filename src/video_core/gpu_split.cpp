@@ -225,7 +225,11 @@ void GpuSplit::Stop() {
     front_macros = false;
     published.store(0, std::memory_order_relaxed);
     consumed.store(0, std::memory_order_relaxed);
+    wait_target.store(~u64{0}, std::memory_order_relaxed);
     back_idle_at.store(~u64{0}, std::memory_order_relaxed);
+    hook_requested.store(false, std::memory_order_relaxed);
+    drain_quiet_requested.store(false, std::memory_order_relaxed);
+    back_quiet.store(true, std::memory_order_relaxed);
     back_waiting.store(false, std::memory_order_relaxed);
     front_waiting.store(false, std::memory_order_relaxed);
 }
@@ -293,6 +297,16 @@ void GpuSplit::Drain(DrainSite site) {
     const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Ticks() : 0;
     // Everything consumed is not enough: the back submits deferred work (Scheduler::DeferFlush)
     // from its idle hook afterwards, and the caller may use the scheduler once this returns.
+    // Signal drain_quiet_requested so the back exits its idle spin immediately even if a mid-batch
+    // RequestIdleHook already cleared hook_requested on the final entry of the batch.
+    drain_quiet_requested.store(true, std::memory_order_release);
+    struct DrainQuietReset {
+        std::atomic<bool>& flag;
+        ~DrainQuietReset() {
+            flag.store(false, std::memory_order_release);
+        }
+    } drain_quiet_reset{drain_quiet_requested};
+
     bool hook_asked = false;
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
@@ -668,9 +682,11 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             back_idle_at.store(read_position, std::memory_order_relaxed);
             const auto spin_start = g_acquire_counting ? std::chrono::steady_clock::now()
                                                        : std::chrono::steady_clock::time_point{};
-            // The front usually sends more within microseconds: spin briefly before sleeping.
+            // The front usually sends more within microseconds: spin briefly before sleeping,
+            // unless Drain() is waiting for the back to go quiet or an idle hook was requested.
             for (u32 spins = 0; spins < 8192 && available == read_position &&
-                                !hook_requested.load(std::memory_order_relaxed);
+                                !hook_requested.load(std::memory_order_relaxed) &&
+                                !drain_quiet_requested.load(std::memory_order_relaxed);
                  ++spins) {
                 Pause();
                 available = published.load(std::memory_order_acquire);

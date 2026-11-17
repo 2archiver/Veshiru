@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <array>
+#include <cmath>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -77,4 +78,31 @@ TEST_CASE("Layers are converted only where their encoding differs from the frame
     const auto rescaled = Vulkan::MakeHdrConvertParams(layer, scrgb);
     REQUIRE(Vulkan::NeedsHdrConvert(rescaled));
     REQUIRE(rescaled.nits_per_unit == 100.0f);
+}
+
+TEST_CASE("OpenFrameGen scRGB HDR normalization preserves bright highlights without clipping",
+          "[hdr_output]") {
+    // Mirrors open_frame_gen_prep.comp NormalizeSample() for VK_FORMAT_R16G16B16A16_SFLOAT.
+    auto normalize_scrgb = [](float c) -> float {
+        const float pos = c > 0.0f ? c : 0.0f;
+        return std::sqrt(pos / (1.0f + pos));
+    };
+
+    // Negative wide-gamut scRGB values map cleanly to 0 without NaNs.
+    CHECK(normalize_scrgb(-0.25f) == 0.0f);
+    CHECK(normalize_scrgb(0.0f) == 0.0f);
+
+    // Strictly monotonic across SDR white (1.0 == 80 nits), 1000 nits (12.5), and 4000 nits (50.0),
+    // never collapsing highlights > 1.0 to the same flat white ceiling.
+    const float v_mid = normalize_scrgb(0.5f);
+    const float v_80nits = normalize_scrgb(1.0f);
+    const float v_400nits = normalize_scrgb(5.0f);
+    const float v_1000nits = normalize_scrgb(12.5f);
+    const float v_4000nits = normalize_scrgb(50.0f);
+    CHECK(v_mid > 0.0f);
+    CHECK(v_80nits > v_mid);
+    CHECK(v_400nits > v_80nits);
+    CHECK(v_1000nits > v_400nits);
+    CHECK(v_4000nits > v_1000nits);
+    CHECK(v_4000nits < 1.0f);
 }

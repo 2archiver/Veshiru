@@ -388,11 +388,8 @@ struct TexelWeightParams {
     }
 };
 
-static TexelWeightParams DecodeBlockInfo(InputBitStream& strm) {
+static TexelWeightParams DecodeBlockInfoModeBits(u16 modeBits) {
     TexelWeightParams params;
-
-    // Read the entire block mode all at once
-    u16 modeBits = static_cast<u16>(strm.ReadBits<11>());
 
     // Does this match the void extent block mode?
     if ((modeBits & 0x01FF) == 0x1FC) {
@@ -402,8 +399,8 @@ static TexelWeightParams DecodeBlockInfo(InputBitStream& strm) {
             params.m_bVoidExtentLDR = true;
         }
 
-        // Next two bits must be one.
-        if (!(modeBits & 0x400) || !strm.ReadBit()) {
+        // Bit 10 must be one; bit 11 is checked per block when reading the bitstream.
+        if (!(modeBits & 0x400)) {
             params.m_bError = true;
         }
 
@@ -584,6 +581,28 @@ static TexelWeightParams DecodeBlockInfo(InputBitStream& strm) {
 
     params.m_bDualPlane = D;
 
+    return params;
+}
+
+static const std::array<TexelWeightParams, 2048>& GetBlockModeLUT() {
+    static const std::array<TexelWeightParams, 2048> table = [] {
+        std::array<TexelWeightParams, 2048> lut{};
+        for (u32 mode = 0; mode < lut.size(); ++mode) {
+            lut[mode] = DecodeBlockInfoModeBits(static_cast<u16>(mode));
+        }
+        return lut;
+    }();
+    return table;
+}
+
+static TexelWeightParams DecodeBlockInfo(InputBitStream& strm) {
+    const u16 modeBits = static_cast<u16>(strm.ReadBits<11>());
+    TexelWeightParams params = GetBlockModeLUT()[modeBits];
+    if (params.m_bVoidExtentLDR || params.m_bVoidExtentHDR) {
+        if (!strm.ReadBit()) {
+            params.m_bError = true;
+        }
+    }
     return params;
 }
 
@@ -1726,12 +1745,22 @@ static u16 HalfToClampedByte(u16 half_bits) {
     return static_cast<u16>(clamped * 255.0f + 0.5f);
 }
 
-static void FillError(std::span<u32> outBuf, u32 blockWidth, u32 blockHeight) {
-    for (u32 j = 0; j < blockHeight; j++) {
-        for (u32 i = 0; i < blockWidth; i++) {
-            outBuf[j * blockWidth + i] = 0x00000000;
-        }
+static void FillVoidExtentHDR(InputBitStream& strm, std::span<u32> outBuf, u32 blockWidth,
+                              u32 blockHeight) {
+    for (s32 i = 0; i < 4; ++i) {
+        strm.ReadBits<13>();
     }
+
+    const u32 r = HalfToClampedByte(static_cast<u16>(strm.ReadBits<16>()));
+    const u32 g = HalfToClampedByte(static_cast<u16>(strm.ReadBits<16>()));
+    const u32 b = HalfToClampedByte(static_cast<u16>(strm.ReadBits<16>()));
+    const u32 a = HalfToClampedByte(static_cast<u16>(strm.ReadBits<16>()));
+    const u32 rgba = r | (g << 8) | (b << 16) | (a << 24);
+    std::fill_n(outBuf.data(), static_cast<size_t>(blockWidth) * blockHeight, rgba);
+}
+
+static void FillError(std::span<u32> outBuf, u32 blockWidth, u32 blockHeight) {
+    std::fill_n(outBuf.data(), static_cast<size_t>(blockWidth) * blockHeight, 0x00000000U);
 }
 
 static void DecompressBlock(std::span<const u8, 16> inBuf, const u32 blockWidth,
@@ -1752,8 +1781,7 @@ static void DecompressBlock(std::span<const u8, 16> inBuf, const u32 blockWidth,
     }
 
     if (weightParams.m_bVoidExtentHDR) {
-        assert(false && "HDR void extent blocks are unsupported!");
-        FillError(outBuf, blockWidth, blockHeight);
+        FillVoidExtentHDR(strm, outBuf, blockWidth, blockHeight);
         return;
     }
 
@@ -1943,99 +1971,183 @@ static void DecompressBlock(std::span<const u8, 16> inBuf, const u32 blockWidth,
     u32 weights[2][144];
     UnquantizeTexelWeights(weights, texelWeightValues, weightParams, blockWidth, blockHeight);
 
-    // Now that we have endpoints and weights, we can interpolate and generate
-    // the proper decoding...
-    for (u32 j = 0; j < blockHeight; j++)
-        for (u32 i = 0; i < blockWidth; i++) {
-            u32 partition = Select2DPartition(partitionIndex, i, j, nPartitions,
-                                              (blockHeight * blockWidth) < 32);
+    // Pre-scale endpoints per partition so the texel loop avoids redundant endpoint bit
+    // replication, HDR checks, and double-precision divisions on every texel.
+    u32 ep0[4][4];
+    u32 ep1[4][4];
+    bool ep_hdr[4][4];
+    bool any_hdr = false;
+    for (u32 p = 0; p < nPartitions; ++p) {
+        const u32 cem = colorEndpointMode[p];
+        const bool mode_hdr = IsHDRColorEndpointMode(cem);
+        for (u32 c = 0; c < 4; ++c) {
+            const bool is_hdr = mode_hdr && !(cem == 14 && c == 0);
+            ep_hdr[p][c] = is_hdr;
+            any_hdr = any_hdr || is_hdr;
+            const u32 c0 = static_cast<u32>(endpoints[p][0].Component(c));
+            const u32 c1 = static_cast<u32>(endpoints[p][1].Component(c));
+            if (is_hdr) {
+                ep0[p][c] = c0 << 4;
+                ep1[p][c] = c1 << 4;
+            } else {
+                ep0[p][c] = ReplicateByteTo16(c0);
+                ep1[p][c] = ReplicateByteTo16(c1);
+            }
+        }
+    }
+
+    const bool small_block = (blockHeight * blockWidth) < 32;
+    const u32 dual_plane_channel = weightParams.m_bDualPlane ? ((planeIdx + 1) & 3U) : 4U;
+
+    const auto interpolate_ldr = [](u32 c0, u32 c1, u32 weight) -> u32 {
+        const u32 c = (c0 * (64U - weight) + c1 * weight + 32U) >> 6;
+        // Exact integer equivalent of static_cast<u16>(255.0 * (double(c) / 65536.0) + 0.5)
+        // for every c in [0, 65534], with 65535 clamped to 255.
+        return (c == 65535U) ? 255U : ((c * 255U + 32768U) >> 16);
+    };
+
+    if (!any_hdr) {
+        if (nPartitions == 1 && !weightParams.m_bDualPlane) {
+            const u32 c0_a = ep0[0][0], c1_a = ep1[0][0];
+            const u32 c0_r = ep0[0][1], c1_r = ep1[0][1];
+            const u32 c0_g = ep0[0][2], c1_g = ep1[0][2];
+            const u32 c0_b = ep0[0][3], c1_b = ep1[0][3];
+            const u32 total_texels = blockWidth * blockHeight;
+            for (u32 idx = 0; idx < total_texels; ++idx) {
+                const u32 w = weights[0][idx];
+                const u32 a = interpolate_ldr(c0_a, c1_a, w);
+                const u32 r = interpolate_ldr(c0_r, c1_r, w);
+                const u32 g = interpolate_ldr(c0_g, c1_g, w);
+                const u32 b = interpolate_ldr(c0_b, c1_b, w);
+                outBuf[idx] = (a << 24) | (b << 16) | (g << 8) | r;
+            }
+        } else {
+            for (u32 j = 0; j < blockHeight; ++j) {
+                const u32 row_base = j * blockWidth;
+                for (u32 i = 0; i < blockWidth; ++i) {
+                    const u32 partition =
+                        nPartitions == 1
+                            ? 0U
+                            : Select2DPartition(partitionIndex, i, j, nPartitions, small_block);
+                    assert(partition < nPartitions);
+                    const u32 texel = row_base + i;
+                    const u32 w0 = weights[0][texel];
+                    const u32 w1 = weights[1][texel];
+                    const u32 a = interpolate_ldr(ep0[partition][0], ep1[partition][0],
+                                                  dual_plane_channel == 0U ? w1 : w0);
+                    const u32 r = interpolate_ldr(ep0[partition][1], ep1[partition][1],
+                                                  dual_plane_channel == 1U ? w1 : w0);
+                    const u32 g = interpolate_ldr(ep0[partition][2], ep1[partition][2],
+                                                  dual_plane_channel == 2U ? w1 : w0);
+                    const u32 b = interpolate_ldr(ep0[partition][3], ep1[partition][3],
+                                                  dual_plane_channel == 3U ? w1 : w0);
+                    outBuf[texel] = (a << 24) | (b << 16) | (g << 8) | r;
+                }
+            }
+        }
+        return;
+    }
+
+    for (u32 j = 0; j < blockHeight; ++j) {
+        const u32 row_base = j * blockWidth;
+        for (u32 i = 0; i < blockWidth; ++i) {
+            const u32 partition =
+                nPartitions == 1
+                    ? 0U
+                    : Select2DPartition(partitionIndex, i, j, nPartitions, small_block);
             assert(partition < nPartitions);
 
-            Pixel p;
-            for (u32 c = 0; c < 4; c++) {
-                u32 C0 = endpoints[partition][0].Component(c);
-                u32 C1 = endpoints[partition][1].Component(c);
+            const u32 texel = row_base + i;
+            u32 ch[4];
+            for (u32 c = 0; c < 4; ++c) {
+                const u32 weight = weights[dual_plane_channel == c ? 1U : 0U][texel];
+                const u32 c0 = ep0[partition][c];
+                const u32 c1 = ep1[partition][c];
 
-                u32 plane = 0;
-                if (weightParams.m_bDualPlane && (((planeIdx + 1) & 3) == c)) {
-                    plane = 1;
-                }
-                u32 weight = weights[plane][j * blockWidth + i];
-
-                const bool is_hdr = IsHDRColorEndpointMode(colorEndpointMode[partition]) &&
-                                    !(colorEndpointMode[partition] == 14 && c == 0);
-
-                if (is_hdr) {
-                    C0 <<= 4;
-                    C1 <<= 4;
-                    const u32 C = (C0 * (64 - weight) + C1 * weight + 32) / 64;
-                    const u32 E = (C & 0xF800) >> 11;
-                    const u32 M = C & 0x7FF;
+                if (ep_hdr[partition][c]) {
+                    const u32 C = (c0 * (64U - weight) + c1 * weight + 32U) >> 6;
+                    const u32 E = (C & 0xF800U) >> 11;
+                    const u32 M = C & 0x7FFU;
                     u32 Mt;
-                    if (M < 512) {
-                        Mt = 3 * M;
-                    } else if (M >= 1536) {
-                        Mt = 5 * M - 2048;
+                    if (M < 512U) {
+                        Mt = 3U * M;
+                    } else if (M >= 1536U) {
+                        Mt = 5U * M - 2048U;
                     } else {
-                        Mt = 4 * M - 512;
+                        Mt = 4U * M - 512U;
                     }
                     const u32 Cf = (E << 10) + (Mt >> 3);
-                    const u16 half_bits = (Cf >= 0x7C00) ? u16{0x7BFF} : static_cast<u16>(Cf);
-                    p.Component(c) = HalfToClampedByte(half_bits);
+                    const u16 half_bits = (Cf >= 0x7C00U) ? u16{0x7BFF} : static_cast<u16>(Cf);
+                    ch[c] = HalfToClampedByte(half_bits);
                 } else {
-                    C0 = ReplicateByteTo16(C0);
-                    C1 = ReplicateByteTo16(C1);
-                    const u32 C = (C0 * (64 - weight) + C1 * weight + 32) / 64;
-                    if (C == 65535) {
-                        p.Component(c) = 255;
-                    } else {
-                        double Cf = static_cast<double>(C);
-                        p.Component(c) = static_cast<u16>(255.0 * (Cf / 65536.0) + 0.5);
-                    }
+                    ch[c] = interpolate_ldr(c0, c1, weight);
                 }
             }
 
-            outBuf[j * blockWidth + i] = p.Pack();
+            outBuf[texel] = (ch[0] << 24) | (ch[3] << 16) | (ch[2] << 8) | ch[1];
         }
+    }
 }
 
 void Decompress(std::span<const uint8_t> data, uint32_t width, uint32_t height, uint32_t depth,
                 uint32_t block_width, uint32_t block_height, std::span<uint8_t> output) {
     const u32 rows = Common::DivideUp(height, block_height);
     const u32 cols = Common::DivideUp(width, block_width);
-
-    Common::ThreadWorker& workers{GetThreadWorkers()};
-
-    for (u32 z = 0; z < depth; ++z) {
-        const u32 depth_offset = z * height * width * 4;
-        for (u32 y_index = 0; y_index < rows; ++y_index) {
-            auto decompress_stride = [data, width, height, block_width, block_height, output, rows,
-                                      cols, z, depth_offset, y_index] {
-                const u32 y = y_index * block_height;
-                for (u32 x_index = 0; x_index < cols; ++x_index) {
-                    const u32 block_index = (z * rows * cols) + (y_index * cols) + x_index;
-                    const u32 x = x_index * block_width;
-
-                    const std::span<const u8, 16> blockPtr{data.subspan(block_index * 16, 16)};
-
-                    // Blocks can be at most 12x12
-                    std::array<u32, 12 * 12> uncompData;
-                    DecompressBlock(blockPtr, block_width, block_height, uncompData);
-
-                    u32 decompWidth = (std::min)(block_width, width - x);
-                    u32 decompHeight = (std::min)(block_height, height - y);
-
-                    const std::span<u8> outRow = output.subspan(depth_offset + (y * width + x) * 4);
-                    for (u32 h = 0; h < decompHeight; ++h) {
-                        std::memcpy(outRow.data() + h * width * 4,
-                                    uncompData.data() + h * block_width, decompWidth * 4);
-                    }
-                }
-            };
-            workers.QueueWork(std::move(decompress_stride));
-        }
-        workers.WaitForRequests();
+    const u32 total_rows = depth * rows;
+    if (total_rows == 0 || cols == 0) {
+        return;
     }
+
+    const auto decode_row_range = [data, width, height, block_width, block_height, output, rows,
+                                   cols](u32 row_begin, u32 row_end) {
+        // Blocks can be at most 12x12
+        std::array<u32, 12 * 12> uncompData;
+        for (u32 flat_row = row_begin; flat_row < row_end; ++flat_row) {
+            const u32 z = flat_row / rows;
+            const u32 y_index = flat_row % rows;
+            const u32 depth_offset = z * height * width * 4;
+            const u32 y = y_index * block_height;
+            const u32 decompHeight = (std::min)(block_height, height - y);
+            const u32 row_block_base = (z * rows + y_index) * cols;
+
+            for (u32 x_index = 0; x_index < cols; ++x_index) {
+                const u32 block_index = row_block_base + x_index;
+                const u32 x = x_index * block_width;
+
+                const std::span<const u8, 16> blockPtr{
+                    data.subspan(static_cast<size_t>(block_index) * 16, 16)};
+                DecompressBlock(blockPtr, block_width, block_height, uncompData);
+
+                const u32 decompWidth = (std::min)(block_width, width - x);
+                const std::span<u8> outRow =
+                    output.subspan(static_cast<size_t>(depth_offset) +
+                                   (static_cast<size_t>(y) * width + x) * 4);
+                for (u32 h = 0; h < decompHeight; ++h) {
+                    std::memcpy(outRow.data() + static_cast<size_t>(h) * width * 4,
+                                uncompData.data() + static_cast<size_t>(h) * block_width,
+                                static_cast<size_t>(decompWidth) * 4);
+                }
+            }
+        }
+    };
+
+    // Avoid worker-pool dispatch overhead on small mips/textures (<= 256 blocks or 1 row).
+    const u64 total_blocks = static_cast<u64>(total_rows) * cols;
+    if (total_blocks <= 256 || total_rows <= 1) {
+        decode_row_range(0, total_rows);
+        return;
+    }
+
+    // Batch rows into coarse bands across all depth slices so large textures and arrays pay a
+    // single barrier and minimal queue/mutex overhead instead of one task per row per slice.
+    Common::ThreadWorker& workers{GetThreadWorkers()};
+    const u32 max_tasks = (std::min<u32>)(total_rows, 16U);
+    const u32 rows_per_task = Common::DivideUp(total_rows, max_tasks);
+    for (u32 begin = 0; begin < total_rows; begin += rows_per_task) {
+        const u32 end = (std::min)(begin + rows_per_task, total_rows);
+        workers.QueueWork([decode_row_range, begin, end] { decode_row_range(begin, end); });
+    }
+    workers.WaitForRequests();
 }
 
 // What IsOpaque needs from a block's 11 mode bits, which are all DecodeBlockInfo reads (a void

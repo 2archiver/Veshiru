@@ -4,7 +4,7 @@
 
 #version 460 core
 
-layout(local_size_x = 96, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 8, local_size_y = 32, local_size_z = 1) in;
 
 layout(std430, binding = 0) buffer FeatureBuf {
     float feat[];
@@ -21,38 +21,62 @@ layout(push_constant) uniform PushConstants {
     uint fc2_b_off;
 } pc;
 
+shared float s_partial[32][8];
 shared float s_mean[96];
 shared float s_mid[12];
+shared float s_scale[96];
 
 void main() {
-    const uint c = gl_LocalInvocationID.x;
-    const uint base = c * pc.plane_size;
+    const uint lx = gl_LocalInvocationID.x; // 0..7 coalesced spatial lane
+    const uint ly = gl_LocalInvocationID.y; // 0..31 channel group
+    const uint tid = gl_LocalInvocationIndex; // 0..255
+    const float inv_plane = 1.0 / float(max(1u, pc.plane_size));
 
-    float acc = 0.0;
-    for (uint i = 0u; i < pc.plane_size; ++i) {
-        acc += feat[base + i];
+    for (uint k = 0u; k < 3u; ++k) {
+        const uint c = ly + k * 32u;
+        const uint base = c * pc.plane_size;
+        float acc = 0.0;
+        for (uint i = lx; i < pc.plane_size; i += 8u) {
+            acc += feat[base + i];
+        }
+        s_partial[ly][lx] = acc;
+        barrier();
+
+        if (lx == 0u) {
+            const float sum = s_partial[ly][0] + s_partial[ly][1] + s_partial[ly][2] +
+                              s_partial[ly][3] + s_partial[ly][4] + s_partial[ly][5] +
+                              s_partial[ly][6] + s_partial[ly][7];
+            s_mean[c] = sum * inv_plane;
+        }
+        barrier();
     }
-    s_mean[c] = acc / float(max(1u, pc.plane_size));
-    barrier();
 
-    if (c < 12u) {
-        float m = weights[pc.fc0_b_off + c];
-        const uint w_row = pc.fc0_w_off + c * 96u;
+    if (tid < 12u) {
+        float m = weights[pc.fc0_b_off + tid];
+        const uint w_row = pc.fc0_w_off + tid * 96u;
         for (uint j = 0u; j < 96u; ++j) {
             m += weights[w_row + j] * s_mean[j];
         }
-        s_mid[c] = max(0.0, m);
+        s_mid[tid] = max(0.0, m);
     }
     barrier();
 
-    float logit = weights[pc.fc2_b_off + c];
-    const uint w2_row = pc.fc2_w_off + c * 12u;
-    for (uint m = 0u; m < 12u; ++m) {
-        logit += weights[w2_row + m] * s_mid[m];
+    if (tid < 96u) {
+        float logit = weights[pc.fc2_b_off + tid];
+        const uint w2_row = pc.fc2_w_off + tid * 12u;
+        for (uint m = 0u; m < 12u; ++m) {
+            logit += weights[w2_row + m] * s_mid[m];
+        }
+        s_scale[tid] = 1.0 / (1.0 + exp(-logit));
     }
-    const float scale = 1.0 / (1.0 + exp(-logit));
+    barrier();
 
-    for (uint i = 0u; i < pc.plane_size; ++i) {
-        feat[base + i] *= scale;
+    for (uint k = 0u; k < 3u; ++k) {
+        const uint c = ly + k * 32u;
+        const uint base = c * pc.plane_size;
+        const float scale = s_scale[c];
+        for (uint i = lx; i < pc.plane_size; i += 8u) {
+            feat[base + i] *= scale;
+        }
     }
 }

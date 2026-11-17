@@ -403,7 +403,10 @@ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
             *target = (std::min)(static_cast<u64>(std::strtoull(value, nullptr, 10)) << 20, limit);
         }
     }
-    expected_memory = (std::min)(expected_memory, critical_memory);
+    // Keep a working band between expected and critical thresholds so an explicit override pair
+    // that closes the gap does not force per-frame eviction thrashing.
+    const u64 band = (std::min)(critical_memory, u64{512_MiB});
+    expected_memory = (std::min)(expected_memory, critical_memory - band);
     if (log) {
         LogThresholds();
         if (TextureCacheMemory::IsBelowRecommended(limit_mib, device_memory_total)) {
@@ -439,8 +442,10 @@ void TextureCache<P>::TickFrame() {
         if (!native_thresholds_applied && gpu_memory != nullptr && gpu_memory->UsesNativeTiling()) {
             native_thresholds_applied = true;
             const u64 device_local = device_memory_total;
-            critical_memory = (std::max)(critical_memory, device_local - 256_MiB);
-            expected_memory = (std::max)(expected_memory, device_local - 1280_MiB);
+            const u64 native_crit = device_local > 256_MiB ? device_local - 256_MiB : 0;
+            const u64 native_exp = device_local > 1280_MiB ? device_local - 1280_MiB : 0;
+            critical_memory = (std::max)(critical_memory, native_crit);
+            expected_memory = (std::max)(expected_memory, native_exp);
             ApplyThresholdOverrides();
             native_critical_memory = critical_memory;
             native_expected_memory = expected_memory;
@@ -476,7 +481,7 @@ void TextureCache<P>::TickFrame() {
             if (native_thresholds_applied && budget_check_frames++ % 30 == 0) {
                 const u64 budget = runtime.GetDeviceMemoryBudget();
                 retention_limit = 0;
-                if (budget > 2_GiB) {
+                if (budget >= TextureCacheMemory::MinTrackedDeviceBudget) {
                     device_memory_total = budget;
                     const u64 margin = (std::min)(budget / 8, 1_GiB);
                     if constexpr (requires { runtime.GetDeviceMemorySlack(); }) {
@@ -1462,6 +1467,17 @@ void TextureCache<P>::UnmapMemory(DAddr cpu_addr, size_t size) {
     ForEachImageInRegion(cpu_addr, size, [&](ImageId id, Image&) { deleted_images.push_back(id); });
     for (const ImageId id : deleted_images) {
         Image& image = slot_images[id];
+        if constexpr (requires { &Image::ResetTiles; }) {
+            // A Switch 2 game unmapping one tile of a large sparse texture (title 1's 16384x16384
+            // R8 pair, ~160 times a session) deleted the whole image, and re-creating it (a sparse
+            // image bound block by block to a zeroed block, then waited on) stalled ~0.75 s each on
+            // AMD. The image stays; its tiles are brought up to date before its next use.
+            if (True(image.flags & ImageFlagBits::SparseTiles) &&
+                image.SparseTilesShareZeroBlock()) {
+                image.flags |= ImageFlagBits::SparseTilesUnmapped;
+                continue;
+            }
+        }
         if (True(image.flags & ImageFlagBits::Tracked)) {
             UntrackImage(image, id);
         }
@@ -2418,6 +2434,40 @@ void TextureCache<P>::MarkRangeWritten(Image& image, DAddr cpu_addr, size_t size
     }
     image.flags |= ImageFlagBits::CpuModified;
     image.dirty_ranges.emplace_back(begin - image.cpu_addr, end - begin);
+}
+
+template <class P>
+void TextureCache<P>::RefreshUnmappedSparseTiles(Image& image, ImageId image_id) {
+    image.flags &= ~ImageFlagBits::SparseTilesUnmapped;
+    if constexpr (requires { &Image::ResetTiles; }) {
+        // Its views of guest memory are made again from the mappings now, its blocks go back to
+        // the zeroed one, and every tile mapped now is loaded: what a new image would get.
+        const bool tracked = True(image.flags & ImageFlagBits::Tracked);
+        if (tracked) {
+            UntrackImage(image, image_id);
+        }
+        UnregisterImage(image_id);
+        total_used_memory -= (std::min)(total_used_memory, ImageMemoryBytes(image));
+        if (!image.ResetTiles()) {
+            LOG_WARNING(HW_GPU, "Sparse tiled image {:#x}: could not reset its blocks",
+                        image.gpu_addr);
+            // Retried on the next use.
+            image.flags |= ImageFlagBits::SparseTilesUnmapped;
+        }
+        RegisterImage(image_id);
+        if (tracked) {
+            TrackImage(image, image_id);
+        }
+        image.dirty_ranges.clear();
+        image.flags |= ImageFlagBits::CpuModified;
+        ++sparse_tiles_refreshed;
+        static u32 logged{};
+        if (logged++ < 16 || (sparse_tiles_refreshed & 63) == 0) {
+            LOG_INFO(HW_GPU,
+                     "Sparse tiled image {:#x}: tiles unmapped, reloaded in place ({} so far)",
+                     image.gpu_addr, sparse_tiles_refreshed);
+        }
+    }
 }
 
 template <class P>
@@ -4407,6 +4457,9 @@ void TextureCache<P>::PrepareImage(ImageId image_id, bool is_modification, bool 
         }
     }
     Image& image = slot_images[image_id];
+    if (True(image.flags & ImageFlagBits::SparseTilesUnmapped)) [[unlikely]] {
+        RefreshUnmappedSparseTiles(image, image_id);
+    }
     if (invalidate) {
         image.flags &= ~(ImageFlagBits::CpuModified | ImageFlagBits::GpuModified);
         if (False(image.flags & ImageFlagBits::Tracked)) {

@@ -70,7 +70,9 @@ const std::optional<Common::UUID> GetProfileID() {
 
     const auto uuid =
         QtCommon::system->GetProfileManager().GetUser(static_cast<std::size_t>(index));
-    ASSERT(uuid);
+    if (!uuid) {
+        return std::nullopt;
+    }
 
     return uuid;
 }

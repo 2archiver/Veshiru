@@ -2,6 +2,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <span>
+
 namespace Tegra::Texture::ASTC {
 
 void Decompress(std::span<const uint8_t> data, uint32_t width, uint32_t height, uint32_t depth,

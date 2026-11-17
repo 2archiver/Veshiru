@@ -238,7 +238,7 @@ jobs:
               throw "build/release/bin/$exe was not produced"
             }
           }
-          windeployqt --release --no-translations build/release/bin/veshiru.exe
+          windeployqt --release --dir build/release/bin --libdir build/release/bin --plugindir build/release/bin/plugins --no-compiler-runtime --no-opengl-sw --no-system-d3d-compiler --no-translations build/release/bin/veshiru.exe
 
       # The artifact is the bin folder itself: GitHub zips artifacts on download, and uploading a
       # zip gave a zip inside a zip. The release job zips it once for the release.

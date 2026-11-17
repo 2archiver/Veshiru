@@ -26,6 +26,7 @@
 #include "common/dkb_frame_trace.h"
 #include "common/logging.h"
 #include "common/polyfill_thread.h"
+#include "common/progress_counter.h"
 #include "common/settings.h"
 #include "video_core/gpu_split.h"
 #include "video_core/renderer_vulkan/fragment_barrier_state.h"
@@ -148,6 +149,17 @@ public:
 
     void NoteRenderPassStores() {
         render_pass_has_stores = true;
+        storage_writes_unordered = true;
+    }
+
+    /// A draw wrote storage since the last memory barrier after all graphics stages: a host
+    /// indirect draw reading GPU-written arguments needs one first.
+    bool StorageWritesUnordered() const {
+        return storage_writes_unordered;
+    }
+
+    void NoteStorageWritesOrdered() {
+        storage_writes_unordered = false;
     }
 
     bool RenderPassHasStores() const {
@@ -358,6 +370,12 @@ public:
     std::mutex submit_mutex;
 
 private:
+    /// The master semaphore's current tick as of the last submission (WaitSubmitted waits on it).
+    Common::ProgressCounter submitted_ticks;
+
+public:
+
+private:
     std::chrono::steady_clock::time_point last_flush{};
     bool flush_pending{};
     u64 record_serial{};    ///< Commands recorded
@@ -507,6 +525,7 @@ private:
     std::unique_ptr<MasterSemaphore> master_semaphore;
     FragmentBarrierState fragment_barrier;
     bool render_pass_has_stores{};
+    bool storage_writes_unordered{};
     bool compute_writes_pending{};
     bool graphics_pipeline_missing{};
     u64 render_pass_serial{};

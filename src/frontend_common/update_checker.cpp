@@ -148,6 +148,7 @@ CheckResult Check() {
                                Common::g_build_release_platform,
                                Common::Net::CurrentLinuxPackage());
     if (update) {
+        Common::Net::PopulateMissingAssetDigests(*update);
         LOG_INFO(Frontend, "Received update {}", update->title);
     }
     return {.update = std::move(update)};

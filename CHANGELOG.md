@@ -6,6 +6,73 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-16
+
+### Open-Frame-Gen, FSR3 & Frame Generation Pacing
+
+- **Low-VRAM tiled Open-Frame-Gen shaders (2.5x lower activation footprint)**: fused channel-tiled
+  workgroups (`open_frame_gen_{pw1x1,head}.comp`) cut 1080p intermediate SSBO allocation to ~106 MiB
+  with bit-exact numerical equivalence, keeping neural frame generation comfortable on 4 GB GPUs
+  such as the GTX 1650.
+- **Zero-idle overhead & smooth pacing**: added idle/at-target bypass, swapchain-level bypass when
+  frame generation is inactive, hysteresis and exponential backoff in `FrameGenPacer`, immediate
+  `DispatchWork()` scheduling, and `IsReady()` gating so menus and at-target gameplay incur zero
+  optical-flow GPU cost.
+- **Synchronization, staging memory & HDR correctness**:
+  - Fixed Vulkan Sync2 / `Generate()` barriers and `free_mutex` wait synchronization in the present
+    manager to prevent frame-gen presentation stalls and data races.
+  - Made Open-Frame-Gen's ~352 KiB weights upload staging buffer lazy (allocated only on first
+    optical-flow dispatch) and released promptly as soon as its upload tick retires.
+  - Added smooth perceptual scRGB soft-compression in `open_frame_gen_prep.comp` for
+    `VK_FORMAT_R16G16B16A16_SFLOAT` HDR swapchains so highlights above 80 nits no longer hard-clip
+    to `[0, 1]` during motion estimation, while keeping SDR and HDR10 PQ paths unchanged.
+
+### Switch 2 GPU Pipeline, Thread Split, ASTC & 4 GB VRAM Budgeting
+
+- **Parallel multi-stage native shader translation**: raised `MaxFlushedTexturePoolBytes` from
+  1 MiB to 8 MiB in `vk_pipeline_cache.cpp` so Switch 2 titles with 4+ MiB texture descriptor pools
+  (such as Mario Kart World's 4.20 MiB pool) translate graphics shader stages concurrently on CPU
+  worker threads instead of falling back to single-threaded GPU-thread stalls.
+- **Three-stage GPU thread split hardening**: reset `wait_target`, `hook_requested`, `back_quiet`,
+  and `drain_quiet_requested` cleanly in `GpuSplit::Stop()`, eliminated a mid-batch `Drain()` /
+  `RequestIdleHook()` 8192-iteration spin race in `BackLoop()`, and added multi-session Catch2
+  synchronization tests.
+- **ASTC CPU & GPU decode performance + test suite**: added a 2048-entry block-mode LUT, exact
+  integer LDR interpolation (eliminating per-channel `double` divisions), single-partition and
+  coarse row-band worker batching (2.2x faster on small mips, bit-exact across 16,384 mixed blocks),
+  CPU HDR void-extent support, GPU shader endpoint hoisting in `astc_decoder.comp`, and a dedicated
+  `astc_decode.cpp` Catch2 suite covering 4x4 through 12x12 footprints.
+- **4 GB GPU (GTX 1650) VRAM budgeting**: lowered the texture cache's dynamic `VK_EXT_memory_budget`
+  tracking floor from 2 GiB to 1 GiB (with underflow guards), scaled Switch 2 native buffer-cache GC
+  thresholds by VRAM tier (`192/384 MiB` on `<= 4.5 GiB` cards with device-pressure cooperation,
+  `320/640 MiB` on 6 GB, `512 MiB / 1 GiB` on 8+ GB), and added a `128 MiB` trimmed ASTC array
+  ceiling for `< 5 GiB` GPUs.
+- **Upstream Switch 2 rendering & memory updates**: integrated `DrawIndexedIndirect`, native tiling
+  unswizzle fixes, `a829b346` / `662af0bf` / `b54d1f06` / `a310a7e9` / PR `#890` video core and
+  host memory improvements, and fixed a `constexpr` compilation bug in `textures/decoders.cpp`.
+
+### Game List Artwork, Eglantine Linking, Updater & Packaging Fixes
+
+- **Artwork & NUP icon fixes (1.3 audit Bugs #1, #3, #4)**: fixed stale icon caching, NUP
+  container icon loading, and background artwork refresh/retry behavior; ensured `veshiru-cmd.exe`
+  builds with the Windows console subsystem.
+- **Eglantine linking & first-launch migration safety (Bug #2)**:
+  - Removed `ASSERT(uuid)` crash in `GetProfileID()`, guarded `program_id == 0` in `Link to Eglantine`,
+    and added automatic Eglantine profile UUID resolution (`profiles.dat` + save directory scan)
+    with full UTF-8 / wide-path support for non-ASCII Windows user profiles.
+  - Prevented `UserDataMigrator` from throwing uncaught exceptions out of `MainWindow`'s constructor
+    and allowed existing interior directory junctions when linking a legacy profile (`Strategy::Link`).
+- **Configuration, updater & Windows packaging fixes (Audit B1, B2, B4, B5, B6)**:
+  - Removed hardcoded `EDEN_NX2_NUP_CACHE_MIB=1024` from `dist/nx2_switches.txt` so 24+ GiB systems
+    auto-scale to 1536 MiB, and added `VESHIRU_*` to the startup switch allowlist.
+  - Ensured `veshiru-updater.exe` overrides global `/MD` with `/MT` for standalone execution from
+    `%TEMP%`, handles `OpenProcess` `ERROR_ACCESS_DENIED` safely without racing file replacement,
+    and falls back to `SHA256SUMS.txt` when GitHub's `asset["digest"]` field is absent.
+  - Passed `--plugindir build/release/bin/plugins` to `windeployqt` in `release-binaries.yml` to
+    eliminate duplicate root Qt plugin directories.
+  - Rewrote `tools/windows/merge-pgo-profiles.ps1` to balance sessions by 64-bit summed per-function
+    volume with bounded weights and subsystem coverage reporting.
+
 ## [1.3.0] - 2026-11-16
 
 ### Frame Generation & Vulkan Rendering

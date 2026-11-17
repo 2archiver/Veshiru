@@ -17,6 +17,8 @@
 #include "tests/core/system_test_context.h"
 #include "video_core/fence_manager.h"
 #include "video_core/gpu.h"
+#include "video_core/gpu_split.h"
+#include "video_core/nx2.h"
 #include "video_core/renderer_null/null_rasterizer.h"
 
 namespace {
@@ -160,4 +162,86 @@ TEST_CASE("Immediate fence waits still submit outstanding work", "[video_core][s
         REQUIRE_FALSE(submission.wrong_owner);
     }
     REQUIRE(callback.load());
+}
+
+TEST_CASE("GpuSplit Stop resets synchronization state cleanly across restarts",
+          "[video_core][split_fence_wait][gpu_split]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    auto& split = VideoCommon::GpuSplit::Get();
+
+    const bool prev_ampere = Tegra::g_nx2_ampere.exchange(true, std::memory_order_relaxed);
+    const auto prev_gpu_acc = Settings::values.current_gpu_accuracy;
+    const auto prev_dma_acc = Settings::values.dma_accuracy.GetValue();
+    const auto prev_backend = Settings::values.renderer_backend.GetValue();
+    SCOPE_EXIT {
+        split.SetIdleHook(nullptr, nullptr);
+        split.Stop();
+        Tegra::g_nx2_ampere.store(prev_ampere, std::memory_order_relaxed);
+        Settings::values.current_gpu_accuracy = prev_gpu_acc;
+        Settings::values.dma_accuracy.SetValue(prev_dma_acc);
+        Settings::values.renderer_backend.SetValue(prev_backend);
+    };
+
+    Settings::values.current_gpu_accuracy = Settings::GpuAccuracy::Normal;
+    Settings::values.dma_accuracy.SetValue(Settings::DmaAccuracy::Default);
+    Settings::values.renderer_backend.SetValue(Settings::RendererBackend::Vulkan);
+
+    struct HookState {
+        std::atomic<u32> calls{};
+        std::atomic<bool> on_back{true};
+    };
+
+    for (u32 session = 0; session < 2; ++session) {
+        HookState hook_state;
+        split.SetIdleHook(
+            [](void* arg) {
+                auto* s = static_cast<HookState*>(arg);
+                s->calls.fetch_add(1, std::memory_order_relaxed);
+                if (!VideoCommon::GpuSplit::OnBackThread() ||
+                    !VideoCommon::GpuSplit::OwnsScheduler()) {
+                    s->on_back.store(false, std::memory_order_relaxed);
+                }
+            },
+            &hook_state);
+
+        split.MaybeStart(system);
+        if (!split.Active()) {
+            SKIP("GpuSplit disabled via EDEN_NX2_SPLIT=0");
+        }
+        REQUIRE(split.Active());
+
+        std::atomic<u32> executed{};
+        std::atomic<bool> all_on_back{true};
+        for (u32 i = 0; i < 64; ++i) {
+            struct Job {
+                std::atomic<u32>* count;
+                std::atomic<bool>* on_back;
+                void operator()() const {
+                    if (!VideoCommon::GpuSplit::OnBackThread() ||
+                        !VideoCommon::GpuSplit::OwnsScheduler()) {
+                        on_back->store(false, std::memory_order_relaxed);
+                    }
+                    count->fetch_add(1, std::memory_order_relaxed);
+                }
+            };
+            split.Defer(Job{&executed, &all_on_back});
+            if ((i & 7U) == 7U) {
+                split.RequestIdleHook();
+            }
+        }
+        split.NoteSemaphoreWrite(0x1000, 42U, true);
+        split.Drain(VideoCommon::DrainSite::Other);
+
+        REQUIRE(executed.load() == 64U);
+        REQUIRE(all_on_back.load());
+        REQUIRE(hook_state.calls.load() >= 1U);
+        REQUIRE(hook_state.on_back.load());
+        REQUIRE_FALSE(split.QueuedSemaphoreWriteAt(0x1000).has_value());
+
+        split.SetIdleHook(nullptr, nullptr);
+        split.Stop();
+        REQUIRE_FALSE(split.Active());
+        REQUIRE_FALSE(split.BackRunning());
+    }
 }

@@ -18,9 +18,10 @@ EDEN_NX2_SPLIT=2
 # Batch GPU fence syncpoints to reduce host driver overhead and smooth frametimes.
 EDEN_NX2_FENCE_BATCH=1
 
-# Keep more decompressed NUP members in host RAM. The Veshiru target machine has 32 GB, so 1 GiB
-# avoids re-decoding area changes without pressuring the GTX 1650's 4 GB of VRAM. Minimum 64 MiB.
-EDEN_NX2_NUP_CACHE_MIB=1024
+# Keep more decompressed NUP members in host RAM. Left unset so Veshiru auto-scales the NUP
+# cache to available RAM (up to 1536 MiB on >= 24 GiB systems, lower on smaller machines).
+# Uncomment to override explicitly (VESHIRU_NUP_CACHE_MIB or EDEN_NX2_NUP_CACHE_MIB; min 64 MiB).
+#VESHIRU_NUP_CACHE_MIB=1024
 
 # Texture-cache collector overrides. The GUI setting texture_cache_memory_limit is the primary
 # control (0 = Auto = three quarters of the GPU budget). These can raise thresholds for testing,

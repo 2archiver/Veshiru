@@ -546,6 +546,7 @@ private:
     void (*idle_hook)(void*){};
     void* idle_argument{};
     alignas(64) std::atomic<bool> hook_requested{};
+    std::atomic<bool> drain_quiet_requested{};
     std::atomic<bool> back_running{};
     std::atomic<bool> back_quiet{true};
 

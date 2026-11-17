@@ -25,49 +25,90 @@ layout(push_constant) uniform PushConstants {
     uint b_offset;
 } pc;
 
-shared float s_w[4][32];
-shared float s_b[4];
+// Each 8x8x4 workgroup computes an 8x8 spatial tile across 16 output channels (4 per lz lane),
+// caching 32 input channels x 64 pixels in shared memory so in_buf is read once per 16 output
+// channels instead of redundantly across every lz lane and 4-channel group (~16x fewer global
+// memory reads with identical FP32 results).
+shared float s_in[32][64];
+shared float s_w[16][32];
+shared float s_b[16];
 
 void main() {
-    const uint ox = gl_GlobalInvocationID.x;
-    const uint oy = gl_GlobalInvocationID.y;
-    const uint oc = gl_GlobalInvocationID.z;
+    const uint lx = gl_LocalInvocationID.x;
+    const uint ly = gl_LocalInvocationID.y;
     const uint lz = gl_LocalInvocationID.z;
     const uint tid = gl_LocalInvocationIndex; // 0..255
+    const uint wg_x0 = gl_WorkGroupID.x * 8u;
+    const uint wg_y0 = gl_WorkGroupID.y * 8u;
+    const uint ox = wg_x0 + lx;
+    const uint oy = wg_y0 + ly;
+    const uint px = ly * 8u + lx; // 0..63
+    const uint oc_base = gl_WorkGroupID.z * 16u;
+    const uint oc0 = oc_base + lz * 4u;
 
-    if (tid < 4u) {
-        const uint g_oc = gl_WorkGroupID.z * 4u + tid;
+    if (tid < 16u) {
+        const uint g_oc = oc_base + tid;
         s_b[tid] = g_oc < pc.out_ch ? weights[pc.b_offset + g_oc] : 0.0;
     }
     barrier();
 
-    const bool valid_px = (ox < pc.width) && (oy < pc.height) && (oc < pc.out_ch);
+    const bool valid_px = (ox < pc.width) && (oy < pc.height);
     const uint plane = pc.width * pc.height;
     const uint px_idx = oy * pc.width + ox;
-    float sum = s_b[lz];
+
+    float sum0 = s_b[lz * 4u + 0u];
+    float sum1 = s_b[lz * 4u + 1u];
+    float sum2 = s_b[lz * 4u + 2u];
+    float sum3 = s_b[lz * 4u + 3u];
 
     for (uint ic_base = 0u; ic_base < pc.in_ch; ic_base += 32u) {
-        if (tid < 128u) {
-            const uint w_lz = tid >> 5u;
-            const uint w_k = tid & 31u;
-            const uint g_oc = gl_WorkGroupID.z * 4u + w_lz;
+        const uint count = min(32u, pc.in_ch - ic_base);
+
+        // Cooperatively load [count][64] input activations: each thread loads 8 channels for its
+        // spatial pixel (lx varies fastest across a warp -> fully coalesced 32-byte loads).
+        for (uint step = 0u; step < 8u; ++step) {
+            const uint k = lz * 8u + step;
+            s_in[k][px] = (valid_px && k < count) ? in_buf[(ic_base + k) * plane + px_idx] : 0.0;
+        }
+
+        // Cooperatively load [16][32] = 512 weights (2 floats per thread).
+        for (uint pass = 0u; pass < 2u; ++pass) {
+            const uint idx = tid + pass * 256u;
+            const uint w_oc = idx >> 5u;
+            const uint w_k = idx & 31u;
+            const uint g_oc = oc_base + w_oc;
             const uint g_ic = ic_base + w_k;
-            s_w[w_lz][w_k] = (g_oc < pc.out_ch && g_ic < pc.in_ch)
+            s_w[w_oc][w_k] = (g_oc < pc.out_ch && g_ic < pc.in_ch)
                                  ? weights[pc.w_offset + g_oc * pc.in_ch + g_ic]
                                  : 0.0;
         }
         barrier();
 
         if (valid_px) {
-            const uint count = min(32u, pc.in_ch - ic_base);
+            const uint w0 = lz * 4u;
             for (uint k = 0u; k < count; ++k) {
-                sum += s_w[lz][k] * in_buf[(ic_base + k) * plane + px_idx];
+                const float v = s_in[k][px];
+                sum0 += s_w[w0 + 0u][k] * v;
+                sum1 += s_w[w0 + 1u][k] * v;
+                sum2 += s_w[w0 + 2u][k] * v;
+                sum3 += s_w[w0 + 3u][k] * v;
             }
         }
         barrier();
     }
 
     if (valid_px) {
-        out_buf[oc * plane + px_idx] = sum >= 0.0 ? sum : sum * 0.1;
+        if (oc0 + 0u < pc.out_ch) {
+            out_buf[(oc0 + 0u) * plane + px_idx] = sum0 >= 0.0 ? sum0 : sum0 * 0.1;
+        }
+        if (oc0 + 1u < pc.out_ch) {
+            out_buf[(oc0 + 1u) * plane + px_idx] = sum1 >= 0.0 ? sum1 : sum1 * 0.1;
+        }
+        if (oc0 + 2u < pc.out_ch) {
+            out_buf[(oc0 + 2u) * plane + px_idx] = sum2 >= 0.0 ? sum2 : sum2 * 0.1;
+        }
+        if (oc0 + 3u < pc.out_ch) {
+            out_buf[(oc0 + 3u) * plane + px_idx] = sum3 >= 0.0 ? sum3 : sum3 * 0.1;
+        }
     }
 }

@@ -4,7 +4,7 @@
 
 #version 460 core
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
 
 layout(std430, binding = 0) readonly buffer InBuf {
     float in_buf[];
@@ -27,74 +27,81 @@ layout(push_constant) uniform PushConstants {
     float flow_norm_y;
 } pc;
 
-shared float s_k[864];
-shared float s_b[3];
-
-float readCh(uint ic, int ix, int iy) {
-    if (ix < 0 || iy < 0 || ix >= int(pc.width) || iy >= int(pc.height)) {
-        return 0.0;
-    }
-    return in_buf[(ic * pc.height + uint(iy)) * pc.width + uint(ix)];
-}
+// 10x10 shared input halo tile for an 8x8 spatial workgroup + 4 output channels' 3x3 kernels.
+// Computing 4 output channels per workgroup reuses each 10x10 input tile across 4 channels and
+// 9 spatial taps (~23x fewer global memory reads in head.0 and ~5.7x fewer in head.2).
+shared float s_in[100];
+shared float s_k[4][9];
+shared float s_b[4];
+shared float s_out[64][3];
 
 void main() {
-    const uint tid = gl_LocalInvocationIndex; // 0..63
-    const uint ox = gl_GlobalInvocationID.x;
-    const uint oy = gl_GlobalInvocationID.y;
+    const uint lx = gl_LocalInvocationID.x;
+    const uint ly = gl_LocalInvocationID.y;
+    const uint lz = gl_LocalInvocationID.z;
+    const uint tid = gl_LocalInvocationIndex; // 0..255
+    const uint ox = gl_WorkGroupID.x * 8u + lx;
+    const uint oy = gl_WorkGroupID.y * 8u + ly;
+    const int tile_x0 = int(gl_WorkGroupID.x * 8u) - 1;
+    const int tile_y0 = int(gl_WorkGroupID.y * 8u) - 1;
+    const uint oc_base = pc.mode == 0u ? (gl_WorkGroupID.z * 4u) : 0u;
+    const uint oc_count = pc.mode == 0u ? 4u : 3u;
+    const uint oc = oc_base + lz;
+    const bool active_ch = lz < oc_count;
+
+    if (tid < oc_count) {
+        s_b[tid] = weights[pc.b_offset + oc_base + tid];
+    }
+    barrier();
+
+    float sum = active_ch ? s_b[lz] : 0.0;
+
+    for (uint ic = 0u; ic < 32u; ++ic) {
+        if (tid < 100u) {
+            const uint ty = tid / 10u;
+            const uint tx = tid - ty * 10u;
+            const int ix = tile_x0 + int(tx);
+            const int iy = tile_y0 + int(ty);
+            if (ix >= 0 && iy >= 0 && ix < int(pc.width) && iy < int(pc.height)) {
+                s_in[tid] = in_buf[(ic * pc.height + uint(iy)) * pc.width + uint(ix)];
+            } else {
+                s_in[tid] = 0.0;
+            }
+        } else if (tid < 100u + oc_count * 9u) {
+            const uint k_idx = tid - 100u;
+            const uint ch = k_idx / 9u;
+            const uint tap = k_idx - ch * 9u;
+            s_k[ch][tap] = weights[pc.w_offset + (oc_base + ch) * 288u + ic * 9u + tap];
+        }
+        barrier();
+
+        if (active_ch && ox < pc.width && oy < pc.height) {
+            const uint row0 = ly * 10u + lx;
+            const uint row1 = row0 + 10u;
+            const uint row2 = row1 + 10u;
+            sum += s_k[lz][0] * s_in[row0] + s_k[lz][1] * s_in[row0 + 1u] +
+                   s_k[lz][2] * s_in[row0 + 2u] + s_k[lz][3] * s_in[row1] +
+                   s_k[lz][4] * s_in[row1 + 1u] + s_k[lz][5] * s_in[row1 + 2u] +
+                   s_k[lz][6] * s_in[row2] + s_k[lz][7] * s_in[row2 + 1u] +
+                   s_k[lz][8] * s_in[row2 + 2u];
+        }
+        barrier();
+    }
 
     if (pc.mode == 0u) {
-        const uint oc = gl_WorkGroupID.z;
-        for (uint idx = tid; idx < 288u; idx += 64u) {
-            s_k[idx] = weights[pc.w_offset + oc * 288u + idx];
+        if (ox < pc.width && oy < pc.height) {
+            out_buf[(oc * pc.height + oy) * pc.width + ox] = sum >= 0.0 ? sum : sum * 0.1;
         }
-        if (tid == 0u) {
-            s_b[0] = weights[pc.b_offset + oc];
-        }
-        barrier();
-
-        if (ox >= pc.width || oy >= pc.height) {
-            return;
-        }
-        float sum = s_b[0];
-        const int bx = int(ox) - 1;
-        const int by = int(oy) - 1;
-        for (uint ic = 0u; ic < 32u; ++ic) {
-            const uint kbase = ic * 9u;
-            for (int ky = 0; ky < 3; ++ky) {
-                for (int kx = 0; kx < 3; ++kx) {
-                    sum += s_k[kbase + uint(ky * 3 + kx)] * readCh(ic, bx + kx, by + ky);
-                }
-            }
-        }
-        out_buf[(oc * pc.height + oy) * pc.width + ox] = sum >= 0.0 ? sum : sum * 0.1;
     } else {
-        for (uint idx = tid; idx < 864u; idx += 64u) {
-            s_k[idx] = weights[pc.w_offset + idx];
-        }
-        if (tid < 3u) {
-            s_b[tid] = weights[pc.b_offset + tid];
+        if (active_ch) {
+            s_out[ly * 8u + lx][lz] = sum;
         }
         barrier();
-
-        if (ox >= pc.width || oy >= pc.height) {
-            return;
+        if (lz == 0u && ox < pc.width && oy < pc.height) {
+            const uint px = ly * 8u + lx;
+            const vec2 flow_uv = vec2(s_out[px][0] * pc.flow_norm_x, s_out[px][1] * pc.flow_norm_y);
+            const float mask = 1.0 / (1.0 + exp(-s_out[px][2]));
+            imageStore(OutFlowMask, ivec2(ox, oy), vec4(flow_uv, mask, 1.0));
         }
-        vec3 sum = vec3(s_b[0], s_b[1], s_b[2]);
-        const int bx = int(ox) - 1;
-        const int by = int(oy) - 1;
-        for (uint ic = 0u; ic < 32u; ++ic) {
-            for (int ky = 0; ky < 3; ++ky) {
-                for (int kx = 0; kx < 3; ++kx) {
-                    const float v = readCh(ic, bx + kx, by + ky);
-                    const uint off = ic * 9u + uint(ky * 3 + kx);
-                    sum.x += s_k[off] * v;
-                    sum.y += s_k[288u + off] * v;
-                    sum.z += s_k[576u + off] * v;
-                }
-            }
-        }
-        const vec2 flow_uv = vec2(sum.x * pc.flow_norm_x, sum.y * pc.flow_norm_y);
-        const float mask = 1.0 / (1.0 + exp(-sum.z));
-        imageStore(OutFlowMask, ivec2(ox, oy), vec4(flow_uv, mask, 1.0));
     }
 }

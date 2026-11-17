@@ -166,7 +166,7 @@ inline u64 Ticks() {
 struct ThreadData {
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
-    std::array<u64, 8> counters{}; ///< See Counter
+    std::array<u64, 16> counters{}; ///< See Counter
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_ns{};
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_count{};
     /// GPU waits by the zone they happened in (Other: outside every zone)
@@ -247,6 +247,11 @@ enum class Counter : u32 {
     SameValueWrites, ///< Of MethodWrites: the register already held the value
     AcquireChecks,  ///< Semaphore acquires evaluated
     AcquireWaits,   ///< Of AcquireChecks: not met yet (the channel waits)
+    /// DrawIndexedIndirect calls the host GPU drew from their GPU-written records
+    /// (Maxwell3D::FrontTakeIndirectRecord)
+    IndirectRecords,
+    /// Of those, drawn after storage writes no barrier ordered yet (RasterizerVulkan::DrawIndirect)
+    IndirectRecordsUnordered,
 };
 
 /// Method calls on this thread by method (3D registers on the back, macros on the front), and

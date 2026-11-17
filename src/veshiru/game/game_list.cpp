@@ -508,7 +508,10 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     if (has_shader_warm) {
         delete_shader_warm = context_menu.addAction(tr("Delete Shader Precache"));
     }
-    QAction* eglantine = context_menu.addAction(tr("Link to Eglantine"));
+    QAction* eglantine = nullptr;
+    if (program_id != 0) {
+        eglantine = context_menu.addAction(tr("Link to Eglantine"));
+    }
     context_menu.addSeparator();
     QMenu* remove_menu = context_menu.addMenu(tr("Remove"));
     QAction* remove_update = remove_menu->addAction(tr("Remove Installed Update"));
@@ -572,8 +575,7 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
 #endif
     context_menu.addSeparator();
     QAction* refresh_artwork = nullptr;
-    if (program_id != 0 && (is_nup_archive || is_loose_dump ||
-                            !Common::ArtworkCache::ReadCachedArtwork(program_id).empty())) {
+    if (program_id != 0) {
         refresh_artwork = context_menu.addAction(tr("Refresh Game Artwork"));
     }
     QAction* edit_nup = nullptr;
@@ -735,8 +737,10 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     connect(properties, &QAction::triggered, this,
             [this, path]() { emit OpenPerGameGeneralRequested(path); });
 
-    connect(eglantine, &QAction::triggered, this,
-            [this, program_id]() { emit LinkToEglantineRequested(program_id); });
+    if (eglantine) {
+        connect(eglantine, &QAction::triggered, this,
+                [this, program_id]() { emit LinkToEglantineRequested(program_id); });
+    }
 };
 
 void GameList::AddCustomDirPopup(QMenu& context_menu, QModelIndex selected) {
@@ -831,27 +835,28 @@ void GameList::ApplyArtworkToModel(u64 program_id, const QByteArray& png,
                                 fmt::format("{:016X}.jpeg", target_base),
                             ec);
 
-    const auto visit_parent = [&](QStandardItem* parent) {
+    const auto visit_tree = [&](const auto& self, QStandardItem* parent) -> void {
         if (parent == nullptr) {
             return;
         }
         for (int r = 0; r < parent->rowCount(); ++r) {
             auto* child = parent->child(r, 0);
-            if (child == nullptr || child->type() != static_cast<int>(GameListItemType::Game)) {
+            if (child == nullptr) {
                 continue;
             }
-            const u64 row_tid = Common::ArtworkCache::BaseProgramId(
-                child->data(GameListItemPath::ProgramIdRole).toULongLong());
-            if (row_tid == target_base) {
-                static_cast<GameListItemPath*>(child)->ApplyArtwork(png, resolved_title);
+            if (child->type() == static_cast<int>(GameListItemType::Game)) {
+                const u64 row_tid = Common::ArtworkCache::BaseProgramId(
+                    child->data(GameListItemPath::ProgramIdRole).toULongLong());
+                if (row_tid == target_base) {
+                    static_cast<GameListItemPath*>(child)->ApplyArtwork(png, resolved_title);
+                }
+            }
+            if (child->rowCount() > 0) {
+                self(self, child);
             }
         }
     };
-    auto* root = item_model->invisibleRootItem();
-    visit_parent(root);
-    for (int i = 0; i < root->rowCount(); ++i) {
-        visit_parent(root->child(i, 0));
-    }
+    visit_tree(visit_tree, item_model->invisibleRootItem());
     if (m_currentView && m_currentView->viewport()) {
         m_currentView->viewport()->update();
     }
@@ -859,53 +864,45 @@ void GameList::ApplyArtworkToModel(u64 program_id, const QByteArray& png,
 
 void GameList::AutoFetchMissingArtwork() {
     std::set<u64> queued;
-    const auto scan_parent = [&](QStandardItem* parent) {
-        if (parent == nullptr) {
+    const auto scan_tree = [&](const auto& self, QStandardItem* parent) -> void {
+        if (parent == nullptr || queued.size() >= 8) {
             return;
         }
         for (int r = 0; r < parent->rowCount(); ++r) {
-            auto* child = parent->child(r, 0);
-            if (child == nullptr || child->type() != static_cast<int>(GameListItemType::Game)) {
-                continue;
-            }
-            if (child->data(GameListItemPath::HasIconRole).toBool()) {
-                continue;
-            }
-            const u64 tid = Common::ArtworkCache::BaseProgramId(
-                child->data(GameListItemPath::ProgramIdRole).toULongLong());
-            if (tid == 0 || queued.contains(tid)) {
-                continue;
-            }
-            // Only auto-fetch for NUP containers or loose dumps missing embedded icons; never
-            // overwrite valid embedded icons or modify any .nup binary.
-            const QString file_type = child->data(GameListItemPath::FileTypeRole).toString();
-            const QString full_path = child->data(GameListItemPath::FullPathRole).toString();
-            const bool eligible =
-                file_type.compare(QStringLiteral("NUP"), Qt::CaseInsensitive) == 0 ||
-                QFileInfo(full_path).fileName() == QStringLiteral("main");
-            if (!eligible || !Common::ArtworkCache::ShouldAutoFetchArtwork(tid)) {
-                continue;
-            }
-            queued.insert(tid);
-            if (queued.size() > 8) {
+            if (queued.size() >= 8) {
                 return;
             }
-            QString query_title = child->data(GameListItemPath::TitleRole).toString();
-            if (query_title.isEmpty() || query_title == QStringLiteral(" ")) {
-                query_title = QFileInfo(full_path).completeBaseName();
+            auto* child = parent->child(r, 0);
+            if (child == nullptr) {
+                continue;
             }
-            IconSearch::FetchSilentAsync(
-                tid, query_title, this,
-                [this, tid](QByteArray png, QString resolved_title) {
-                    ApplyArtworkToModel(tid, png, resolved_title);
-                });
+            if (child->type() == static_cast<int>(GameListItemType::Game)) {
+                if (!child->data(GameListItemPath::HasIconRole).toBool()) {
+                    const u64 tid = Common::ArtworkCache::BaseProgramId(
+                        child->data(GameListItemPath::ProgramIdRole).toULongLong());
+                    if (tid != 0 && !queued.contains(tid) &&
+                        Common::ArtworkCache::ShouldAutoFetchArtwork(tid)) {
+                        queued.insert(tid);
+                        const QString full_path =
+                            child->data(GameListItemPath::FullPathRole).toString();
+                        QString query_title = child->data(GameListItemPath::TitleRole).toString();
+                        if (query_title.isEmpty() || query_title == QStringLiteral(" ")) {
+                            query_title = QFileInfo(full_path).completeBaseName();
+                        }
+                        IconSearch::FetchSilentAsync(
+                            tid, query_title, this,
+                            [this, tid](QByteArray png, QString resolved_title) {
+                                ApplyArtworkToModel(tid, png, resolved_title);
+                            });
+                    }
+                }
+            }
+            if (child->rowCount() > 0) {
+                self(self, child);
+            }
         }
     };
-    auto* root = item_model->invisibleRootItem();
-    scan_parent(root);
-    for (int i = 0; i < root->rowCount(); ++i) {
-        scan_parent(root->child(i, 0));
-    }
+    scan_tree(scan_tree, item_model->invisibleRootItem());
 }
 
 void GameList::RefreshGameArtwork(u64 program_id, const std::string& path) {
@@ -926,25 +923,30 @@ void GameList::RefreshGameArtwork(u64 program_id, const std::string& path) {
     }
     manual_icon_program_id = program_id;
 
-    // Look up the current display title from the model if non-empty; otherwise clean filename.
+    // Look up the current display title recursively from the model; otherwise clean filename.
     QString query;
     const u64 target_base = Common::ArtworkCache::BaseProgramId(program_id);
-    auto* root = item_model->invisibleRootItem();
-    for (int i = 0; i < root->rowCount() && query.isEmpty(); ++i) {
-        auto* parent = root->child(i, 0);
-        if (!parent) {
-            continue;
+    const auto find_title = [&](const auto& self, QStandardItem* parent) -> void {
+        if (parent == nullptr || !query.isEmpty()) {
+            return;
         }
-        for (int r = 0; r < parent->rowCount(); ++r) {
+        for (int r = 0; r < parent->rowCount() && query.isEmpty(); ++r) {
             auto* child = parent->child(r, 0);
-            if (child && child->type() == static_cast<int>(GameListItemType::Game) &&
+            if (child == nullptr) {
+                continue;
+            }
+            if (child->type() == static_cast<int>(GameListItemType::Game) &&
                 Common::ArtworkCache::BaseProgramId(
                     child->data(GameListItemPath::ProgramIdRole).toULongLong()) == target_base) {
                 query = child->data(GameListItemPath::TitleRole).toString().trimmed();
-                break;
+                return;
+            }
+            if (child->rowCount() > 0) {
+                self(self, child);
             }
         }
-    }
+    };
+    find_title(find_title, item_model->invisibleRootItem());
     if (query.isEmpty()) {
         query = QFileInfo(QString::fromStdString(path)).completeBaseName();
     }

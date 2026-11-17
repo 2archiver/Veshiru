@@ -60,6 +60,7 @@
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_base.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
+#include "veshiru/nx2_switches.h"
 #include "veshiru_cmd/emu_window/emu_window_sdl3.h"
 #ifdef HAS_OPENGL
 #include "veshiru_cmd/emu_window/emu_window_sdl3_gl.h"
@@ -510,6 +511,8 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
     SdlState* state = new SdlState();
     *appstate = state;
+
+    LoadNx2Switches(argc > 0 ? argv[0] : nullptr);
 
     Common::Log::Initialize();
     Common::Log::SetColorConsoleBackendEnabled(true);

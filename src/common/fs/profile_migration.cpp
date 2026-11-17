@@ -130,7 +130,14 @@ std::vector<Root> Validate(const Plan& plan) {
         if (root.source.empty() || root.destination.empty()) {
             throw std::runtime_error("Migration paths cannot be empty");
         }
-        CheckTree(root.source);
+        if (plan.strategy == Strategy::Link) {
+            if (Common::FS::IsSymlink(root.source) || !fs::is_directory(root.source)) {
+                throw std::runtime_error("Migration source must be a real directory: " +
+                                         root.source.string());
+            }
+        } else {
+            CheckTree(root.source);
+        }
         const auto destination = Absolute(root.destination);
         Root normalized{fs::weakly_canonical(Absolute(root.source)),
                         fs::weakly_canonical(destination.parent_path()) / destination.filename()};

@@ -363,6 +363,20 @@ TEST_CASE("Link never invokes source-mutating preparation", "[profile_migration]
     CHECK(GetState(f.state) == State::Complete);
 }
 
+TEST_CASE("Link allows existing interior directory links inside the source profile",
+          "[profile_migration]") {
+    Fixture f;
+    Write(f.source / "save", "legacy");
+    fs::create_directories(f.base / "external_save");
+    Write(f.base / "external_save/slot0", "linked data");
+    REQUIRE(Common::FS::CreateSymlink(f.base / "external_save", f.source / "linked_game"));
+    RunImport(f.MakePlan(Strategy::Link));
+    CHECK(Common::FS::IsSymlink(f.destination));
+    CHECK(Read(f.destination / "save") == "legacy");
+    CHECK(Read(f.destination / "linked_game/slot0") == "linked data");
+    CHECK(GetState(f.state) == State::Complete);
+}
+
 TEST_CASE("Failed preparation keeps both originals and offers recovery", "[profile_migration]") {
     Fixture f;
     Write(f.source / "save", "legacy");

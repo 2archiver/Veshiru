@@ -3,11 +3,17 @@
 
 #include "eglantine_dialog.h"
 
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include <QApplication>
 #include <QCryptographicHash>
@@ -17,6 +23,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
@@ -36,6 +43,91 @@ namespace EglantineLink {
 
 namespace {
 const fs::path kSaveSuffix = fs::path{"nand"} / "user" / "save" / "0000000000000000";
+const fs::path kProfilesDatSuffix =
+    fs::path{"nand"} / "system" / "save" / "8000000000000010" / "su" / "avators" / "profiles.dat";
+
+QString PathToQString(const fs::path& path) {
+    return QString::fromStdString(Common::FS::PathToUTF8String(path));
+}
+
+fs::path QStringToPath(const QString& text) {
+#ifdef _WIN32
+    return fs::path{text.toStdWString()};
+#else
+    return fs::path{text.toStdString()};
+#endif
+}
+
+bool IsValidUserIdDirName(const std::string& name) {
+    if (name.size() != 32) {
+        return false;
+    }
+    bool any_nonzero = false;
+    for (unsigned char ch : name) {
+        if (!std::isxdigit(ch)) {
+            return false;
+        }
+        if (ch != '0') {
+            any_nonzero = true;
+        }
+    }
+    return any_nonzero;
+}
+
+std::string NormalizeUpperHex(std::string s) {
+    std::ranges::transform(s, s.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::toupper(ch));
+    });
+    return s;
+}
+
+struct EglantineProfileEntry {
+    std::string user_id;
+    std::string username;
+    bool has_title_save{};
+};
+
+// Parses Eglantine's Account profiles.dat (0x10-byte header + 8 * 0xC8 UserRaw entries).
+std::vector<EglantineProfileEntry> ReadEglantineProfilesDat(const fs::path& root) {
+    constexpr std::size_t kHeaderBytes = 0x10;
+    constexpr std::size_t kUserStride = 0xC8;
+    constexpr std::size_t kMaxUsers = 8;
+    constexpr std::size_t kUsernameOffset = 0x28; // uuid (0x10) + uuid2 (0x10) + timestamp (0x08)
+    constexpr std::size_t kUsernameBytes = 0x20;
+
+    std::vector<EglantineProfileEntry> entries;
+    std::ifstream file(root / kProfilesDatSuffix, std::ios::binary);
+    if (!file) {
+        return entries;
+    }
+    std::array<u8, kHeaderBytes + kUserStride * kMaxUsers> buf{};
+    file.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
+    if (static_cast<std::size_t>(file.gcount()) < buf.size()) {
+        return entries;
+    }
+
+    for (std::size_t slot = 0; slot < kMaxUsers; ++slot) {
+        const u8* user = buf.data() + kHeaderBytes + slot * kUserStride;
+        u64 lo = 0;
+        u64 hi = 0;
+        std::memcpy(&lo, user, sizeof(u64));
+        std::memcpy(&hi, user + sizeof(u64), sizeof(u64));
+        if (lo == 0 && hi == 0) {
+            continue;
+        }
+        const std::string id = fmt::format("{:016X}{:016X}", hi, lo);
+        const char* raw_name = reinterpret_cast<const char*>(user + kUsernameOffset);
+        std::size_t name_len = 0;
+        while (name_len < kUsernameBytes && raw_name[name_len] != '\0') {
+            ++name_len;
+        }
+        entries.push_back(EglantineProfileEntry{
+            .user_id = id,
+            .username = std::string(raw_name, name_len),
+        });
+    }
+    return entries;
+}
 
 bool LooksLikeEglantineRoot(const fs::path& root) {
     std::error_code ec;
@@ -65,8 +157,8 @@ std::filesystem::path ResolveEglantineRoot(QWidget* parent) {
         QObject::tr("Could not find an Eglantine installation.\n\nVeshiru looked for the "
                     "following folders:\n\t%1\n\t%2\n\nIf you use Eglantine in portable mode, "
                     "would you like to select its folder manually?")
-            .arg(QString::fromStdString(GetLegacyPath(EglantineDir).string()),
-                 QString::fromStdString(GetLegacyPath(LegacyEdenDir).string())),
+            .arg(PathToQString(GetLegacyPath(EglantineDir)),
+                 PathToQString(GetLegacyPath(LegacyEdenDir))),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer != QMessageBox::Yes) {
         QMessageBox::information(
@@ -82,7 +174,7 @@ std::filesystem::path ResolveEglantineRoot(QWidget* parent) {
         return {};
     }
 
-    const fs::path picked{selected.toStdString()};
+    const fs::path picked = QStringToPath(selected);
     // Accept the picked folder itself, or its "eglantine"/"eden" children (the picked folder may
     // be the parent of a portable profile).
     for (const fs::path& candidate :
@@ -96,8 +188,105 @@ std::filesystem::path ResolveEglantineRoot(QWidget* parent) {
         parent, QObject::tr("Not a valid Eglantine folder"),
         QObject::tr("The folder you selected does not contain an Eglantine NAND layout.\n\n"
                     "Expected to find:\n\t%1")
-            .arg(QString::fromStdString((picked / kSaveSuffix).string())));
+            .arg(PathToQString(picked / kSaveSuffix)));
     return {};
+}
+
+std::string ResolveEglantineUserId(const std::filesystem::path& eglantine_root,
+                                   const std::string& veshiru_user_id, u64 program_id,
+                                   QWidget* parent) {
+    const fs::path save_root = eglantine_root / kSaveSuffix;
+    const std::string hex_program = fmt::format("{:016X}", program_id);
+    std::error_code ec;
+
+    // 1. Exact UUID match already exists in Eglantine (e.g. migrated profile).
+    if (!veshiru_user_id.empty() && fs::is_directory(save_root / veshiru_user_id, ec)) {
+        return veshiru_user_id;
+    }
+
+    // 2. Gather Eglantine profiles from profiles.dat and existing save user directories.
+    std::vector<EglantineProfileEntry> candidates = ReadEglantineProfilesDat(eglantine_root);
+    auto find_candidate = [&](const std::string& id) {
+        const std::string upper = NormalizeUpperHex(id);
+        return std::ranges::find_if(candidates, [&](const EglantineProfileEntry& e) {
+            return NormalizeUpperHex(e.user_id) == upper;
+        });
+    };
+
+    if (fs::is_directory(save_root, ec)) {
+        for (const auto& entry : fs::directory_iterator(save_root, ec)) {
+            if (!entry.is_directory(ec)) {
+                continue;
+            }
+            const std::string dir_name = Common::FS::PathToUTF8String(entry.path().filename());
+            if (!IsValidUserIdDirName(dir_name)) {
+                continue;
+            }
+            if (auto it = find_candidate(dir_name); it != candidates.end()) {
+                // Prefer the exact directory casing found on disk.
+                it->user_id = dir_name;
+            } else {
+                candidates.push_back(EglantineProfileEntry{.user_id = dir_name});
+            }
+        }
+    }
+
+    // Mark which Eglantine profiles already have save data for this title.
+    std::vector<std::size_t> with_save;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        const fs::path title_dir = save_root / candidates[i].user_id / hex_program;
+        if (fs::is_directory(title_dir, ec) || Common::FS::IsSymlink(title_dir)) {
+            candidates[i].has_title_save = true;
+            with_save.push_back(i);
+        }
+    }
+
+    // 3. Unambiguous automatic selection: single profile owning this title's save, or single
+    //    Eglantine user profile overall.
+    if (with_save.size() == 1) {
+        return candidates[with_save[0]].user_id;
+    }
+    if (candidates.size() == 1) {
+        return candidates[0].user_id;
+    }
+    if (candidates.empty()) {
+        return veshiru_user_id;
+    }
+
+    // 4. Multiple Eglantine profiles exist and none matches Veshiru's UUID directly: let the user
+    //    choose which Eglantine profile to link.
+    QStringList labels;
+    labels.reserve(static_cast<int>(candidates.size()));
+    int default_index = 0;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        const auto& c = candidates[i];
+        QString label = c.username.empty()
+                            ? QString::fromStdString(c.user_id)
+                            : QStringLiteral("%1 (%2)").arg(QString::fromUtf8(c.username),
+                                                            QString::fromStdString(c.user_id));
+        if (c.has_title_save) {
+            label += QObject::tr(" [has save]");
+            if (default_index == 0) {
+                default_index = static_cast<int>(i);
+            }
+        }
+        labels.push_back(label);
+    }
+
+    bool ok = false;
+    const QString chosen = QInputDialog::getItem(
+        parent, QObject::tr("Select Eglantine User Profile"),
+        QObject::tr("Multiple Eglantine user profiles were found with different UUIDs from your "
+                    "Veshiru profile.\nChoose which Eglantine profile to link for this title:"),
+        labels, default_index, false, &ok);
+    if (!ok) {
+        return {};
+    }
+    const int idx = labels.indexOf(chosen);
+    if (idx < 0 || static_cast<std::size_t>(idx) >= candidates.size()) {
+        return {};
+    }
+    return candidates[static_cast<std::size_t>(idx)].user_id;
 }
 
 std::filesystem::path GetSaveDir(const std::filesystem::path& root, const std::string& user_id,
@@ -120,14 +309,30 @@ struct FileDigest {
     bool operator==(const FileDigest&) const = default;
 };
 
+fs::path AppendSiblingSuffix(const fs::path& dir, const std::string& suffix) {
+    fs::path result = dir.has_filename() ? dir : dir.parent_path();
+    result += suffix;
+    return result;
+}
+
+std::string PathToUtf8(const fs::path& path) {
+    return Common::FS::PathToUTF8String(path);
+}
+
+QString PathToDisplayQString(const fs::path& path) {
+    return QString::fromStdString(PathToUtf8(path));
+}
+
 QByteArray HashFileSha256(const fs::path& path) {
-    QFile file(QString::fromStdString(Common::FS::PathToUTF8String(path)));
+    QFile file(PathToDisplayQString(path));
     if (!file.open(QIODevice::ReadOnly)) {
-        throw std::runtime_error("Could not open " + path.string() + " for checksum verification");
+        throw std::runtime_error("Could not open " + PathToUtf8(path) +
+                                 " for checksum verification");
     }
     QCryptographicHash hash(QCryptographicHash::Sha256);
     if (!hash.addData(&file)) {
-        throw std::runtime_error("Could not read " + path.string() + " for checksum verification");
+        throw std::runtime_error("Could not read " + PathToUtf8(path) +
+                                 " for checksum verification");
     }
     return hash.result();
 }
@@ -141,24 +346,26 @@ std::map<std::string, FileDigest> ListTree(const fs::path& root) {
         if (Common::FS::IsSymlink(it->path()) ||
             (type != fs::file_type::directory && type != fs::file_type::regular)) {
             throw std::runtime_error("Save data contains a link or special file: " +
-                                     it->path().string());
+                                     PathToUtf8(it->path()));
         }
         if (type != fs::file_type::regular) {
             continue;
         }
         const auto size = it->file_size(ec);
         if (ec) {
-            throw std::runtime_error("Could not stat " + it->path().string() + ": " +
+            throw std::runtime_error("Could not stat " + PathToUtf8(it->path()) + ": " +
                                      ec.message());
         }
         auto rel = fs::relative(it->path(), root, ec);
         if (ec) {
-            throw std::runtime_error("Could not relativize " + it->path().string());
+            throw std::runtime_error("Could not relativize " + PathToUtf8(it->path()));
         }
-        result.emplace(rel.generic_string(), FileDigest{size, HashFileSha256(it->path())});
+        const auto rel_u8 = rel.generic_u8string();
+        std::string rel_key(reinterpret_cast<const char*>(rel_u8.data()), rel_u8.size());
+        result.emplace(std::move(rel_key), FileDigest{size, HashFileSha256(it->path())});
     }
     if (ec) {
-        throw std::runtime_error("Could not scan " + root.string() + ": " + ec.message());
+        throw std::runtime_error("Could not scan " + PathToUtf8(root) + ": " + ec.message());
     }
     return result;
 }
@@ -175,7 +382,7 @@ fs::path BackupDirectory(const fs::path& dir) {
         std::error_code ec;
         fs::remove(dir, ec);
         if (ec) {
-            throw std::runtime_error("Could not remove the linked directory " + dir.string() +
+            throw std::runtime_error("Could not remove the linked directory " + PathToUtf8(dir) +
                                      ": " + ec.message());
         }
         return {};
@@ -183,13 +390,12 @@ fs::path BackupDirectory(const fs::path& dir) {
     if (!fs::is_directory(dir)) {
         return {};
     }
-    const fs::path backup = dir.parent_path() /
-                            (dir.filename().string() + ".veshiru-backup-" + Timestamp().toStdString());
+    const fs::path backup = AppendSiblingSuffix(dir, ".veshiru-backup-" + Timestamp().toStdString());
     std::error_code ec;
     fs::rename(dir, backup, ec);
     if (ec) {
         throw std::runtime_error("Could not move the existing save directory aside to " +
-                                 backup.string() + ": " + ec.message());
+                                 PathToUtf8(backup) + ": " + ec.message());
     }
     return backup;
 }
@@ -202,8 +408,7 @@ void VerifiedCopy(const fs::path& src, const fs::path& dst) {
     const auto before = ListTree(src);
 
     // Stage into a sibling temporary directory so dst is never half-written.
-    const fs::path staging =
-        dst.parent_path() / (dst.filename().string() + ".veilink-tmp-" + Timestamp().toStdString());
+    const fs::path staging = AppendSiblingSuffix(dst, ".veilink-tmp-" + Timestamp().toStdString());
     std::error_code ec;
     fs::remove_all(staging, ec);
 
@@ -218,8 +423,8 @@ void VerifiedCopy(const fs::path& src, const fs::path& dst) {
         fs::rename(staging, dst, ec);
         if (ec) {
             throw std::runtime_error("Could not move the verified save copy into place at " +
-                                     dst.string() + ": " + ec.message() +
-                                     ". A complete copy is staged at: " + staging.string());
+                                     PathToUtf8(dst) + ": " + ec.message() +
+                                     ". A complete copy is staged at: " + PathToUtf8(staging));
         }
     } catch (...) {
         fs::remove_all(staging, ec);
@@ -248,7 +453,7 @@ bool HandleAlreadyLinked(const std::filesystem::path& veshiru_dir,
         parent, QObject::tr("Already Linked"),
         QObject::tr("This title is already linked to:\n\t%1\n\nWould you like to unlink it and "
                     "keep independent verified copies?")
-            .arg(QString::fromStdString(orig.string())),
+            .arg(PathToDisplayQString(orig)),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (answer != QMessageBox::Yes) {
         return true;
@@ -259,16 +464,14 @@ bool HandleAlreadyLinked(const std::filesystem::path& veshiru_dir,
             parent, QObject::tr("Failed to unlink"),
             QObject::tr("The linked save target directory does not exist:\n\t%1\n\nThe link at "
                         "%2 was kept untouched so you can inspect or repair the target path.")
-                .arg(QString::fromStdString(orig.string()),
-                     QString::fromStdString(linked.string())));
+                .arg(PathToDisplayQString(orig), PathToDisplayQString(linked)));
         return true;
     }
 
     // Stage and SHA-256-verify the copy BEFORE removing the link so a failed copy never leaves
     // the save path empty.
     const fs::path staged_unlink =
-        linked.parent_path() /
-        (linked.filename().string() + ".unlink-verified-" + Timestamp().toStdString());
+        AppendSiblingSuffix(linked, ".unlink-verified-" + Timestamp().toStdString());
     std::error_code cleanup_ec;
     fs::remove_all(staged_unlink, cleanup_ec);
     try {
@@ -279,7 +482,7 @@ bool HandleAlreadyLinked(const std::filesystem::path& veshiru_dir,
             parent, QObject::tr("Failed to copy save data"),
             QObject::tr("Could not stage a verified copy of the linked save data before "
                         "unlinking:\n\n%1\n\nThe existing link at %2 was left untouched.")
-                .arg(QString::fromUtf8(e.what()), QString::fromStdString(linked.string())));
+                .arg(QString::fromUtf8(e.what()), PathToDisplayQString(linked)));
         return true;
     }
 
@@ -291,7 +494,7 @@ bool HandleAlreadyLinked(const std::filesystem::path& veshiru_dir,
         fs::remove_all(staged_unlink, cleanup_ec);
         QMessageBox::critical(parent, QObject::tr("Failed to unlink"),
                               QObject::tr("Could not remove the link at:\n\t%1\n\n%2")
-                                  .arg(QString::fromStdString(linked.string()),
+                                  .arg(PathToDisplayQString(linked),
                                        QString::fromStdString(ec.message())));
         return true;
     }
@@ -304,9 +507,8 @@ bool HandleAlreadyLinked(const std::filesystem::path& veshiru_dir,
             parent, QObject::tr("Failed to finalize unlink"),
             QObject::tr("Could not move the verified copy into:\n\t%1\n\n%2\n\nA complete "
                         "verified copy remains at:\n\t%3")
-                .arg(QString::fromStdString(linked.string()),
-                     QString::fromStdString(ec.message()),
-                     QString::fromStdString(staged_unlink.string())));
+                .arg(PathToDisplayQString(linked), QString::fromStdString(ec.message()),
+                     PathToDisplayQString(staged_unlink)));
         return true;
     }
 
@@ -345,7 +547,7 @@ void EglantineDialog::FromVeshiru() {
     try {
         if (!fs::is_directory(m_veshiru)) {
             throw std::runtime_error(
-                "No Veshiru save data was found for this game at:\n\t" + m_veshiru.string() +
+                "No Veshiru save data was found for this game at:\n\t" + PathToUtf8(m_veshiru) +
                 "\n\nLaunch the game in Veshiru (or use \"From Eglantine\") first.");
         }
         if (!fs::is_directory(m_veshiru.parent_path())) {
@@ -357,14 +559,13 @@ void EglantineDialog::FromVeshiru() {
         const fs::path backup = ReplaceWithBackup(m_veshiru, m_eglantine);
         if (!backup.empty()) {
             backup_note = tr("The previous Eglantine save data was moved to:\n\t%1")
-                              .arg(QString::fromStdString(backup.string()));
+                              .arg(PathToDisplayQString(backup));
         }
 
         // 2. Move Veshiru's save aside and make it a junction to the Eglantine location, so
         //    both emulators reference the same files from now on.
-        const fs::path veshiru_backup = m_veshiru.parent_path() /
-                                        (m_veshiru.filename().string() + ".veshiru-backup-" +
-                                         Timestamp().toStdString());
+        const fs::path veshiru_backup =
+            AppendSiblingSuffix(m_veshiru, ".veshiru-backup-" + Timestamp().toStdString());
         std::error_code ec;
         fs::rename(m_veshiru, veshiru_backup, ec);
         if (ec) {
@@ -378,23 +579,25 @@ void EglantineDialog::FromVeshiru() {
             if (restore_ec) {
                 throw std::runtime_error(
                     "Eglantine now holds a verified copy of the save data, but the link at:\n\t" +
-                    m_veshiru.string() +
+                    PathToUtf8(m_veshiru) +
                     "\ncould not be created, and Veshiru's save folder could not be moved back. "
-                    "Your save data is at:\n\t" + veshiru_backup.string());
+                    "Your save data is at:\n\t" +
+                    PathToUtf8(veshiru_backup));
             }
             throw std::runtime_error(
                 "Eglantine now holds a verified copy of the save data, but the link at:\n\t" +
-                m_veshiru.string() +
+                PathToUtf8(m_veshiru) +
                 "\ncould not be created. Veshiru's save folder was restored; both emulators "
                 "now have independent, identical copies of the save.");
         }
         fs::remove_all(veshiru_backup, ec);
         if (ec) {
-            LOG_WARNING(Common_Filesystem, "Could not delete the temporary backup {}", veshiru_backup.string());
+            LOG_WARNING(Common_Filesystem, "Could not delete the temporary backup {}",
+                        PathToUtf8(veshiru_backup));
         }
 
         LOG_INFO(Common_Filesystem, "Save data for title transferred Veshiru -> Eglantine: {}",
-                 m_veshiru.string());
+                 PathToUtf8(m_veshiru));
     } catch (const std::exception& e) {
         LOG_ERROR(Common_Filesystem, "Save transfer Veshiru -> Eglantine failed: {}", e.what());
         QApplication::restoreOverrideCursor();
@@ -420,7 +623,7 @@ void EglantineDialog::FromEglantine() {
     try {
         if (!fs::is_directory(m_eglantine)) {
             throw std::runtime_error(
-                "No Eglantine save data was found for this game at:\n\t" + m_eglantine.string() +
+                "No Eglantine save data was found for this game at:\n\t" + PathToUtf8(m_eglantine) +
                 "\n\nLaunch the game in Eglantine (or use \"From Veshiru\") first.");
         }
 
@@ -438,13 +641,13 @@ void EglantineDialog::FromEglantine() {
                 fs::rename(backup, m_veshiru, ec);
             }
             throw std::runtime_error(
-                "The link at:\n\t" + m_veshiru.string() +
+                "The link at:\n\t" + PathToUtf8(m_veshiru) +
                 "\ncould not be created. Eglantine's save data was not modified, and Veshiru's "
                 "save folder was restored.");
         }
 
         LOG_INFO(Common_Filesystem, "Save data for title transferred Eglantine -> Veshiru: {}",
-                 m_eglantine.string());
+                 PathToUtf8(m_eglantine));
     } catch (const std::exception& e) {
         LOG_ERROR(Common_Filesystem, "Save transfer Eglantine -> Veshiru failed: {}", e.what());
         QApplication::restoreOverrideCursor();
@@ -459,7 +662,7 @@ void EglantineDialog::FromEglantine() {
                          "same save files.");
     if (!backup.empty()) {
         message += tr("\n\nThe previous Veshiru save data was moved to:\n\t%1")
-                       .arg(QString::fromStdString(backup.string()));
+                       .arg(PathToDisplayQString(backup));
     }
     QMessageBox::information(this, tr("Save data linked"), message);
     accept();
