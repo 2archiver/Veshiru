@@ -272,8 +272,9 @@ void Fsr3FrameGen::CreatePipelines(const Device& device) {
         .layout = *m_interp_pipe_layout,
     });
 
-    m_flow_desc_sets =
-        CreateWrappedDescriptorSets(m_desc_pool, {*m_flow_desc_layout, *m_flow_desc_layout});
+    const std::array<VkDescriptorSetLayout, 2> flow_layouts{*m_flow_desc_layout,
+                                                            *m_flow_desc_layout};
+    m_flow_desc_sets = CreateWrappedDescriptorSets(m_desc_pool, flow_layouts);
 }
 
 void Fsr3FrameGen::Process(const Device& device, Scheduler& scheduler, VkImage current_frame,
