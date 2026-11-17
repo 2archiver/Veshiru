@@ -183,7 +183,7 @@ TEST_CASE("GpuSplit Stop resets synchronization state cleanly across restarts",
         Settings::values.renderer_backend.SetValue(prev_backend);
     };
 
-    Settings::values.current_gpu_accuracy = Settings::GpuAccuracy::Normal;
+    Settings::values.current_gpu_accuracy = Settings::GpuAccuracy::Low;
     Settings::values.dma_accuracy.SetValue(Settings::DmaAccuracy::Default);
     Settings::values.renderer_backend.SetValue(Settings::RendererBackend::Vulkan);
 
