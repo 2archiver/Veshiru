@@ -13,7 +13,7 @@ packages only; Linux and macOS artifacts are not produced.
 | Workflow | File | Triggers | Purpose |
 | --- | --- | --- | --- |
 | `build-check` | `.github/workflows/build-check.yml` | Pull requests & pushes to `main`, manual dispatch | Compiles `veshiru`, `veshiru-cmd` and `tests` with LLVM 22 `clang-cl` (`-DENABLE_WERROR=ON`) and runs the CTest suite + `tools/nx2` checks (skipped automatically for docs-only PRs). |
-| `release-binaries` | `.github/workflows/release-binaries.yml` | Manual dispatch from `main` only | Builds ThinLTO (`windows-x86_64`) and ThinLTO + PGO (`windows-x86_64-pgo`) archives, writes `SHA256SUMS.txt`, and publishes a manually tagged `vX.Y.Z` stable release after both builds succeed. |
+| `release-binaries` | `.github/workflows/release-binaries.yml` | Manual dispatch; publishing from `main` only | Builds ThinLTO (`windows-x86_64`) and ThinLTO + PGO (`windows-x86_64-pgo`) archives, checks both console executables and their version, and uploads verified archives with `SHA256SUMS.txt`. Publishes only when explicitly selected. |
 
 Every job declares an explicit `timeout-minutes` budget and least-privilege `permissions:` (`contents: read` on build/test jobs; `contents: write` only on tag/release jobs), and checks out repository code with `persist-credentials: false`.
 
@@ -29,10 +29,11 @@ All external toolchain and dependency downloads in CI are cryptographically veri
 
 ## Version, tags and updater rules
 
-`VERSION` at the repository root is the single source of truth for the semantic version (currently `1.3.0`) and must contain one stable `X.Y.Z` line for a release.
+`VERSION` at the repository root is the single source of truth for the semantic version and must contain one stable `X.Y.Z` line for a release.
 
 - **No automatic releases** are published on pushes or on a schedule. Build checks continue to run on pull requests and pushes to `main`.
-- **Stable tagged releases** are dispatched manually via **Actions -> `release-binaries` -> Run workflow** on `main` with `release_tag` set to `vX.Y.Z` matching `VERSION` (for example `v1.3.0`). A non-empty changelog section and two successful Windows builds are required before the tag and release are created. Both the tag and `-DVESHIRU_BUILD_TAG` receive `vX.Y.Z`, `GenerateSCMRev.cmake` marks `IS_DEV_BUILD` as `false` (even on local tagged checkouts where `VESHIRU_BUILD_TAG` is omitted), and the release body is extracted from `## [X.Y.Z]` in `CHANGELOG.md`.
+- **Package validation**: dispatch `release-binaries` from the candidate branch with `release_tag` set to `vX.Y.Z` matching `VERSION` and leave `publish_release` off. The Actions artifact `veshiru-package-vX.Y.Z-<commit>` includes the two updater-compatible archive names and `SHA256SUMS.txt`. No tag or release is created.
+- **Stable tagged releases**: dispatch the same workflow from `main` with `publish_release` on only after validation and approval. Both the tag and `-DVESHIRU_BUILD_TAG` receive `vX.Y.Z`, `GenerateSCMRev.cmake` marks `IS_DEV_BUILD` as `false` (even on local tagged checkouts where `VESHIRU_BUILD_TAG` is omitted), and the release body is extracted from `## [X.Y.Z]` in `CHANGELOG.md`.
 - **Update eligibility (`UpdateChecker::SelectUpdate`)**:
   - Installed `vX.Y.Z` stable builds are offered newer `vX.Y.Z` stable releases.
   - Installed `build-N` pre-release builds are offered newer `build-M` pre-releases (`M > N`) **and** newer `vX.Y.Z` stable releases so preview users transition onto stable releases automatically.

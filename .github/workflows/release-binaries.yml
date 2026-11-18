@@ -11,6 +11,10 @@ on:
         description: Release title (defaults to Veshiru followed by the tag)
         type: string
         required: false
+      publish_release:
+        description: Create the stable tag and publish from main (off for package validation)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -20,9 +24,9 @@ permissions:
 # multi-game MSVC-ABI profile written by LLVM 22 clang-cl across Switch 1 and Switch 2 workloads;
 # it is committed under the source tree, where the configure step reads it.
 
-# Only one release may publish at a time; do not cancel an in-flight release.
+# Only one release may publish at a time. Validation runs never queue behind a publish.
 concurrency:
-  group: release-binaries-stable
+  group: ${{ inputs.publish_release && 'release-binaries-stable' || format('release-binaries-validate-{0}', github.ref) }}
   cancel-in-progress: false
 
 jobs:
@@ -42,15 +46,19 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "Releases must be dispatched from main" >&2; exit 1; }
+          if [[ "$PUBLISH_RELEASE" == true && "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "Publishing requires main; dispatch with publish_release=false to validate a branch" >&2
+            exit 1
+          fi
           version=$(tr -d '[:space:]' < VERSION)
           [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "VERSION must be a stable X.Y.Z" >&2; exit 1; }
           [[ "$RELEASE_TAG" == "v$version" ]] || { echo "release_tag must match VERSION (v$version)" >&2; exit 1; }
           section=$(bash tools/ci/changelog-section.sh "$version")
           [[ -n "$(tr -d '[:space:]' <<< "$section")" ]] || { echo "Missing changelog for $version" >&2; exit 1; }
-          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+          if [[ "$PUBLISH_RELEASE" == true ]] && git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
             [[ "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" == "$GITHUB_SHA" ]] || { echo "Tag already points to a different commit" >&2; exit 1; }
           fi
 
@@ -240,6 +248,29 @@ jobs:
           }
           windeployqt --release --dir build/release/bin --libdir build/release/bin --plugindir build/release/bin/plugins --no-compiler-runtime --no-opengl-sw --no-system-d3d-compiler --no-translations build/release/bin/veshiru.exe
 
+      - name: Verify packaged console executables and version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $version = [regex]::Escape("Veshiru $env:RELEASE_TAG (")
+          Push-Location build/release/bin
+          try {
+            foreach ($exe in 'veshiru.exe', 'veshiru-cmd.exe') {
+              $headers = & "$env:LLVM_ROOT/bin/llvm-readobj.exe" --file-headers "./$exe"
+              if ($LASTEXITCODE -ne 0 -or ($headers -join "`n") -notmatch 'IMAGE_SUBSYSTEM_WINDOWS_CUI') {
+                throw "$exe is not a console-subsystem executable"
+              }
+              $output = & "./$exe" --version
+              if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch $version) {
+                throw "$exe --version did not report $env:RELEASE_TAG (exit ${LASTEXITCODE}): $output"
+              }
+              Write-Host "$exe reports $env:RELEASE_TAG"
+            }
+          } finally {
+            Pop-Location
+          }
+
       - name: Include licenses and model notices
         shell: pwsh
         run: |
@@ -256,21 +287,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Publish a stable release only after both Windows builds succeed.
-  release:
-    name: Publish release
+  package:
+    name: Verify release archives
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
     steps:
-      - name: Check out source
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Download binaries
         uses: actions/download-artifact@v7
         with:
@@ -296,8 +320,40 @@ jobs:
           # The in-app update checker builds its asset URL as veshiru-<platform>[-pgo].zip from the
           # platform string compiled into the binary, so the archives keep those names on stable
           # releases too; renaming them here would silently disable updates.
-          (cd release-dist && sha256sum -- *.zip > SHA256SUMS.txt)
-          ls -la release-dist
+          for name in veshiru-windows-x86_64 veshiru-windows-x86_64-pgo; do
+            unzip -tq "release-dist/$name.zip"
+          done
+          (cd release-dist && sha256sum -- *.zip > SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
+
+      - name: Upload verified archives
+        uses: actions/upload-artifact@v7
+        with:
+          name: veshiru-package-${{ inputs.release_tag }}-${{ github.sha }}
+          path: release-dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Dry runs stop at the verified archives. Only an explicit dispatch from main may publish.
+  release:
+    name: Publish release
+    needs: package
+    if: inputs.publish_release && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download verified archives
+        uses: actions/download-artifact@v7
+        with:
+          name: veshiru-package-${{ inputs.release_tag }}-${{ github.sha }}
+          path: release-dist
 
       - name: Create release
         shell: bash
