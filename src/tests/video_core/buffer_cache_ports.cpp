@@ -346,7 +346,10 @@ struct BufferCacheTestAccess {
     static void ComputeStorage(Cache& cache, BufferCacheChannelInfo& channel, u32 index,
                                Binding binding, bool written, bool native = false,
                                u32 write_mark = 0) {
-        UseChannel(cache, channel);
+        cache.channel_state = &channel;
+        cache.maxwell3d = &channel.maxwell3d;
+        cache.kepler_compute = &channel.kepler_compute;
+        cache.gpu_memory = &channel.gpu_memory;
         channel.enabled_compute_storage_buffers |= u64{1} << index;
         channel.written_compute_storage_buffers |= u64{written ? 1U : 0U} << index;
         channel.native_compute_storage_buffers |= u64{native ? 1U : 0U} << index;
@@ -383,7 +386,8 @@ struct BufferCacheTestAccess {
     static void GpuWrite(KeepCache& cache, BufferId id, DAddr address, u32 size) {
         cache.MarkWrittenBuffer(id, address, size);
     }
-    static void MarkWritten(Cache& cache, BufferId id, DAddr address, u32 size) {
+    template <class C>
+    static void MarkWritten(C& cache, BufferId id, DAddr address, u32 size) {
         cache.MarkWrittenBuffer(id, address, size);
     }
     static size_t ReadDownloads(Cache& cache) {
