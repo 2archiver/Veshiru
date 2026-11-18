@@ -13,6 +13,7 @@
 #include "common/settings.h"
 #include "video_core/frame_gen_choice.h"
 #include "video_core/renderer_vulkan/present/frame_gen.h"
+#include "video_core/renderer_vulkan/present/open_frame_gen_policy.h"
 #include "video_core/renderer_vulkan/present/util.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -254,60 +255,94 @@ FrameGen::FrameGen(MemoryAllocator& memory_allocator_, Scheduler& scheduler_)
 
 FrameGen::~FrameGen() = default;
 
-void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
+void FrameGen::Process(const Device& device, PresentManager& present, Frame* frame,
                        VkExtent2D guest_extent) {
+    using VideoCore::FrameGenState;
     generated = false;
-
-    const Settings::FrameGenType chosen = Settings::values.frame_gen_type.GetValue();
-    const Settings::FrameGenType type =
-        chosen == Settings::FrameGenType::NvidiaDlssG
-            ? VideoCore::ActiveFrameGenType(chosen, DlssgBlocked())
-            : chosen;
-    if (type == Settings::FrameGenType::Lsfg && !shaders) {
-        shaders.emplace(device);
-    }
-    unavailable = type == Settings::FrameGenType::Lsfg && !shaders->IsValid();
-
-    const bool nvidia_frame_gen = type == Settings::FrameGenType::NvidiaDlssG;
-    if (unavailable || !Settings::values.frame_gen.GetValue() || nvidia_frame_gen) {
-        if (!Settings::values.frame_gen.GetValue()) {
-            SetState(VideoCore::FrameGenState::Pending, format);
-        } else if (nvidia_frame_gen) {
-            SetState(VideoCore::FrameGenState::NvidiaFrameGen, format);
-        }
-        if (chain || fsr3_chain || open_fg_chain) {
-            scheduler.Finish();
-            chain.reset();
-            fsr3_chain.reset();
-            open_fg_chain.reset();
-        }
-        warm_streak = 0;
-        if (unavailable && Settings::values.frame_gen.GetValue()) {
-            SetState(shaders->IsDeviceSupported() ? VideoCore::FrameGenState::MissingLosslessDll
-                                                  : VideoCore::FrameGenState::UnsupportedGpu,
-                     format);
-        }
+    const VkFormat format = frame->image_format;
+    if (!Settings::values.frame_gen.GetValue()) {
+        ResetHistory();
+        blocked_config.reset();
+        SetState(FrameGenState::Pending, format);
         return;
     }
 
-    if (!frame->storage_view) {
-        SetState(VideoCore::FrameGenState::UnsupportedSurface, format);
-        warm_streak = 0;
+    const auto chosen = Settings::values.frame_gen_type.GetValue();
+    const auto type = chosen == Settings::FrameGenType::NvidiaDlssG
+                          ? VideoCore::ActiveFrameGenType(chosen, DlssgBlocked())
+                          : chosen;
+    if (type == Settings::FrameGenType::NvidiaDlssG) {
+        ResetHistory();
+        SetState(FrameGenState::NvidiaFrameGen, format);
         return;
     }
-    SetState(VideoCore::FrameGenState::Running, format);
+    const bool use_open_fg = type == Settings::FrameGenType::OpenFrameGen;
+    if (use_open_fg && frame->color_space != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+        ResetHistory();
+        SetState(FrameGenState::OpenFrameGenHdr, format);
+        return;
+    }
+    if (!use_open_fg && !frame->storage_view) {
+        ResetHistory();
+        SetState(FrameGenState::UnsupportedSurface, format);
+        return;
+    }
 
     peak_guest_extent.width = (std::max)(peak_guest_extent.width, guest_extent.width);
     peak_guest_extent.height = (std::max)(peak_guest_extent.height, guest_extent.height);
-
     const VkExtent2D extent{.width = frame->width, .height = frame->height};
-    const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, extent);
-    if ((!chain && !fsr3_chain && !open_fg_chain) || built_type != type ||
-        built_extent.width != extent.width || built_extent.height != extent.height ||
-        built_format != format || built_flow_scale != flow_scale) {
-        Rebuild(device, extent, format, flow_scale, type);
+    const Config config{extent.width, extent.height, format,
+                        ConfiguredFlowScale(peak_guest_extent, extent), type};
+    if (blocked_config == config) {
+        SetState(blocked_state, format);
+        return;
+    }
+    if (current_config != config) {
+        ResetHistory();
+        void(present.TakeBlockedTime());
+        blocked_config.reset();
+        if (use_open_fg) {
+            const auto physical = device.GetPhysical();
+            if (!CanRunOpenFrameGen(physical.GetFormatProperties3(format).optimalTilingFeatures,
+                                    physical.GetFormatProperties3(VK_FORMAT_R16G16B16A16_SFLOAT)
+                                        .optimalTilingFeatures,
+                                    device.IsFormatlessImageStoreSupported(),
+                                    physical.GetProperties().limits, extent)) {
+                blocked_config = config;
+                blocked_state = FrameGenState::OpenFrameGenUnsupported;
+                SetState(blocked_state, format);
+                return;
+            }
+        }
+        current_config = config;
+        try {
+            if (type == Settings::FrameGenType::Lsfg) {
+                if (!shaders) {
+                    shaders.emplace(device);
+                }
+                if (!shaders->IsValid()) {
+                    blocked_config = config;
+                    blocked_state = shaders->IsDeviceSupported() ? FrameGenState::MissingLosslessDll
+                                                                 : FrameGenState::UnsupportedGpu;
+                    ResetHistory();
+                    SetState(blocked_state, format);
+                    return;
+                }
+            }
+            Rebuild(device, config);
+        } catch (const vk::Exception& error) {
+            if (error.GetResult() == VK_ERROR_DEVICE_LOST) {
+                throw;
+            }
+            LOG_DEBUG(Render_Vulkan, "Could not build frame generation resources: {}",
+                      error.what());
+            ResourceFailed(format);
+            return;
+        }
     }
 
+    SetState(FrameGenState::Running, format);
+    PlanGenerations(present);
     const u64 count = frame_count++;
     last_count = count;
     last_generations = plan.generations;
@@ -317,7 +352,6 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
     const bool want_generate = warm && warm_streak >= LSFG_RECURRENCE_FRAMES && plan.generations > 0;
 
     const bool use_fsr3 = type == Settings::FrameGenType::Fsr3;
-    const bool use_open_fg = type == Settings::FrameGenType::OpenFrameGen;
     const bool capture_history = plan.warm;
     const bool compute_flow = want_generate;
 
@@ -332,9 +366,17 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
         if (capture_history || compute_flow) {
             scheduler.RequestOutsideRenderPassOperationContext();
         }
-        open_fg_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count,
-                               capture_history, compute_flow);
-        generated = want_generate && open_fg_chain->IsReady();
+        try {
+            open_fg_chain->Process(scheduler, *frame->image, count, capture_history, compute_flow);
+            generated = want_generate && open_fg_chain->IsReady();
+        } catch (const vk::Exception& error) {
+            if (error.GetResult() == VK_ERROR_DEVICE_LOST) {
+                throw;
+            }
+            LOG_DEBUG(Render_Vulkan, "Open-Frame-Gen could not prepare optical flow: {}",
+                      error.what());
+            ResourceFailed(format);
+        }
     } else if (chain) {
         generated = want_generate;
         scheduler.RequestOutsideRenderPassOperationContext();
@@ -354,9 +396,20 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
             dumped = true;
         }
     }
+}
 
-    generated_frames.fetch_add(GeneratedFrameCount(), std::memory_order_relaxed);
-    LogActivity();
+void FrameGen::CompleteFrame(size_t queued_generations) {
+    generated_frames.fetch_add(queued_generations, std::memory_order_relaxed);
+    if (state.load(std::memory_order_relaxed) == VideoCore::FrameGenState::Running) {
+        LogActivity(queued_generations);
+    }
+}
+
+void FrameGen::ResourceFailed(VkFormat format) {
+    blocked_config = current_config;
+    blocked_state = VideoCore::FrameGenState::ResourceFailure;
+    ResetHistory();
+    SetState(blocked_state, format);
 }
 
 void FrameGen::SetState(VideoCore::FrameGenState new_state, VkFormat format) {
@@ -395,6 +448,20 @@ void FrameGen::SetState(VideoCore::FrameGenState new_state, VkFormat format) {
                     "Frame generation is on but not running: LSFG needs Lossless.dll in the "
                     "lossless folder of the user directory. FSR3 needs nothing");
         break;
+    case VideoCore::FrameGenState::OpenFrameGenHdr:
+        LOG_INFO(Render_Vulkan,
+                 "Open-Frame-Gen is paused during HDR output; presenting game frames");
+        break;
+    case VideoCore::FrameGenState::OpenFrameGenUnsupported:
+        LOG_WARNING(Render_Vulkan,
+                    "Open-Frame-Gen is unavailable: unsupported Vulkan compute or "
+                    "storage image capabilities for {}; presenting game frames",
+                    string_VkFormat(format));
+        break;
+    case VideoCore::FrameGenState::ResourceFailure:
+        LOG_WARNING(Render_Vulkan, "Could not prepare frame generation resources; presenting game "
+                                   "frames. Toggle frame generation off and on to retry");
+        break;
     case VideoCore::FrameGenState::UnsupportedGpu:
         LOG_WARNING(Render_Vulkan,
                     "Frame generation is on but not running: this GPU lacks Vulkan features LSFG "
@@ -406,10 +473,10 @@ void FrameGen::SetState(VideoCore::FrameGenState new_state, VkFormat format) {
     activity = {};
 }
 
-void FrameGen::LogActivity() {
+void FrameGen::LogActivity(size_t queued_generations) {
     const auto now = std::chrono::steady_clock::now();
     ++activity.frames;
-    activity.generated += GeneratedFrameCount();
+    activity.generated += queued_generations;
     if (plan.hitch_skipped) {
         ++activity.hitch_skips;
     }
@@ -430,18 +497,18 @@ void FrameGen::LogActivity() {
         const f32 output_fps = game_fps + gen_fps;
         if (activity.generated == 0) {
             LOG_INFO(Render_Vulkan,
-                     "Frame generation ({}) idle: {:.1f} game FPS + 0.0 generated = {:.1f} output "
+                     "Frame generation ({}) idle: {:.1f} game FPS + 0.0 generated = {:.1f} queued "
                      "FPS (limit {}, {} hitch skips, {} display trims). It waits while the game is "
                      "below 10 FPS, after loading stalls, once the target is met, or while the "
                      "display takes no more presents",
-                     ModeText(built_type), game_fps, output_fps, pacer.CurrentLimit(),
+                     ModeText(current_config->type), game_fps, output_fps, pacer.CurrentLimit(),
                      activity.hitch_skips, activity.display_trims);
         } else {
             LOG_INFO(Render_Vulkan,
                      "Frame generation ({}) active: {:.1f} game FPS + {:.1f} generated = {:.1f} "
-                     "output FPS ({:.1f} per game frame, limit {}, {} hitch skips, {} display "
+                     "queued FPS ({:.1f} per game frame, limit {}, {} hitch skips, {} display "
                      "trims)",
-                     ModeText(built_type), game_fps, gen_fps, output_fps, per_frame,
+                     ModeText(current_config->type), game_fps, gen_fps, output_fps, per_frame,
                      pacer.CurrentLimit(), activity.hitch_skips, activity.display_trims);
         }
         activity.logged_per_frame = per_frame;
@@ -453,32 +520,27 @@ void FrameGen::LogActivity() {
     activity.display_trims = 0;
 }
 
-size_t FrameGen::WantedGenerations(size_t capacity, size_t free_frames,
-                                   std::chrono::steady_clock::duration blocked) {
-    if (unavailable) {
-        plan = {};
-        return 0;
-    }
-    plan = pacer.Plan(capacity, blocked);
-    const size_t without_waiting = GenerationsWithoutWaiting(plan.generations, free_frames);
+void FrameGen::PlanGenerations(PresentManager& present) {
+    plan = pacer.Plan(present.MaxExtraFrames(), present.TakeBlockedTime());
+    const size_t without_waiting =
+        GenerationsWithoutWaiting(plan.generations, present.FreeFrames());
     if (without_waiting < plan.generations) {
         ++activity.display_trims;
     }
     plan.generations = without_waiting;
-    return plan.generations;
 }
 
-size_t FrameGen::GeneratedFrameCount() const {
+size_t FrameGen::PlannedGenerations() const {
     return generated ? last_generations : 0;
 }
 
 void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t generation) {
-    const bool use_fsr3 = built_type == Settings::FrameGenType::Fsr3;
-    const bool use_open_fg = built_type == Settings::FrameGenType::OpenFrameGen;
+    const bool use_fsr3 = current_config->type == Settings::FrameGenType::Fsr3;
+    const bool use_open_fg = current_config->type == Settings::FrameGenType::OpenFrameGen;
 
     if (use_fsr3 && fsr3_chain) {
         const f32 blend = static_cast<f32>(generation + 1) / static_cast<f32>(last_generations + 1);
-        const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, built_extent);
+        const f32 flow_scale = current_config->scale;
 
         scheduler.RequestOutsideRenderPassOperationContext();
         fsr3_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
@@ -488,7 +550,7 @@ void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t gen
 
         scheduler.RequestOutsideRenderPassOperationContext();
         open_fg_chain->Generate(device, scheduler, *destination->image, *destination->storage_view,
-                                blend);
+                                destination->allocation_id, blend);
     } else if (chain) {
         chain->SetTarget(device, last_generations, generation, destination->index,
                          *destination->storage_view);
@@ -505,28 +567,33 @@ void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t gen
     }
 }
 
-void FrameGen::Rebuild(const Device& device, VkExtent2D extent, VkFormat format, f32 flow_scale,
-                       Settings::FrameGenType type) {
-    scheduler.Finish();
-    chain.reset();
-    fsr3_chain.reset();
-    open_fg_chain.reset();
-
-    built_flow_scale = flow_scale;
-    built_type = type;
-
-    if (built_type == Settings::FrameGenType::Fsr3) {
-        fsr3_chain.emplace(device, memory_allocator, extent, format, built_flow_scale);
-    } else if (built_type == Settings::FrameGenType::OpenFrameGen) {
-        open_fg_chain.emplace(device, memory_allocator, extent, format, built_flow_scale);
-    } else {
-        chain.emplace(device, memory_allocator, *shaders, extent, format, built_flow_scale);
+void FrameGen::ResetHistory() {
+    if (!current_config) {
+        return;
     }
-    built_extent = extent;
-    built_format = format;
+    if (chain || fsr3_chain || open_fg_chain) {
+        scheduler.Finish();
+        chain.reset();
+        fsr3_chain.reset();
+        open_fg_chain.reset();
+    }
+    current_config.reset();
+    pacer.Reset();
+    plan = {};
     frame_count = 0;
     warm_streak = 0;
     generated = false;
+}
+
+void FrameGen::Rebuild(const Device& device, const Config& config) {
+    const VkExtent2D extent{config.width, config.height};
+    if (config.type == Settings::FrameGenType::Fsr3) {
+        fsr3_chain.emplace(device, memory_allocator, extent, config.format, config.scale);
+    } else if (config.type == Settings::FrameGenType::OpenFrameGen) {
+        open_fg_chain.emplace(device, memory_allocator, extent, config.format, config.scale);
+    } else {
+        chain.emplace(device, memory_allocator, *shaders, extent, config.format, config.scale);
+    }
 }
 
 void FrameGen::DumpDebugImages(u64 count) {

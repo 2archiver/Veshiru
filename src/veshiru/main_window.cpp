@@ -5656,6 +5656,18 @@ void MainWindow::UpdateFrameGenButton() {
         unavailable = tr("This GPU can't write to the window's swapchain format from a shader, so "
                          "generated frames can't be presented.");
         break;
+    case VideoCore::FrameGenState::OpenFrameGenHdr:
+        unavailable =
+            tr("Open-Frame-Gen is paused during HDR output. Game frames are still shown.");
+        break;
+    case VideoCore::FrameGenState::OpenFrameGenUnsupported:
+        unavailable = tr("Open-Frame-Gen needs Vulkan compute and storage image support for the "
+                         "active output format. Game frames are still shown.");
+        break;
+    case VideoCore::FrameGenState::ResourceFailure:
+        unavailable = tr("Frame generation resources could not be prepared. Game frames are still "
+                         "shown. Toggle frame generation off and on to retry.");
+        break;
     case VideoCore::FrameGenState::MissingLosslessDll:
         unavailable = tr("LSFG needs Lossless.dll from Lossless Scaling in the \"lossless\" folder "
                          "of the user directory. It is missing or could not be loaded.");

@@ -33,6 +33,8 @@ struct Frame {
     u32 width;
     u32 height;
     u32 index;
+    // Unique within the manager, even when Vulkan recycles the old image/view handles.
+    u64 allocation_id{};
     // Requested presentation view format and underlying image format may differ for SDR.
     VkFormat format{VK_FORMAT_UNDEFINED};
     VkFormat image_format{VK_FORMAT_UNDEFINED};
@@ -72,12 +74,18 @@ public:
     /// Returns the last used presentation frame
     Frame* GetRenderFrame();
 
+    /// Optional generated work must not wait for a presentation fence.
+    [[nodiscard]] Frame* TryGetRenderFrame();
+
     /// The time GetRenderFrame calls waited for a frame since the last call of this (the
     /// present thread holding the renderer back).
     [[nodiscard]] std::chrono::steady_clock::duration TakeBlockedTime() {
         return std::chrono::steady_clock::duration{
             blocked_time.exchange(0, std::memory_order_relaxed)};
     }
+
+    /// Return a reserved frame for which no rendering or presentation has been submitted.
+    void RecycleUnsubmittedFrame(Frame* frame);
 
     /// Pushes a frame for presentation
     void Present(Frame* frame);
@@ -97,7 +105,7 @@ public:
     /// How many additional frames can be queued without stalling the render thread
     [[nodiscard]] size_t MaxExtraFrames() const;
 
-    /// Frames GetRenderFrame can take right now without waiting for the present thread.
+    /// Frames ready for reuse without waiting on the present thread or GPU.
     [[nodiscard]] size_t FreeFrames();
 
     [[nodiscard]] std::size_t SwapchainImageCount() const { return swapchain_image_count; }
@@ -169,6 +177,7 @@ private:
     /// See TakeBlockedTime. Atomic: a composite can also run from a syncpoint action on
     /// another thread (GPU::RequestComposite).
     std::atomic<std::chrono::steady_clock::rep> blocked_time{};
+    u64 next_allocation_id{1};
 };
 
 } // namespace Vulkan

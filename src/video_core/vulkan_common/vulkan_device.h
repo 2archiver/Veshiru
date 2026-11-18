@@ -621,6 +621,11 @@ FN_MAX_LIMIT_LIST
         return features.features.shaderStorageImageReadWithoutFormat;
     }
 
+    /// Returns true if formatless image stores are enabled on the device.
+    bool IsFormatlessImageStoreSupported() const {
+        return features.features.shaderStorageImageWriteWithoutFormat;
+    }
+
     /// Returns true if storage images of the extended formats (e.g. R16F, RG16F, R8) are supported.
     bool IsStorageImageExtendedFormatsSupported() const {
         return features.features.shaderStorageImageExtendedFormats;

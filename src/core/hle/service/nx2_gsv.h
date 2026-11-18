@@ -2242,7 +2242,7 @@ private:
     // present faster than that. Every slot is reported free here: hold each present until the
     // next vblank instead (title 4 ran at up to 160 fps, its timing and audio with it).
     Nx2PresentPacer m_present_pacer;
-    u32 m_swap_word{};
+    std::optional<u32> m_swap_word;
 
     Nx2FrameInterval::Controller m_frame_interval;
     std::optional<u32> m_game_frame_interval; ///< The game's value while Eden owns the interval
@@ -2507,10 +2507,16 @@ private:
             Tegra::g_nx2_guest_frame_interval_ns.store(0, std::memory_order_relaxed);
             return;
         }
-        if (timing != std::exchange(m_swap_word, timing)) {
+        const auto previous_word = std::exchange(m_swap_word, timing);
+        if (!previous_word) {
             LOG_INFO(Service,
-                     "nx2:vi2 present #{} swap interval {} at {} Hz, FPS limit {} (word 12 = {:#x})",
-                     m_presents, swap_interval, refresh_rate, fps_limit, timing);
+                     "nx2:vi2 pacing: swap interval {} at {} Hz, FPS limit {} (word 12 = {:#x})",
+                     swap_interval, refresh_rate, fps_limit, timing);
+        } else if (*previous_word != timing) {
+            LOG_DEBUG(
+                Service,
+                "nx2:vi2 present #{} swap interval {} at {} Hz, FPS limit {} (word 12 = {:#x})",
+                m_presents, swap_interval, refresh_rate, fps_limit, timing);
         }
         const auto vblank_interval =
             timer_paced ? std::chrono::nanoseconds{0}
