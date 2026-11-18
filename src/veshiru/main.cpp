@@ -144,8 +144,10 @@ static QStringList FrontendArguments() {
 
 static void WriteStartupOutput(std::string_view text, bool to_stderr = false) noexcept {
     try {
+        using Common::Log::ConsoleColor;
         Common::Log::StandardStreamSink stream;
-        stream.Enqueue(std::string{text}, to_stderr, true);
+        stream.Enqueue(std::string{text}, to_stderr, true,
+                       to_stderr ? ConsoleColor::Error : ConsoleColor::Default);
     } catch (const std::exception&) {
         // Thread/allocation failure: do not block on a possibly unread inherited stream.
     }

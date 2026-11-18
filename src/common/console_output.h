@@ -11,15 +11,19 @@
 
 namespace Common::Log {
 
-/// Write UTF-8 to the inherited handle. No ANSI escapes are added, even for a console.
-void WriteStandardStream(std::string_view text, bool to_stderr = false) noexcept;
+enum class ConsoleColor { Default, Normal, Warning, Error };
+
+/// Write UTF-8 to the inherited handle. Color applies only to a Windows console, not redirects.
+void WriteStandardStream(std::string_view text, bool to_stderr = false,
+                         ConsoleColor color = ConsoleColor::Default) noexcept;
 
 /// Best-effort live output. A slow or unread redirect must not stall the file logger or teardown.
 class StandardStreamSink {
 public:
     StandardStreamSink();
     ~StandardStreamSink();
-    void Enqueue(std::string text, bool to_stderr, bool important = false);
+    void Enqueue(std::string text, bool to_stderr, bool important = false,
+                 ConsoleColor color = ConsoleColor::Default);
     void Flush(std::chrono::milliseconds timeout);
     void Close();
 
