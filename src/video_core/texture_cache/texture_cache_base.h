@@ -376,6 +376,9 @@ public:
     /// Mark images in a range as modified from the CPU
     void WriteMemory(DAddr cpu_addr, size_t size);
 
+    /// WriteMemory over every device range a GPU address range maps to
+    void WriteGpuMemory(GPUVAddr gpu_addr, size_t size);
+
     /// Download contents of host images to guest memory in a region
     void DownloadMemory(DAddr cpu_addr, size_t size);
 

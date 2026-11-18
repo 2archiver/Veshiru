@@ -699,12 +699,14 @@ std::vector<u32> EmitMeshEmulationDistribution(const Profile& profile) {
     module.AddLabel(merge);
 
     // The draw's blocks are allocated from the arena every draw of the submission shares. The
-    // passes of consecutive draws are ordered by barriers, so a plain read and write allocate.
+    // distribution passes of a render pass's draws run back to back without barriers between
+    // them (mesh-batch), so the allocation is an atomic add: a plain read and write let two
+    // draws take the same blocks and overwrite each other's triangles.
     // The counter keeps growing past the end, so the host sees how much the submission needed.
     const Id total{module.OpLoad(u32_type, total_var)};
-    const Id base{module.OpLoad(u32_type, word(counter, constant(0)))};
-    module.OpStore(word(counter, constant(0)),
-                   module.OpIAdd(u32_type, base, module.OpIMul(u32_type, total, block_words)));
+    const Id base{module.OpAtomicIAdd(u32_type, word(counter, constant(0)),
+                                      constant(static_cast<u32>(spv::Scope::Device)), constant(0),
+                                      module.OpIMul(u32_type, total, block_words))};
     const Id room{module.OpSelect(u32_type, module.OpULessThan(bool_type, base, capacity_words),
                                   module.OpISub(u32_type, capacity_words, base), constant(0))};
     const Id dispatched{module.OpUMin(

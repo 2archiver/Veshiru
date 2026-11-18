@@ -103,8 +103,18 @@ void BufferCache<P>::RunGarbageCollector(bool aggressive_gc) {
         // textures) with fixed headroom, so on an 8 GB GPU the collector ran every frame once a
         // title 1 course was loaded, and the downloads were ~2.7% of the GPU thread.
         const Buffer& buffer = slot_buffers[buffer_id];
-        if (!aggressive_gc && gpu_modified_ranges.Intersects(buffer.CpuAddr(), buffer.SizeBytes())) {
-            return false;
+        if (gpu_modified_ranges.Intersects(buffer.CpuAddr(), buffer.SizeBytes())) {
+            if (!aggressive_gc) {
+                return false;
+            }
+            // Its download would land nowhere (a Switch 2 sparse range without memory) and the
+            // buffer made again would read zeros: it stays.
+            if (!device_memory.IsBacked(buffer.CpuAddr(), buffer.SizeBytes())) {
+                if (create_trace.enabled) {
+                    ++create_trace.kept_unbacked;
+                }
+                return false;
+            }
         }
         evicted.push_back(buffer_id);
         return false;
@@ -145,12 +155,13 @@ void BufferCache<P>::TickFrame() {
             trace.last = now;
             LOG_INFO(HW_GPU,
                      "Buffer trace: {} MiB in buffers; in 10 s {} created ({} MiB), {} joined into "
-                     "them ({} MiB copied), {} stream leaps, {} collected ({} MiB)",
+                     "them ({} MiB copied), {} stream leaps, {} collected ({} MiB), {} GPU-written "
+                     "kept for unbacked device memory",
                      buffer_bytes >> 20, trace.creates, trace.created_bytes >> 20, trace.joins,
                      trace.joined_bytes >> 20, trace.leaps, trace.collected,
-                     trace.collected_bytes >> 20);
+                     trace.collected_bytes >> 20, trace.kept_unbacked);
             trace.creates = trace.created_bytes = trace.joins = trace.joined_bytes = trace.leaps =
-                trace.collected = trace.collected_bytes = 0;
+                trace.collected = trace.collected_bytes = trace.kept_unbacked = 0;
         }
     }
     if (const GeometryStats& stats = geometry_stats; frame_tick % 600 == 0 && stats.syncs != 0) {
@@ -2554,10 +2565,12 @@ void BufferCache<P>::BindHostGraphicsUniformBuffers(size_t stage) {
 template <class P>
 void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 binding_index, bool needs_bind) {
     ++channel_state->uniform_cache_shots[0];
-    // Bank 24 (root table 0, NVN2's push constants) is read from bank 17, which such games do not
-    // bind: stream the table's current words as that buffer.
+    // Banks 24-31 (the root tables; NVN2 keeps push constants in table 0) are read from bank 17,
+    // which such games do not bind: stream the tables' current words, one after another, as that
+    // buffer.
     if (index == 17 && maxwell3d->root_tables.loaded && channel_state->uniform_buffers[stage][index].size == 0) {
-        const auto& words = maxwell3d->root_tables.tables[0];
+        const auto& words = maxwell3d->root_tables.tables;
+        static_assert(sizeof(words) == 8 * 256);
         const u32 size = (*channel_state->uniform_buffer_sizes)[stage][index];
         const u32 copied = (std::min)(size, static_cast<u32>(sizeof(words)));
         if constexpr (IS_OPENGL) {
@@ -3084,8 +3097,7 @@ void BufferCache<P>::UpdateIndexBuffer() {
             inline_buffer_id = CreateBuffer(0, buffer_size, false);
         }
         if (slot_buffers[inline_buffer_id].SizeBytes() < buffer_size) [[unlikely]] {
-            ++buffer_deletions;
-            slot_buffers.erase(inline_buffer_id);
+            DeleteBuffer(inline_buffer_id);
             inline_buffer_id = CreateBuffer(0, buffer_size, false);
         }
         channel_state->index_buffer = Binding{
@@ -4232,6 +4244,9 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
     }
 
     Unregister(buffer_id);
+    if (buffer_id == inline_buffer_id) {
+        inline_buffer_id = NULL_BUFFER_ID;
+    }
 
 #ifdef VESHIRU_LEGACY
     if (!do_not_mark || !immediately_free)

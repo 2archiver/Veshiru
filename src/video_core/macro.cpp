@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <unordered_set>
 #include <cstring>
@@ -264,7 +265,19 @@ void HLE_MultiDrawIndexedIndirectCount::Fallback(Core::System& system, Engines::
     const std::size_t effective_draws = end_indirect - start_indirect;
     const std::size_t last_draw = start_indirect + (std::min)(effective_draws, max_draws);
     for (std::size_t index = first_draw; index < last_draw; index++) {
-        const std::size_t base = index * indirect_words + 5;
+        const std::size_t base = index * std::size_t{indirect_words} + 5;
+        // The draw range comes from GPU memory: before a compute pass has written it, it is
+        // garbage, and indexing the parameters with it read far past their end.
+        if (base + 4 >= parameters.size()) {
+            static std::atomic<u32> logged{};
+            if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
+                LOG_WARNING(HW_GPU,
+                            "MultiDrawIndexedIndirectCount skipped: draws {}..{} (padding {}) "
+                            "past the {} parameters",
+                            start_indirect, end_indirect, padding, parameters.size());
+            }
+            break;
+        }
         const u32 base_vertex = parameters[base + 3];
         const u32 base_instance = parameters[base + 4];
         maxwell3d.regs.vertex_id_base = base_vertex;
