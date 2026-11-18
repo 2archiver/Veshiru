@@ -63,15 +63,17 @@ public:
 
     [[nodiscard]] VideoCore::FrameGenStatus GetFrameGenStatus() const override {
 #ifdef HAS_LSFG
-        return frame_gen.CurrentStatus();
+        auto status = frame_gen.CurrentStatus();
 #else
+        VideoCore::FrameGenStatus status{.state = VideoCore::FrameGenState::UnsupportedBuild};
 #ifdef EGLANTINE_STREAMLINE
         if (Streamline::FrameGenActive()) {
-            return {.state = VideoCore::FrameGenState::NvidiaFrameGen};
+            status.state = VideoCore::FrameGenState::NvidiaFrameGen;
         }
 #endif
-        return {.state = VideoCore::FrameGenState::UnsupportedBuild};
 #endif
+        status.presents = present_manager.PresentCounts();
+        return status;
     }
 
 #ifdef EGLANTINE_STREAMLINE

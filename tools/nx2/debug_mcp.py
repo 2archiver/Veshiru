@@ -32,9 +32,10 @@ STICK = {"type": "array", "items": {"type": "number", "minimum": -1, "maximum": 
 TOOLS = [
     {
         "name": "status",
-        "description": "Game title, program id, build, renderer, paused state, presented frame "
-                       "count and fps (measured over fps_window_ms), dump directory, live log "
-                       "filter and the shader hashes rejected at runtime.",
+        "description": "Game title, program id, build, renderer, paused state, guest present "
+                       "count and game FPS, and separate queued and Vulkan present rates "
+                       "(measured over fps_window_ms). Includes dump directory, live log filter "
+                       "and rejected shader hashes.",
         "inputSchema": {
             "type": "object",
             "properties": {"fps_window_ms": {"type": "integer", "minimum": 0, "maximum": 5000}},

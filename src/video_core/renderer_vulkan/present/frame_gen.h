@@ -33,7 +33,7 @@ public:
                  VkExtent2D guest_extent);
 
     [[nodiscard]] size_t PlannedGenerations() const;
-    void CompleteFrame(size_t queued_generations);
+    void CompleteFrame(size_t queued_generations, const PresentManager& present);
     void ResourceFailed(VkFormat format);
 
     /// The measured time between real frames in seconds, or 0 while it is unknown.
@@ -63,7 +63,7 @@ private:
     /// Updates the status bar state and logs each change with its reason.
     void SetState(VideoCore::FrameGenState new_state, VkFormat format);
     /// Logs every 10 s how many frames were generated, when that changes.
-    void LogActivity(size_t queued_generations);
+    void LogActivity(size_t queued_generations, VideoCore::FramePresentCounts presents);
     void DumpDebugImages(u64 count);
 
     MemoryAllocator& memory_allocator;
@@ -89,6 +89,7 @@ private:
     std::atomic<u64> generated_frames{};
     struct {
         std::chrono::steady_clock::time_point since{};
+        VideoCore::FramePresentCounts presents;
         u64 frames{};
         u64 generated{};
         u64 hitch_skips{};

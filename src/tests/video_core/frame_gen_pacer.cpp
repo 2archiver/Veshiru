@@ -66,6 +66,30 @@ TEST_CASE("FrameGenPacer sustains 30->60 FPS without post-warmup idle cycles", "
     CHECK(post_warmup_idle <= 2);
 }
 
+TEST_CASE("Re-enabling frame generation starts with cold pacing history", "[frame_gen]") {
+    Vulkan::FrameGenPacer pacer;
+    auto now = Clock::time_point{};
+    const auto warm_up = [&] {
+        Vulkan::FrameGenPlan plan;
+        for (int i = 0; i < 120; ++i) {
+            now += FromSeconds(1.0 / 30.0);
+            plan = pacer.PlanAt(now, 4, {}, 60.0f, 1.0f / 30.0f, 3, 1);
+        }
+        return plan;
+    };
+    REQUIRE(warm_up().generations == 1);
+
+    // FrameGen::ResetHistory does this when toggled off, then no frames are planned until on.
+    pacer.Reset();
+    CHECK(pacer.SmoothedInterval() == 0.0f);
+    CHECK(pacer.CurrentLimit() == 0);
+    now += std::chrono::seconds(2);
+    const auto first = pacer.PlanAt(now, 4, {}, 60.0f, 1.0f / 30.0f, 3, 1);
+    CHECK_FALSE(first.warm);
+    CHECK(first.generations == 0);
+    CHECK(warm_up().generations == 1);
+}
+
 TEST_CASE("FrameGenPacer sustains 20->60 FPS cleanly", "[video_core]") {
     Vulkan::FrameGenPacer pacer;
     auto now = Clock::time_point{};

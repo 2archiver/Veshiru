@@ -398,10 +398,12 @@ void FrameGen::Process(const Device& device, PresentManager& present, Frame* fra
     }
 }
 
-void FrameGen::CompleteFrame(size_t queued_generations) {
-    generated_frames.fetch_add(queued_generations, std::memory_order_relaxed);
+void FrameGen::CompleteFrame(size_t queued_generations, const PresentManager& present) {
+    if (queued_generations != 0) {
+        generated_frames.fetch_add(queued_generations, std::memory_order_relaxed);
+    }
     if (state.load(std::memory_order_relaxed) == VideoCore::FrameGenState::Running) {
-        LogActivity(queued_generations);
+        LogActivity(queued_generations, present.PresentCounts());
     }
 }
 
@@ -417,6 +419,9 @@ void FrameGen::SetState(VideoCore::FrameGenState new_state, VkFormat format) {
         return;
     }
     switch (new_state) {
+    case VideoCore::FrameGenState::Pending:
+        LOG_INFO(Render_Vulkan, "Frame generation off; no new generated frames");
+        break;
     case VideoCore::FrameGenState::Running:
         if (Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::NvidiaDlssG) {
             LOG_INFO(Render_Vulkan,
@@ -473,16 +478,17 @@ void FrameGen::SetState(VideoCore::FrameGenState new_state, VkFormat format) {
     activity = {};
 }
 
-void FrameGen::LogActivity(size_t queued_generations) {
+void FrameGen::LogActivity(size_t queued_generations, VideoCore::FramePresentCounts presents) {
     const auto now = std::chrono::steady_clock::now();
+    if (activity.since == std::chrono::steady_clock::time_point{}) {
+        activity.since = now;
+        activity.presents = presents;
+        return;
+    }
     ++activity.frames;
     activity.generated += queued_generations;
     if (plan.hitch_skipped) {
         ++activity.hitch_skips;
-    }
-    if (activity.since == std::chrono::steady_clock::time_point{}) {
-        activity.since = now;
-        return;
     }
     if (now - activity.since < ACTIVITY_LOG_INTERVAL) {
         return;
@@ -494,26 +500,18 @@ void FrameGen::LogActivity(size_t queued_generations) {
         const f32 seconds = std::chrono::duration<f32>(now - activity.since).count();
         const f32 game_fps = static_cast<f32>(activity.frames) / seconds;
         const f32 gen_fps = static_cast<f32>(activity.generated) / seconds;
-        const f32 output_fps = game_fps + gen_fps;
-        if (activity.generated == 0) {
-            LOG_INFO(Render_Vulkan,
-                     "Frame generation ({}) idle: {:.1f} game FPS + 0.0 generated = {:.1f} queued "
-                     "FPS (limit {}, {} hitch skips, {} display trims). It waits while the game is "
-                     "below 10 FPS, after loading stalls, once the target is met, or while the "
-                     "display takes no more presents",
-                     ModeText(current_config->type), game_fps, output_fps, pacer.CurrentLimit(),
-                     activity.hitch_skips, activity.display_trims);
-        } else {
-            LOG_INFO(Render_Vulkan,
-                     "Frame generation ({}) active: {:.1f} game FPS + {:.1f} generated = {:.1f} "
-                     "queued FPS ({:.1f} per game frame, limit {}, {} hitch skips, {} display "
-                     "trims)",
-                     ModeText(current_config->type), game_fps, gen_fps, output_fps, per_frame,
-                     pacer.CurrentLimit(), activity.hitch_skips, activity.display_trims);
-        }
+        const auto rates = VideoCore::PresentRatesBetween(activity.presents, presents, seconds);
+        LOG_INFO(Render_Vulkan,
+                 "Frame generation ({}) {}: {:.1f} game FPS, {:.1f} generated queued FPS; "
+                 "Vulkan presents/s: {:.1f} original + {:.1f} generated ({:.1f} queued per game "
+                 "frame, limit {}, {} hitch skips, {} display trims)",
+                 ModeText(current_config->type), activity.generated ? "active" : "idle", game_fps,
+                 gen_fps, rates.original, rates.generated, per_frame, pacer.CurrentLimit(),
+                 activity.hitch_skips, activity.display_trims);
         activity.logged_per_frame = per_frame;
     }
     activity.since = now;
+    activity.presents = presents;
     activity.frames = 0;
     activity.generated = 0;
     activity.hitch_skips = 0;

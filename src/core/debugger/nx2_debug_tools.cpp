@@ -181,6 +181,11 @@ void AppendPng(void* context, void* data, int size) {
 
 json Status(ToolState& state, const json& params) {
     const auto window = std::chrono::milliseconds{Param<int>(params, "fps_window_ms", 500, 0, 5000)};
+    const auto sample_renderer = [&] {
+        return state.system.IsPoweredOn() ? state.system.Renderer().GetFrameGenStatus()
+                                          : VideoCore::FrameGenStatus{};
+    };
+    const auto renderer_before = sample_renderer();
     const u64 before = g_nx2_present_count.load(std::memory_order_relaxed);
     const auto begin = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() - begin < window &&
@@ -188,9 +193,11 @@ json Status(ToolState& state, const json& params) {
         std::this_thread::sleep_for(20ms);
     }
     const u64 after = g_nx2_present_count.load(std::memory_order_relaxed);
-    const double seconds =
+    const auto renderer_after = sample_renderer();
+    const double seconds = window.count() == 0 ? 0.0 :
         std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
-    return {
+    const double game_fps = VideoCore::FrameCountRate(before, after, seconds);
+    json result = {
         {"title", state.title},
         {"program_id", fmt::format("{:016X}", state.program_id)},
         {"build", std::string{Common::g_build_fullname}},
@@ -200,13 +207,25 @@ json Status(ToolState& state, const json& params) {
         {"powered_on", state.system.IsPoweredOn()},
         {"paused", state.system.IsPaused()},
         {"presents", after},
-        {"fps", seconds > 0.0 ? static_cast<double>(after - before) / seconds : 0.0},
+        {"fps", game_fps}, // Legacy key: guest presents only.
+        {"game_fps", game_fps},
+        {"generated_queued_fps", VideoCore::FrameCountRate(renderer_before.generated_frames,
+                                                          renderer_after.generated_frames, seconds)},
+        {"original_present_fps", nullptr},
+        {"generated_present_fps", nullptr},
         {"uptime_s", std::chrono::duration<double>(std::chrono::steady_clock::now() - state.start)
                          .count()},
         {"dump_dir", state.dump_directory.generic_string()},
         {"log_filter", state.log_filter},
         {"rejected", HexList(VideoCore::Nx2Debug::RejectedHashes())},
     };
+    if (renderer_before.presents && renderer_after.presents) {
+        const auto rates = VideoCore::PresentRatesBetween(*renderer_before.presents,
+                                                          *renderer_after.presents, seconds);
+        result["original_present_fps"] = rates.original;
+        result["generated_present_fps"] = rates.generated;
+    }
+    return result;
 }
 
 json FrameTimes(ToolState& state, const json& params) {

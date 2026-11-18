@@ -18,6 +18,7 @@
 #include "core/frontend/emu_window.h"
 #include "core/frontend/graphics_context.h"
 #include "veshiru_cmd/emu_window/sdl_window_state.h"
+#include "video_core/frame_presentation_stats.h"
 
 namespace Core {
 class System;
@@ -44,7 +45,7 @@ public:
     /// Whether the window is still open, and a close request hasn't yet been sent
     bool IsOpen() const;
 
-    /// Sets the title the titlebar timer prepared; call from the main thread.
+    /// Samples the live session and updates the title when due; call from the main thread.
     void ApplyPendingTitle();
 
     /// Returns if window is shown (not minimized)
@@ -96,9 +97,9 @@ protected:
     /// Called when a configuration change affects the minimal size of the window
     void OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) override;
 
-    /// Periodic changer of titlebar (independent of event loop)
     SDL_TimerID titlebar_timer;
-    std::atomic<std::string*> pending_title{};
+    std::atomic_bool title_pending{};
+    VideoCore::FramePresentSampler present_sampler;
 
     // Mouse resetter once it
     SDL_TimerID mouse_timer;

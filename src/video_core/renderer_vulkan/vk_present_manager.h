@@ -13,6 +13,7 @@
 
 #include "common/common_types.h"
 #include "common/polyfill_thread.h"
+#include "video_core/frame_presentation_stats.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #ifdef EGLANTINE_STREAMLINE
@@ -52,6 +53,7 @@ struct Frame {
     std::chrono::nanoseconds present_spacing{};
     /// Total presents that show this frame's game frame: 1 plus the frames generated for it.
     u32 game_frame_presents{1};
+    bool generated{}; ///< Software-generated, independently of the pacing interval.
 #ifdef EGLANTINE_STREAMLINE
     // DLSS Frame Generation: the guest frame presented and where the guest image is in the frame.
     bool frame_gen{};
@@ -108,6 +110,11 @@ public:
     /// Frames ready for reuse without waiting on the present thread or GPU.
     [[nodiscard]] size_t FreeFrames();
 
+    [[nodiscard]] VideoCore::FramePresentCounts PresentCounts() const {
+        return {original_presents.load(std::memory_order_relaxed),
+                generated_presents.load(std::memory_order_relaxed)};
+    }
+
     [[nodiscard]] std::size_t SwapchainImageCount() const { return swapchain_image_count; }
     [[nodiscard]] VkFormat SwapchainImageFormat() const { return swapchain_image_format; }
 
@@ -157,6 +164,8 @@ private:
     std::mutex queue_mutex;
     std::mutex free_mutex;
     std::jthread present_thread;
+    std::atomic<u64> original_presents{};
+    std::atomic<u64> generated_presents{};
     VkFormat transfer_source_format{VK_FORMAT_UNDEFINED};
     TransferMode transfer_mode{TransferMode::Unsupported};
     u64 hdr_metadata_generation{}; ///< DisplayHdrMonitor generation of the metadata sent

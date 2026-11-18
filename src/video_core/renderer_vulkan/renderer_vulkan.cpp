@@ -324,13 +324,14 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
             frame_gen.ResourceFailed(frame->image_format);
             break;
         }
+        generated->generated = true;
         scheduler.Flush(*generated->render_ready);
         present_manager.Present(generated);
         scheduler.DispatchWork();
     }
     // Keep the real frame on the same pacing subdivision as any extras already submitted.
     frame->game_frame_presents = queued == 0 ? 1 : static_cast<u32>(planned) + 1;
-    frame_gen.CompleteFrame(queued);
+    frame_gen.CompleteFrame(queued, present_manager);
 #endif
 
     if (const auto mark = scheduler.NextFrameMark(); mark != Scheduler::FrameMark::None) {
