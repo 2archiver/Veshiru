@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <chrono>
-#include <cstdlib>
 #include <cstring>
-#include <string_view>
 #include <type_traits>
 
 #include "common/cityhash.h"

@@ -34,6 +34,7 @@ add_executable(tests
     core/nx2_debug_server.cpp
     core/nx2_present_pacer.cpp
     core/nx2_frame_interval.cpp
+    core/vfs_real.cpp
     core/ldn_lan_protocol.cpp
     core/perf_stats.cpp
     core/key_derivation.cpp

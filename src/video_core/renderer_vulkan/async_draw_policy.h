@@ -31,7 +31,7 @@ constexpr bool CanDiscardPendingDraw(bool native, bool depth_enabled, u32 index_
 }
 
 /// Whether a draw writes color, and only into render targets first written in an earlier frame,
-/// so skipping it leaves last frame's image rather than an unwritten one (Eglantine #874).
+/// so skipping it leaves last frame's image rather than an unwritten one.
 /// @param count       Color outputs of the draw (rt_control.count).
 /// @param map         Render target index of a color output (rt_control.Map).
 /// @param writes      Whether the draw writes color into a render target index.

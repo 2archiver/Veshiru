@@ -73,7 +73,7 @@ LogFile ReadLogFile(const std::filesystem::path& file, const ForEach& for_each) 
             constexpr std::streamoff Chunk = std::streamoff{256} << 20;
             std::streamoff done = 0;
             while (done < size) {
-                const std::streamoff want = std::min(Chunk, size - done);
+                const std::streamoff want = (std::min)(Chunk, size - done);
                 stream.read(reinterpret_cast<char*>(log.bytes.data()) + done, want);
                 done += stream.gcount();
                 if (stream.gcount() != want) {

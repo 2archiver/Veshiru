@@ -161,8 +161,8 @@ private:
     /// may be skipped while it builds (asynchronous shaders, CanDiscardPendingDraw).
     [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline) noexcept;
 
-    /// How native work with an unbuilt pipeline is handled: native_async_draws, or Skip with
-    /// EDEN_NX2_ASYNC_DISCARD=1.
+    /// How native work with an unbuilt pipeline is handled: native_async_draws, or Skip when
+    /// explicit async discard is enabled.
     [[nodiscard]] NativePendingMode NativeMode() const;
 
     /// Logs the bounded waits' time every 10 s.

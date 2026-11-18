@@ -333,7 +333,7 @@ TEST_CASE("HostMemory: Protect latency during a zero-page pass", "[.zero_trim_lo
 
     std::atomic<bool> done{false};
     std::vector<std::jthread> spinners;
-    for (unsigned i = 0; i < std::max(1U, std::thread::hardware_concurrency()); ++i) {
+    for (unsigned i = 0; i < (std::max)(1U, std::thread::hardware_concurrency()); ++i) {
         spinners.emplace_back([&] {
             const auto stop = std::chrono::steady_clock::now() + std::chrono::seconds{20};
             while (!done.load(std::memory_order_relaxed) && std::chrono::steady_clock::now() < stop) {

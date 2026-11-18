@@ -108,3 +108,53 @@ TEST_CASE("NX2 fixed-period pacing matches the previous algorithm", "[core][nx2_
         }
     }
 }
+
+TEST_CASE("NX2 present fence plan skips blocked adaptive probe on Mario Kart World",
+          "[core][nx2_present_pacer]") {
+    using Service::PlanPresentFenceWait;
+    constexpr std::uint64_t OtherTitle = 0x0400000000001000ULL;
+
+    // Mario Kart World in adaptive mode paces against the previous frame directly when the current
+    // fence is still pending, even when the previous fence is still in flight on the GPU, avoiding
+    // both the 3-4 ms adaptive suspension probe and a deadlock on the post-present semaphore.
+    const auto mkw_pending_fast =
+        PlanPresentFenceWait(-1, Settings::MarioKartWorldProgramId, false, true);
+    REQUIRE_FALSE(mkw_pending_fast.try_adaptive_current);
+    REQUIRE(mkw_pending_fast.wait_previous);
+    REQUIRE_FALSE(mkw_pending_fast.wait_current);
+
+    const auto mkw_pending_behind =
+        PlanPresentFenceWait(-1, Settings::MarioKartWorldProgramId, false, false);
+    REQUIRE_FALSE(mkw_pending_behind.try_adaptive_current);
+    REQUIRE(mkw_pending_behind.wait_previous);
+    REQUIRE_FALSE(mkw_pending_behind.wait_current);
+
+    // When Mario Kart World's current fence is already signaled, no wait is needed at all.
+    const auto mkw_ready = PlanPresentFenceWait(-1, Settings::MarioKartWorldProgramId, true, false);
+    REQUIRE_FALSE(mkw_ready.try_adaptive_current);
+    REQUIRE_FALSE(mkw_ready.wait_previous);
+    REQUIRE_FALSE(mkw_ready.wait_current);
+
+    // Explicit frames-ahead modes still take precedence over the adaptive title path.
+    const auto mkw_sync = PlanPresentFenceWait(0, Settings::MarioKartWorldProgramId, false, true);
+    REQUIRE_FALSE(mkw_sync.try_adaptive_current);
+    REQUIRE_FALSE(mkw_sync.wait_previous);
+    REQUIRE(mkw_sync.wait_current);
+
+    const auto mkw_ahead_behind =
+        PlanPresentFenceWait(1, Settings::MarioKartWorldProgramId, false, false);
+    REQUIRE_FALSE(mkw_ahead_behind.try_adaptive_current);
+    REQUIRE(mkw_ahead_behind.wait_previous);
+    REQUIRE(mkw_ahead_behind.wait_current);
+
+    // Other titles retain the adaptive current-frame probe and explicit mode rules.
+    const auto other_adaptive = PlanPresentFenceWait(-1, OtherTitle, false, true);
+    REQUIRE(other_adaptive.try_adaptive_current);
+    REQUIRE_FALSE(other_adaptive.wait_previous);
+    REQUIRE_FALSE(other_adaptive.wait_current);
+
+    const auto other_ahead_fast = PlanPresentFenceWait(1, OtherTitle, false, true);
+    REQUIRE_FALSE(other_ahead_fast.try_adaptive_current);
+    REQUIRE(other_ahead_fast.wait_previous);
+    REQUIRE_FALSE(other_ahead_fast.wait_current);
+}

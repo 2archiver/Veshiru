@@ -2122,34 +2122,47 @@ private:
             const char* value = std::getenv("EDEN_NX2_PRESENT_FENCE_TRACE");
             return value != nullptr && value[0] == '1';
         }();
+        const u32 current_fence_id = ~w[22];
+        const u32 current_fence_value = w[24];
         std::shared_ptr<TracedPresent> traced;
         if (fence_trace) {
-            traced = TracePresentFence(~w[22], w[24], entered);
+            traced = TracePresentFence(current_fence_id, current_fence_value, entered);
         }
-        const bool auto_reached = frames_ahead == -1 && WaitForFrame(~w[22], w[24], true);
-        if (frames_ahead == 1 || (frames_ahead == -1 && !auto_reached)) {
-            LOG_DEBUG(Service, "nx2:vi2 present #{} fence ({}, {:#x}), waiting for ({}, {:#x}); now {:#x}",
-                      m_presents, ~w[22], w[24], m_previous_fence_id, m_previous_fence_value,
-                      ~w[22] < 192 ? system.Host1x().GetSyncpointManager().GetGuestSyncpointValue(~w[22]) : 0U);
-            // With EDEN_NX2_FRAMES_AHEAD=1, only run a frame ahead while the GPU keeps up. With
-            // the previous frame still on the GPU here, the GPU is the limit and running ahead
-            // gains nothing; and Splatoon Raiders, which reuses its command memory as if the GPU
-            // were at most a frame behind, rewrote command lists Eden had not read yet (misread
-            // commands, then crashes, with a slow GPU). Wait for this frame too then. Not when a
-            // suspended channel brought us here: this frame can't finish before the present
-            // returns.
-            const bool gpu_behind = frames_ahead == 1 && m_previous_fence_id < 192 &&
-                                    !system.Host1x().GetSyncpointManager().IsReadyGuest(
-                                        m_previous_fence_id, m_previous_fence_value);
+        auto& syncpoints = system.Host1x().GetSyncpointManager();
+        const bool current_fence_ready =
+            current_fence_id >= 192 ||
+            syncpoints.IsReadyGuest(current_fence_id, current_fence_value);
+        // In explicit one-frame-ahead mode, only run ahead while the GPU keeps up. When the
+        // previous frame is still on the GPU here, running ahead gains nothing and titles such as
+        // Splatoon Raiders that reuse command memory assuming at most one frame in flight can
+        // overwrite unread command lists. Titles whose channels suspend on a post-present CPU
+        // semaphore release cannot wait for the current frame here because it cannot finish until
+        // this present returns.
+        const bool previous_fence_ready =
+            m_previous_fence_id >= 192 ||
+            syncpoints.IsReadyGuest(m_previous_fence_id, m_previous_fence_value);
+        const PresentFenceWaitPlan wait_plan = PlanPresentFenceWait(
+            frames_ahead, app_program_id, current_fence_ready, previous_fence_ready);
+        const bool auto_reached =
+            wait_plan.try_adaptive_current
+                ? WaitForFrame(current_fence_id, current_fence_value, true)
+                : (frames_ahead == -1 && current_fence_ready);
+        if (wait_plan.wait_previous || (wait_plan.try_adaptive_current && !auto_reached)) {
+            LOG_DEBUG(Service,
+                      "nx2:vi2 present #{} fence ({}, {:#x}), waiting for ({}, {:#x}); now {:#x}",
+                      m_presents, current_fence_id, current_fence_value, m_previous_fence_id,
+                      m_previous_fence_value,
+                      current_fence_id < 192 ? syncpoints.GetGuestSyncpointValue(current_fence_id)
+                                             : 0U);
             WaitForFrame(m_previous_fence_id, m_previous_fence_value);
-            if (gpu_behind) {
-                WaitForFrame(~w[22], w[24]);
+            if (wait_plan.wait_current) {
+                WaitForFrame(current_fence_id, current_fence_value);
             }
-        } else if (frames_ahead == 0) {
-            WaitForFrame(~w[22], w[24]);
+        } else if (wait_plan.wait_current) {
+            WaitForFrame(current_fence_id, current_fence_value);
         }
-        m_previous_fence_id = ~w[22];
-        m_previous_fence_value = w[24];
+        m_previous_fence_id = current_fence_id;
+        m_previous_fence_value = current_fence_value;
         const auto waited = std::chrono::steady_clock::now();
         Composite(w[5], ~w[22], w[24], w[7]);
         const auto composited = std::chrono::steady_clock::now();

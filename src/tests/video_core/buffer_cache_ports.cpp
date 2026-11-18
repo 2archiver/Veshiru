@@ -103,6 +103,7 @@ struct Runtime {
     void FreeDeferredStagingBuffer(Staging&) {}
     void CopyBuffer(Buffer* dst, Buffer& src, std::span<const VideoCommon::BufferCopy> copies,
                     bool) {
+        ++download_calls;
         for (const auto& copy : copies) {
             REQUIRE(copy.src_offset + copy.size <= src.bytes.size());
             REQUIRE(copy.dst_offset + copy.size <= dst->bytes.size());
@@ -111,6 +112,7 @@ struct Runtime {
                             copy.size);
             });
             ++downloads;
+            download_bytes += copy.size;
         }
     }
     void CopyBuffer(Buffer& dst, Buffer& src, std::span<const VideoCommon::BufferCopy> copies,
@@ -191,9 +193,9 @@ struct Runtime {
     }
 
     u32 alignment{256};
-    u32 allocations{}, downloads{}, uploads{}, finishes{}, waits{};
+    u32 allocations{}, downloads{}, download_calls{}, uploads{}, finishes{}, waits{};
     u32 host_read_barriers{}, host_read_waits{}, queued_host_reads{};
-    u64 upload_bytes{}, waited_tick{};
+    u64 download_bytes{}, upload_bytes{}, waited_tick{};
     u64 submitted_tick{}, completed_tick{};
     std::vector<std::unique_ptr<Buffer>> stagings;
     std::vector<u8> stream;
@@ -396,6 +398,12 @@ struct BufferCacheTestAccess {
     static u64 EarlyBytesPerFrame() {
         return Cache::EarlyBytesPerFrame;
     }
+    static u64 MaxSpeculativeReadBytes() {
+        return Cache::MaxSpeculativeReadBytes;
+    }
+    static void ResetEarlyFrameBytes(Cache& cache) {
+        cache.early_bytes_this_frame = 0;
+    }
     /// Every read download compared with a synchronous flush (EDEN_NX2_READ_CHECK=1).
     static void CheckEveryRead(Cache& cache) {
         cache.read_check.every = 1;
@@ -456,15 +464,17 @@ struct BasicFixture {
     std::unique_ptr<Kernel::KProcess> process;
     Core::Asid asid{};
     u8* bytes{};
+    size_t mapped_bytes{};
 
-    BasicFixture() {
+    explicit BasicFixture(size_t mapped_bytes_ = 0x40000) : mapped_bytes{mapped_bytes_} {
         system.Initialize();
         process = std::make_unique<Kernel::KProcess>(system.Kernel());
         auto& table = process->GetPageTable().GetImpl();
         table.Resize(24, 12);
         bytes = physical.GetPointerFromRaw<u8>(0x10000);
-        std::memset(bytes, 0, 0x40000);
-        for (u64 page = 0; page < 64; ++page) {
+        std::memset(bytes, 0, mapped_bytes);
+        const u64 num_pages = mapped_bytes >> 12;
+        for (u64 page = 0; page < num_pages; ++page) {
             table.entries.GetAndFault(0x10 + page)
                 .Store(false, Common::PageType::Memory, 1,
                        reinterpret_cast<uintptr_t>(bytes) - 0x10000);
@@ -472,14 +482,14 @@ struct BasicFixture {
         process->GetMemory().SetCurrentPageTable(*process);
         asid = device.RegisterProcess(&process->GetMemory());
         device.BindInterface(&rasterizer);
-        device.Map(0x10000, 0x10000, 0x40000, asid);
+        device.Map(0x10000, 0x10000, mapped_bytes, asid);
         ResetMemory();
         cache = std::make_unique<C>(device, runtime);
     }
     ~BasicFixture() {
         cache.reset();
         memory.reset();
-        device.Unmap(0x10000, 0x40000);
+        device.Unmap(0x10000, mapped_bytes);
         device.UnregisterProcess(asid);
         system.Kernel().UnregisterKernelObject(process.get());
     }
@@ -2785,4 +2795,139 @@ TEST_CASE("A DMA copy names the destination ranges whose GPU-written bytes guest
     REQUIRE(f.cache->DMACopy(0x105000, 0x107000, 0x20, &gpu_written));
     REQUIRE(gpu_written.empty());
     REQUIRE(std::all_of(f.bytes + 0x7000, f.bytes + 0x7020, [](u8 b) { return b == 7; }));
+}
+
+TEST_CASE("Large cyclic readback rings stay warm and coalesce contiguous early copies",
+          "[buffer_ports]") {
+    constexpr u32 RingPages = 2400;
+    constexpr u32 RingBytes = RingPages * 0x1000;
+    constexpr DAddr Base = 0x20000;
+
+    Fixture f{0xb00000};
+    const Nx2TitleScope nx2_title;
+    const auto id = Access::Add(*f.cache, Base, RingBytes);
+    auto& buffer = Access::Get(*f.cache, id);
+
+    // Warm all 2,400 pages across two full write-then-read cycles (over twice the old 1,024-page
+    // tracker capacity).
+    for (u8 cycle = 1; cycle <= 2; ++cycle) {
+        WriteByDispatch(f, id, Base, RingBytes, cycle);
+        for (u32 page = 0; page < RingPages; ++page) {
+            ReadWord(f, Base + page * u64{0x1000});
+        }
+        Access::ResetEarlyFrameBytes(*f.cache);
+    }
+
+    // Cycle 3: rewrite the whole ring plus a duplicate subrange before NoteWorkRecorded to verify
+    // both per-page queued deduplication and contiguous copy coalescing.
+    f.runtime.downloads = 0;
+    f.runtime.download_calls = 0;
+    f.runtime.download_bytes = 0;
+    f.runtime.queued_host_reads = 0;
+    f.runtime.host_read_barriers = 0;
+    f.runtime.pending.push_back([&buffer] { std::ranges::fill(buffer.bytes, u8{0x33}); });
+    Access::MarkWritten(*f.cache, id, Base, RingBytes);
+    Access::MarkWritten(*f.cache, id, Base + 0x4000, 0x8000);
+    f.cache->NoteWorkRecorded(true);
+
+    REQUIRE(f.runtime.queued_host_reads == 1);
+    REQUIRE(f.runtime.download_calls == 1);
+    REQUIRE(f.runtime.downloads == 1);
+    REQUIRE(f.runtime.download_bytes == RingBytes);
+
+    f.runtime.Complete(f.runtime.submitted_tick);
+    for (const u32 sample_page : {0U, 1U, 511U, 1024U, 1799U, RingPages - 1}) {
+        const DAddr addr = Base + sample_page * u64{0x1000};
+        REQUIRE(ReadWord(f, addr).preemtive);
+        REQUIRE(f.bytes[(addr - 0x10000) + 0x10] == 0x33);
+    }
+    REQUIRE(f.runtime.host_read_barriers == 0);
+
+    // Cycle 4: two disjoint dirty spans in the same buffer verify that queued flags reset cleanly
+    // and that non-contiguous spans batch into a single DownloadBufferMemory submission.
+    Access::ResetEarlyFrameBytes(*f.cache);
+    f.runtime.downloads = 0;
+    f.runtime.download_calls = 0;
+    f.runtime.download_bytes = 0;
+    f.runtime.queued_host_reads = 0;
+    f.runtime.pending.push_back([&buffer] {
+        std::fill_n(buffer.bytes.begin(), 0x3000, u8{0x44});
+        std::fill_n(buffer.bytes.begin() + 0x8000, 0x2000, u8{0x55});
+    });
+    Access::MarkWritten(*f.cache, id, Base + 0x8000, 0x2000);
+    Access::MarkWritten(*f.cache, id, Base, 0x3000);
+    f.cache->NoteWorkRecorded(true);
+
+    REQUIRE(f.runtime.queued_host_reads == 1);
+    REQUIRE(f.runtime.download_calls == 1);
+    REQUIRE(f.runtime.downloads == 2);
+    REQUIRE(f.runtime.download_bytes == 0x5000);
+
+    f.runtime.Complete(f.runtime.submitted_tick);
+    REQUIRE(ReadWord(f, Base).preemtive);
+    REQUIRE(ReadWord(f, Base + 0x9000).preemtive);
+    REQUIRE(f.bytes[0x10000] == 0x44);
+    REQUIRE(f.bytes[0x14000] == 0x33);
+    REQUIRE(f.bytes[0x19000] == 0x55);
+}
+
+TEST_CASE("Speculative read downloads cap each flush to a forward-biased window",
+          "[buffer_ports]") {
+    constexpr DAddr Base = 0x20000;
+    constexpr u32 TotalSize = 0x400000; // 4 MiB, twice MaxSpeculativeReadBytes
+
+    Fixture f{0x500000};
+    const auto id = Access::Add(*f.cache, Base, TotalSize);
+    auto& buffer = Access::Get(*f.cache, id);
+
+    // Record the full 4 MiB range into buffer.cpu_read_ranges.
+    std::ranges::fill(buffer.bytes, u8{0x11});
+    Access::MarkWritten(*f.cache, id, Base, TotalSize);
+    f.cache->DownloadMemoryForRead(Base, 0x200000);
+    f.cache->FinishReadDownloads(Base, 0x200000);
+    f.cache->DownloadMemoryForRead(Base + 0x200000, 0x200000);
+    f.cache->FinishReadDownloads(Base + 0x200000, 0x200000);
+
+    // Rewrite all 4 MiB on the GPU, then read a single 4 KiB page 1 MiB in.
+    std::ranges::fill(buffer.bytes, u8{0x5a});
+    Access::MarkWritten(*f.cache, id, Base, TotalSize);
+    f.runtime.downloads = 0;
+    f.runtime.download_calls = 0;
+    f.runtime.download_bytes = 0;
+    f.runtime.host_read_barriers = 0;
+
+    constexpr DAddr Probe = Base + 0x100000;
+    constexpr u64 ProbeSize = 0x1000;
+    const u64 max_spec = Access::MaxSpeculativeReadBytes();
+    const u64 back_window = max_spec / 4;
+    const u64 ahead_window = max_spec - back_window;
+    const DAddr expected_window_begin = Probe - back_window;
+    const DAddr expected_window_end = Probe + ProbeSize + ahead_window;
+
+    f.cache->DownloadMemoryForRead(Probe, ProbeSize);
+    REQUIRE(f.runtime.host_read_barriers == 1);
+    REQUIRE(f.runtime.download_calls == 1);
+    REQUIRE(f.runtime.download_bytes == ProbeSize + max_spec);
+    f.cache->FinishReadDownloads(Probe, ProbeSize);
+    REQUIRE(f.bytes[Probe - 0x10000] == 0x5a);
+
+    // Forward and backward pages inside the prefetched window land with zero extra barriers.
+    REQUIRE(ReadWord(f, expected_window_begin).preemtive);
+    REQUIRE(ReadWord(f, expected_window_end - 0x1000).preemtive);
+    REQUIRE(f.bytes[expected_window_begin - 0x10000] == 0x5a);
+    REQUIRE(f.bytes[(expected_window_end - 0x1000) - 0x10000] == 0x5a);
+    REQUIRE(f.runtime.host_read_barriers == 1);
+
+    // Ranges outside the capped window remain scheduled for later reads until everything lands.
+    REQUIRE(Access::Pending(*f.cache, Base, expected_window_begin - Base));
+    REQUIRE(Access::Pending(*f.cache, expected_window_end, (Base + TotalSize) - expected_window_end));
+
+    const auto tail = ReadWord(f, Base + TotalSize - 0x1000);
+    REQUIRE_FALSE(tail.preemtive);
+    REQUIRE(f.bytes[(Base + TotalSize - 0x1000) - 0x10000] == 0x5a);
+
+    // The remaining leading range also fits in that second capped batch, leaving no stale bytes.
+    REQUIRE(ReadWord(f, Base).preemtive);
+    REQUIRE(f.bytes[Base - 0x10000] == 0x5a);
+    REQUIRE_FALSE(Access::Pending(*f.cache, Base, TotalSize));
 }

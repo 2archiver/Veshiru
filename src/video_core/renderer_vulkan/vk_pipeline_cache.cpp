@@ -2447,9 +2447,8 @@ void PipelineCache::EvictUnusedPipelines() {
 }
 
 NativePendingMode PipelineCache::NativeMode() const {
-    // EDEN_NX2_ASYNC_DISCARD=1: skip native work whose pipeline is still building instead of
-    // waiting for it (experimental; the draw may be missing for a frame or more).
-    /// Reads EDEN_NX2_ASYNC_DISCARD once and logs when it is on.
+    // Skip native work whose pipeline is still building when explicit discard mode is active
+    // (experimental; the draw may be missing for a frame or more).
     static const bool discard_native = [] {
         const char* value = std::getenv("EDEN_NX2_ASYNC_DISCARD");
         const bool enabled = value != nullptr && value[0] == '1';

@@ -1116,6 +1116,7 @@ private:
         u16 reads{};         ///< Writes in a row the guest read, up to EarlyAfterReads
         u16 unread_writes{}; ///< GPU writes since its last read
         bool written{};      ///< A GPU write since its last read
+        bool queued{};       ///< Present in early_pages awaiting RecordEarlyDownloads
     };
     /// Reads of a page's writes in a row before its writes get early downloads.
     static constexpr u16 EarlyAfterReads = 2;
@@ -1123,14 +1124,18 @@ private:
     /// keeps them: Ocarina of Time reads each of its read-back pages every 5 to 40 frames, and
     /// several dispatches write it in between.
     static constexpr u16 MaxUnreadWrites = 256;
-    /// Learned pages; the one read longest ago makes room. Ocarina of Time reads back ~220 pages
-    /// over a few seconds.
-    static constexpr size_t MaxReadBackPages = 512;
+    /// Learned pages; the one read longest ago makes room. Sized to hold large Switch 2 cyclic
+    /// compute readback rings (e.g. Mario Kart World's ~2,350-page race working set) without
+    /// thrashing back to zero-hit synchronous stalls every wrap-around.
+    static constexpr size_t MaxReadBackPages = 4096;
     /// Early download bytes a frame, and early downloads not yet in guest memory: past them, reads
     /// flush on demand. These limits only decide which downloads are recorded early, never what a
     /// read finds: a read that no early download covers flushes.
-    static constexpr u64 EarlyBytesPerFrame = 8_MiB;
+    static constexpr u64 EarlyBytesPerFrame = 24_MiB;
     static constexpr u32 MaxPendingEarlyDownloads = 512;
+    /// Maximum speculative cpu_read_ranges bytes bundled alongside an on-demand read download so a
+    /// single 4 KiB fault does not stall waiting on an entire multi-megabyte ring buffer.
+    static constexpr u64 MaxSpeculativeReadBytes = 2_MiB;
     std::vector<ReadBackPage> read_back_pages; ///< Sorted by page
     /// The first and last page of read_back_pages (MayBeReadBackPage), set under `mutex`.
     std::atomic<DAddr> read_back_first{~DAddr{0}};

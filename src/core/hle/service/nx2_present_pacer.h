@@ -8,7 +8,45 @@
 #include <cstdint>
 #include <optional>
 
+#include "common/game_presets.h"
+
 namespace Service {
+
+struct PresentFenceWaitPlan {
+    bool try_adaptive_current{};
+    bool wait_previous{};
+    bool wait_current{};
+};
+
+/**
+ * Selects which syncpoint fence(s) nx2:vi2 PresentClientBuffer waits on before displaying.
+ *
+ * Mario Kart World's GPU channels wait on a CPU semaphore released only after
+ * PresentClientBuffer returns, so the adaptive current-frame wait always expires its suspension
+ * probe before falling back to the previous frame's fence. When its current fence is not already
+ * signaled in adaptive mode, skip the current-frame probe and pace against the previous frame's
+ * fence directly without stalling on the blocked current frame.
+ */
+[[nodiscard]] constexpr PresentFenceWaitPlan PlanPresentFenceWait(
+    int frames_ahead, std::uint64_t app_program_id, bool current_fence_ready,
+    bool previous_fence_ready) noexcept {
+    if (frames_ahead == 0) {
+        return {.wait_current = true};
+    }
+    if (frames_ahead == 1) {
+        return {
+            .wait_previous = true,
+            .wait_current = !previous_fence_ready,
+        };
+    }
+    if (app_program_id == Settings::MarioKartWorldProgramId) {
+        if (current_fence_ready) {
+            return {};
+        }
+        return {.wait_previous = true};
+    }
+    return {.try_adaptive_current = true};
+}
 
 /**
  * Returns the interval between paced presents: the vblank the game asked for, lengthened when an
