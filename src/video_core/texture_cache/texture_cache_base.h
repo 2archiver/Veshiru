@@ -48,6 +48,7 @@
 #include "video_core/texture_cache/render_targets.h"
 #include "video_core/texture_cache/sampled_views.h"
 #include "video_core/texture_cache/stale_pages.h"
+#include "video_core/texture_cache/superseded_images.h"
 #include "video_core/texture_cache/types.h"
 #include "video_core/textures/texture.h"
 #include "video_core/textures/unswizzle_worker.h"
@@ -226,6 +227,9 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     /// SparseTiles images: notes a written range, uploaded with the next refresh.
     void MarkRangeWritten(Image& image, DAddr cpu_addr, size_t size);
 
+    /// What a CPU write of [cpu_addr, +size) does to an image over it.
+    void MarkImageWritten(ImageId image_id, Image& image, DAddr cpu_addr, size_t size);
+
     /// SparseTiles images: binds and uploads the parts written since the last upload.
     void RefreshSparseTiles(Image& image);
 
@@ -292,6 +296,13 @@ public:
     /// Mark an image as modified from the GPU
     void MarkModification(ImageId id) noexcept;
 
+    /// Mark the image behind a view a shader writes through as a storage image
+    void MarkStorageWrite(ImageViewId id) noexcept;
+
+    /// Whether a view's image is absent or holds a shader's storage writes over every level it
+    /// covers, with nothing newer (no clear, render pass, copy or CPU write since).
+    [[nodiscard]] bool StorageViewHoldsShaderWrites(ImageViewId id) const noexcept;
+
     /// Fill image_view_ids with the graphics/compute images in indices
     void FillImageViews(std::span<ImageViewInOut> views, bool compute, bool blacklist = true);
 
@@ -352,9 +363,9 @@ public:
     /// UpdateRenderTargets should be called before this
     Framebuffer* GetFramebuffer();
 
-    /// Whether render target 0 was first written in an earlier frame (cleared this frame or not):
-    /// a target the title draws every frame rather than one it fills once.
-    [[nodiscard]] bool ColorTargetWrittenBeforeThisFrame() noexcept;
+    /// Whether render target `index` was first written in an earlier frame: a target the title
+    /// draws every frame, rather than one it fills once.
+    [[nodiscard]] bool ColorTargetWrittenBeforeThisFrame(u32 index) noexcept;
 
     [[nodiscard]] const RenderTargets& GetRenderTargets() const noexcept {
         return render_targets;
@@ -376,8 +387,11 @@ public:
     /// Mark images in a range as modified from the CPU
     void WriteMemory(DAddr cpu_addr, size_t size);
 
-    /// WriteMemory over every device range a GPU address range maps to
-    void WriteGpuMemory(GPUVAddr gpu_addr, size_t size);
+    /// After a DMA copy of [src_addr, +size) to [dest_addr, +size) in guest memory: marks the
+    /// images over the destination whose contents guest memory now holds. gpu_written_dest are
+    /// the destination ranges that took buffer cache GPU writes, which guest memory lacks.
+    void WriteDmaCopy(GPUVAddr src_addr, GPUVAddr dest_addr, size_t size,
+                      std::span<const std::pair<DAddr, size_t>> gpu_written_dest);
 
     /// Download contents of host images to guest memory in a region
     void DownloadMemory(DAddr cpu_addr, size_t size);
@@ -499,6 +513,20 @@ private:
     /// Runs the Garbage Collector.
     void RunGarbageCollector(bool out_of_memory);
 
+    void RetireStaleTargets();
+    void CollectStaleReferences();
+    bool StaleTargetReferenced(ImageId image_id) const;
+    void MarkStaleTransfer(ImageBase& image);
+
+    /// Deletes images whose memory went entirely to newer images (see ClassifySuperseded).
+    void DeleteSupersededImages();
+
+    /// Whether the clear being made writes all of an image, bound at gpu_addr as a render target.
+    [[nodiscard]] bool ClearOverwritesWhole(const ImageInfo& info, GPUVAddr gpu_addr) const;
+
+    /// Records the render targets the current clear writes whole (ImageBase::full_write_tick).
+    void NoteWholeClears();
+
     /// Find or create an image view in the guest descriptor table
     ImageViewId VisitImageView(u32 index, bool compute);
 
@@ -519,7 +547,8 @@ private:
 
     /// Find or create an image from the given parameters
     [[nodiscard]] ImageId FindOrInsertImage(const ImageInfo& info, GPUVAddr gpu_addr,
-                                            RelaxedOptions options = RelaxedOptions{});
+                                            RelaxedOptions options = RelaxedOptions{},
+                                            bool render_target = false);
 
     /// Find an image from the given parameters
     [[nodiscard]] ImageId FindImage(const ImageInfo& info, GPUVAddr gpu_addr,
@@ -527,11 +556,12 @@ private:
 
     /// Create an image from the given parameters
     [[nodiscard]] ImageId InsertImage(const ImageInfo& info, GPUVAddr gpu_addr,
-                                      RelaxedOptions options);
+                                      RelaxedOptions options, bool render_target = false);
 
     /// Create a new image and join perfectly matching existing images
     /// Remove joined images from the cache
-    [[nodiscard]] ImageId JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DAddr cpu_addr);
+    [[nodiscard]] ImageId JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DAddr cpu_addr,
+                                     bool render_target);
 
     [[nodiscard]] ImageId FindDMAImage(const ImageInfo& info, GPUVAddr gpu_addr);
 
@@ -688,6 +718,10 @@ private:
     /// Clears every device range [gpu_addr, gpu_addr + size) maps to.
     void ClearStaleGpu(GPUVAddr gpu_addr, size_t size);
     StalePages stale_pages;
+    ::Common::unordered_set<ImageId> stale_references;
+    /// RetireStaleTargets: matching candidates in front of the point where its last scan
+    /// stopped at its examination bound (0 after a scan that reached the end).
+    size_t stale_retire_resume{};
     u64 tc_stale_skips{};        ///< Uploads skipped (last 600 frames)
     u64 tc_stale_skip_bytes{};
     u64 tc_stale_gpu_written{};  ///< Stale but buffer-written pages: uploaded after all
@@ -701,6 +735,9 @@ private:
     /// True while a clear binds its render targets (UpdateRenderTargets(true)), so JoinImages can
     /// skip the upload of a new target the clear overwrites whole.
     bool clearing_render_targets = false;
+    /// True while a draw binds its render targets (UpdateRenderTargets(false)): only these writes
+    /// set first_written_frame, not blits, copies or DMA.
+    bool drawing_render_targets = false;
     bool is_rescaling = false;
     u64 total_used_memory = 0;
     u64 minimum_memory;
@@ -785,6 +822,13 @@ private:
 
     std::deque<PendingUnswizzle> unswizzle_queue;
     u8 current_unswizzle_frame;
+
+    // Superseded images (DeleteSupersededImages)
+    std::vector<ImageId> superseded_ids;
+    u64 superseded_activity_frame{}; ///< Last frame a bad overlap appeared or a clear wrote whole
+    u64 superseded_clean_deletes{};
+    u64 superseded_rewritten_deletes{};
+    u64 superseded_unproven{}; ///< Candidates kept for lack of proof, per scan
 
     // Join caching
     boost::container::small_vector<ImageId, 4> join_overlap_ids;

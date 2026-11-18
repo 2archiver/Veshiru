@@ -6,6 +6,11 @@
 add_executable(tests
     common/addon_config.cpp
     common/artwork_cache.cpp
+    video_core/scaled_image_fits.cpp
+    video_core/stale_targets.cpp
+    video_core/superseded_images.cpp
+    video_core/ampere_stage_buffer_output.cpp
+    video_core/pipeline_layout_cache.cpp
     video_core/vulkan_overlay_filter.cpp
     video_core/open_frame_gen_weights.cpp
     video_core/open_frame_gen_policy.cpp
@@ -44,6 +49,7 @@ add_executable(tests
     video_core/ampere_yoshi_title.cpp
     video_core/ampere_yoshi_compute.cpp
     video_core/texture_rect_descriptor.cpp
+    video_core/astc_opaque.cpp
     video_core/join_whole_copy.cpp
     audio_core/batch_decoder.cpp
     audio_core/adpcm_decode.cpp
@@ -372,7 +378,8 @@ add_test(NAME shader_jobs_tests COMMAND shader_jobs_tests)
 add_executable(shader_translation_tests
     video_core/stage_translation.cpp
     ../video_core/shader_jobs.cpp
-    ../video_core/shader_stage_translation.cpp)
+    ../video_core/shader_stage_translation.cpp
+    ../video_core/stage_cache.cpp)
 target_link_libraries(shader_translation_tests PRIVATE common shader_recompiler
     Catch2::Catch2WithMain Threads::Threads)
 target_compile_definitions(shader_translation_tests PRIVATE

@@ -1423,15 +1423,13 @@ AccelerateDMA::AccelerateDMA(BufferCache& buffer_cache_, TextureCache& texture_c
     : buffer_cache{buffer_cache_}, texture_cache{texture_cache_} {}
 
 bool AccelerateDMA::BufferCopy(GPUVAddr src_address, GPUVAddr dest_address, u64 amount) {
-    {
-        std::scoped_lock lock{buffer_cache.mutex};
-        if (!buffer_cache.DMACopy(src_address, dest_address, amount)) {
-            return false;
-        }
+    std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
+    // DMACopy copies guest memory without telling the texture cache (see the Vulkan rasterizer).
+    boost::container::small_vector<std::pair<DAddr, size_t>, 4> gpu_written;
+    if (!buffer_cache.DMACopy(src_address, dest_address, amount, &gpu_written)) {
+        return false;
     }
-    // DMACopy writes guest memory without telling the texture cache (see the Vulkan rasterizer).
-    std::scoped_lock lock{texture_cache.mutex};
-    texture_cache.WriteGpuMemory(dest_address, amount);
+    texture_cache.WriteDmaCopy(src_address, dest_address, amount, gpu_written);
     return true;
 }
 

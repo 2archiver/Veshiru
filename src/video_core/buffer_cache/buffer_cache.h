@@ -219,18 +219,15 @@ void BufferCache<P>::TickFrame() {
         total_used_memory = runtime.GetDeviceMemoryUsage();
     }
     if (gpu_memory != nullptr && gpu_memory->UsesNativeTiling()) {
-        // Switch 2 titles fill the device with textures (their collector watches the budget);
-        // collect buffers on VRAM-tiered thresholds so 8+ GB GPUs avoid unnecessary GPU-written
-        // readbacks while 4 GB GPUs (e.g. GTX 1650 ~3.04 GiB usable) shed stale geometry/staging
-        // buffers before approaching WDDM VRAM oversubscription.
+        // Switch 2 titles fill the device with textures (their collector watches the budget).
+        // Under device pressure on 4 GB cards, run only non-aggressive collection to shed stale
+        // clean buffers without stalling the GPU to download live GPU-written working sets; only
+        // escalate to aggressive eviction when buffer memory itself reaches its critical cap.
         const bool device_pressure =
             native_gc_tight_vram && total_used_memory >= critical_memory &&
             buffer_bytes >= native_gc_pressure_floor_bytes;
         if (buffer_bytes >= native_gc_expected_bytes || device_pressure) {
-            const bool aggressive =
-                buffer_bytes >= native_gc_critical_bytes ||
-                (device_pressure && buffer_bytes >= native_gc_expected_bytes);
-            RunGarbageCollector(aggressive);
+            RunGarbageCollector(buffer_bytes >= native_gc_critical_bytes);
         }
     } else if (total_used_memory >= minimum_memory) {
         RunGarbageCollector(total_used_memory >= critical_memory);
@@ -1465,7 +1462,9 @@ void BufferCache<P>::ClearFenceDownloads(DAddr device_addr, u64 size) {
 }
 
 template <class P>
-bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 amount) {
+bool BufferCache<P>::DMACopy(
+    GPUVAddr src_address, GPUVAddr dest_address, u64 amount,
+    boost::container::small_vector<std::pair<DAddr, size_t>, 4>* gpu_written_dest) {
     const std::optional<DAddr> cpu_src_address = gpu_memory->GpuToCpuAddress(src_address);
     const std::optional<DAddr> cpu_dest_address = gpu_memory->GpuToCpuAddress(dest_address);
     if (!cpu_src_address || !cpu_dest_address) {
@@ -1526,6 +1525,9 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
     src_buffer.MarkUsage(copy.src_offset, copy.size);
     dest_buffer.MarkUsage(copy.dst_offset, copy.size);
     runtime.CopyBuffer(dest_buffer, src_buffer, copies, true);
+    if (gpu_written_dest) {
+        *gpu_written_dest = tmp_intervals;
+    }
     if (has_new_downloads) {
         memory_tracker.MarkRegionAsGpuModified(*cpu_dest_address, amount);
         const bool should_sync = Settings::IsGPUFenceBehaviorBalanced() || Settings::IsGPUFenceBehaviorAccurate();
@@ -2287,6 +2289,39 @@ bool BufferCache<P>::IsRegionGpuModified(DAddr addr, size_t size) {
     // One lookup instead of visiting every range inside (~4% of the GPU thread for title 1's
     // inline uploads once GPU-written ranges are no longer cleared by downloads).
     return gpu_modified_ranges.Intersects(addr, size);
+}
+
+template <class P>
+bool BufferCache<P>::ComputeWritesHoldGpuData() {
+    bool holds = true;
+    ForEachEnabledBit(channel_state->enabled_compute_storage_buffers &
+                          channel_state->written_compute_storage_buffers,
+                      [&](u32 index) {
+                          const Binding& binding = channel_state->compute_storage_buffers[index];
+                          // As much as BindHostComputeStorageBuffers marks written
+                          const bool native =
+                              ((channel_state->native_compute_storage_buffers >> index) & 1) != 0;
+                          const u32 size =
+                              native ? (std::min)(binding.size,
+                                                  channel_state->compute_storage_write_marks[index])
+                                     : binding.size;
+                          holds &= IsRegionFullyGpuModified(binding.device_addr, size);
+                      });
+    ForEachEnabledBit(channel_state->enabled_compute_texture_buffers &
+                          channel_state->written_compute_texture_buffers,
+                      [&](u32 index) {
+                          const Binding& binding = channel_state->compute_texture_buffers[index];
+                          holds &= IsRegionFullyGpuModified(binding.device_addr, binding.size);
+                      });
+    return holds;
+}
+
+template <class P>
+bool BufferCache<P>::IsRegionFullyGpuModified(DAddr addr, size_t size) {
+    size_t covered = 0;
+    gpu_modified_ranges.ForEachInRange(addr, size,
+                                       [&](DAddr lower, DAddr upper) { covered += upper - lower; });
+    return covered == size;
 }
 
 template <class P>
@@ -3408,7 +3443,19 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
             if (begin >= end) {
                 continue;
             }
-            Nx2Staging staging = runtime.DownloadStagingBuffer(page_size, true);
+            // A copy recorded earlier in the open tick is read only once the tick is done, after
+            // this one: copy into its buffer again instead of allocating a fresh staging buffer.
+            std::optional<Nx2Staging> open_copy;
+            {
+                std::scoped_lock lock{nx2_list_mutex};
+                const auto it = nx2_list_pages.find(page);
+                if (it != nx2_list_pages.end() && it->second.copy &&
+                    it->second.copy_tick == tick) {
+                    open_copy = it->second.copy;
+                }
+            }
+            const Nx2Staging staging =
+                open_copy ? *open_copy : runtime.DownloadStagingBuffer(page_size, true);
             const BufferCopy copy{
                 .src_offset = buffer.Offset(begin),
                 .dst_offset = staging.offset + (begin - page),
@@ -3419,14 +3466,19 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
             recorded = true;
             std::scoped_lock lock{nx2_list_mutex};
             Nx2ListPage& entry = nx2_list_pages[page];
-            if (entry.copy) {
+            if (entry.copy && !open_copy) {
                 nx2_retired_list_copies.emplace_back(entry.copy_tick, std::move(*entry.copy));
             }
             entry.copy = staging;
             entry.copy_writes = entry.writes;
             entry.copy_tick = tick;
-            entry.copy_begin = static_cast<u32>(begin - page);
-            entry.copy_end = static_cast<u32>(end - page);
+            if (open_copy && begin - page <= entry.copy_end && end - page >= entry.copy_begin) {
+                entry.copy_begin = (std::min)(entry.copy_begin, static_cast<u32>(begin - page));
+                entry.copy_end = (std::max)(entry.copy_end, static_cast<u32>(end - page));
+            } else {
+                entry.copy_begin = static_cast<u32>(begin - page);
+                entry.copy_end = static_cast<u32>(end - page);
+            }
         }
         nx2_list_copy_requests.clear();
         std::erase_if(nx2_retired_list_copies, [this](auto& retired) {

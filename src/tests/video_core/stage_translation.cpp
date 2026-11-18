@@ -29,6 +29,7 @@
 #include "video_core/renderer_vulkan/pipeline_shader_emission.h"
 #include "video_core/shader_jobs.h"
 #include "video_core/shader_stage_translation.h"
+#include "video_core/stage_cache.h"
 
 namespace {
 
@@ -452,4 +453,59 @@ TEST_CASE("Compute SPIR-V emitted by a job matches the GPU thread's", "[stage_tr
         CHECK(Vulkan::EmitComputeShader(profile, program, 1, reference) == reference);
     }
     CHECK(compute_fixtures > 0);
+}
+
+TEST_CASE("A stage cache reuses a translation only when its recorded reads answer the same",
+          "[stage_translation]") {
+    using VideoCommon::StageCache;
+    const auto fixtures = LoadFixtures();
+    const auto host = Host();
+    const auto profile = Profile(host);
+    size_t changed_reads = 0;
+    for (const Fixture& fixture : fixtures) {
+        INFO(fixture.name);
+        StageCache cache;
+        FixtureEnvironment env{fixture.environment};
+        const auto signature = StageCache::Signature(env, 1, 1);
+        StageCache::Recorder recorder{env};
+        ShaderPools pools;
+        Shader::Maxwell::Flow::CFG cfg{recorder, pools.flow_block, env.CfgOffset()};
+        auto program =
+            Shader::Maxwell::TranslateProgram(pools.inst, pools.block, recorder, cfg, host);
+        auto translation = std::make_shared<StageCache::Translation>();
+        translation->signature = signature;
+        translation->reads = recorder.TakeReads();
+        translation->program = StageCache::Summary(program);
+        Shader::Backend::Bindings bindings;
+        const std::vector<u32> spirv =
+            Shader::Backend::SPIRV::EmitSPIRV(profile, {}, program, bindings);
+        const std::vector<u8> runtime_key{1, 2, 3};
+        const auto reads = translation->reads;
+        cache.Insert(std::move(translation),
+                     StageCache::MakeEmitted(runtime_key, spirv, program, bindings));
+
+        FixtureEnvironment same{fixture.environment};
+        const auto found = cache.Find(signature, same);
+        REQUIRE(found);
+        const auto emitted = cache.FindEmitted(*found, runtime_key);
+        REQUIRE(emitted);
+        CHECK(emitted->Spirv() == spirv);
+        CHECK(!cache.FindEmitted(*found, {4}));
+
+        const auto cbuf_read =
+            std::ranges::find(reads, u8{0}, &StageCache::Translation::Read::kind);
+        if (cbuf_read == reads.end()) {
+            continue;
+        }
+        nlohmann::json other = fixture.environment;
+        for (auto& entry : other["cbuf_values"]) {
+            if (entry.at(0).get<u64>() == MakeCbufKey(cbuf_read->a, cbuf_read->b)) {
+                entry[1] = entry.at(1).get<u32>() ^ 1;
+            }
+        }
+        FixtureEnvironment changed{other};
+        CHECK(!cache.Find(signature, changed));
+        ++changed_reads;
+    }
+    CHECK(changed_reads > 0);
 }

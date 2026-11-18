@@ -329,6 +329,8 @@ add_library(video_core STATIC
     shader_notify.h
     shader_stage_translation.cpp
     shader_stage_translation.h
+    stage_cache.cpp
+    stage_cache.h
     shader_warm/shader_archives.cpp
     shader_warm/shader_archives.h
     shader_warm/shader_warm_builder.cpp
@@ -363,6 +365,8 @@ add_library(video_core STATIC
     texture_cache/render_targets.h
     texture_cache/samples_helper.h
     texture_cache/stale_pages.h
+    texture_cache/stale_targets.h
+    texture_cache/superseded_images.h
     texture_cache/texture_cache.cpp
     texture_cache/texture_cache.h
     texture_cache/texture_cache_base.h

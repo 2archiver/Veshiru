@@ -282,14 +282,22 @@ public:
 
     /// Allocations kept out of the default blocks, which then hold images only: churned buffers
     /// and long-lived sparse pages left holes the texture cache's collector couldn't drain.
+    /// RenderTargets: attachment and storage images up to half a block. They are created and
+    /// freed by the thousand and left the default blocks full of small holes.
     enum class SeparatePool : u32 {
         SparsePages,
         DeviceBuffers,
+        RenderTargets,
+        Count,
     };
     static constexpr VkDeviceSize SeparatePoolBlockSize = 16ULL << 20;
+    /// DeviceBuffers: buffer cache buffers live a few per block, so 16 MiB blocks stayed pinned
+    /// mostly empty.
+    static constexpr VkDeviceSize DeviceBufferBlockSize = 4ULL << 20;
 
-    /// The pool of that kind for a memory type, created on first use (null if that failed).
-    VmaPool GetSeparatePool(SeparatePool kind, u32 memory_type) const;
+    /// The pool of that kind for a memory type, created on first use unless !create (null if
+    /// that failed or it doesn't exist).
+    VmaPool GetSeparatePool(SeparatePool kind, u32 memory_type, bool create = true) const;
 
     /// Returns the logical device.
     const vk::Device& GetLogical() const {
@@ -456,6 +464,7 @@ public:
     FN_MAX_LIMIT_ELEM(DescriptorSetSampledImages) \
     FN_MAX_LIMIT_ELEM(DescriptorSetStorageImages) \
     FN_MAX_LIMIT_ELEM(DescriptorSetInputAttachments) \
+    FN_MAX_LIMIT_ELEM(ImageDimension2D) \
     FN_MAX_LIMIT_ELEM(FramebufferWidth) \
     FN_MAX_LIMIT_ELEM(FramebufferHeight) \
     FN_MAX_LIMIT_ELEM(FramebufferLayers)
@@ -1339,7 +1348,9 @@ private:
     VkInstance instance;         ///< Vulkan instance.
     VmaAllocator allocator{};    ///< VMA allocator.
     mutable std::mutex separate_pools_mutex;
-    mutable std::array<std::array<VmaPool, VK_MAX_MEMORY_TYPES>, 2> separate_pools{};
+    mutable std::array<std::array<VmaPool, VK_MAX_MEMORY_TYPES>,
+                       static_cast<size_t>(SeparatePool::Count)>
+        separate_pools{};
     vk::DeviceDispatch dld;      ///< Device function pointers.
     vk::PhysicalDevice physical; ///< Physical device.
     vk::Device logical;          ///< Logical device.

@@ -172,6 +172,13 @@ public:
         compute_writes_pending = true;
     }
 
+    /// A guest wait-for-idle while the render pass is active: its barrier is recorded when the
+    /// pass ends instead of ending it now. Draws of the pass are ordered with each other by
+    /// rasterization order already; only work outside the pass needs the barrier.
+    void DeferWaitForIdle(VkPipelineStageFlags stages) {
+        deferred_wfi_stages |= stages;
+    }
+
     /// Returns true when a render pass is currently active in the scheduler state.
     bool IsRenderPassActive() const {
         return state.renderpass != VK_NULL_HANDLE;
@@ -518,6 +525,7 @@ private:
     FragmentBarrierState fragment_barrier;
     bool render_pass_has_stores{};
     bool storage_writes_unordered{};
+    VkPipelineStageFlags deferred_wfi_stages{}; ///< DeferWaitForIdle: barrier due at the pass end
     bool compute_writes_pending{};
     bool graphics_pipeline_missing{};
     u64 render_pass_serial{};
