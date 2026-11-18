@@ -44,8 +44,10 @@
 
 #ifdef _WIN32
 #include <QScreen>
-#include <shellapi.h>
+// windows.h needs to be included before shellapi.h
 #include <windows.h>
+
+#include <shellapi.h>
 #include "common/windows/crash_handler.h"
 
 static void OverrideWindowsFont() {
