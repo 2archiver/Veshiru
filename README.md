@@ -14,16 +14,20 @@ Veshiru is an experimental, open-source Nintendo Switch 2 emulator written in C+
 
 Veshiru is a Windows-exclusive emulator: it is developed, built and tested for 64-bit Windows 10 and 11, and only Windows packages are published.
 
-The current development target is a Windows 11 PC with an Intel Core i7-10750H, NVIDIA GTX 1650 4 GB, Intel UHD integrated graphics and 32 GB RAM. Performance decisions are made for that machine first: GTX 1650 Vulkan rendering, bounded VRAM use, 3-stage front/back GPU thread splitting, native asynchronous shader/pipeline compilation, optional Vulkan compute frame generation (**LS1** and **Open-Frame-Gen**), proven ASTC decode improvements and balanced multi-game Profile-Guided Optimization (`veshiru-windows.profdata`). Veshiru is not affiliated with Nintendo.
+Performance work focuses on Vulkan rendering, bounded VRAM use, GPU thread splitting and
+asynchronous shader/pipeline compilation. Optional frame generation is separate from game simulation
+and is not a substitute for game FPS. Veshiru is not affiliated with Nintendo.
 
-## Interface
+## Interface and diagnostics
 
-Veshiru uses its own **Veshiru Blue** interface: deep-navy surfaces, an electric-blue primary
-accent and cyan highlights, applied to the main window, game list, settings, dialogs and the live
-console. High-resolution game artwork (up to 512x512 PNG, cached in `%APPDATA%\veshiru\cache\game_list\artwork`)
-is rendered natively on Windows HiDPI displays and fetched automatically by Title ID or edition-aware
-search when container icons are missing. Veshiru Blue is the default for new and existing installations,
-and the older themes remain available in **Configure > General > UI**.
+Veshiru Blue is the default interface theme; other themes are available in **Configure > General > UI**.
+On Windows, the Qt frontend logs to the OS console and the session log. **Save Diagnostic Log…**
+exports a redacted snapshot. See [command-line diagnostics](docs/user/CommandLine.md) for console
+and file options.
+
+The game list uses local artwork (including existing HD PNG sidecars) without making artwork
+requests at startup or during discovery. See [game artwork](docs/Veshiru.md#high-resolution-game-artwork)
+for local fallback and the status of online lookup.
 
 ## Downloads and setup
 

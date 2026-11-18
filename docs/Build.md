@@ -14,6 +14,13 @@ cmake --build build
 
 On Windows (MSVC or MinGW/MSYS2), make sure to read the [dependencies guide](Deps.md). Android builds are unsupported and are not covered here.
 
+For release validation use the Windows clang-cl, MSVC SDK, Qt and Vulkan setup in
+[`build-check.yml`](../.github/workflows/build-check.yml) and the packaging settings in
+[`release-binaries.yml`](../.github/workflows/release-binaries.yml). The Qt launcher must be
+`IMAGE_SUBSYSTEM_WINDOWS_CUI`; a build using the GUI subsystem is not a valid release. Check the
+binary with `llvm-readobj --file-headers build/bin/veshiru.exe` and run CTest before packaging.
+See the [1.7 release gate](performance/1.7-validation.md) for manual and performance checks.
+
 ## Dependencies
 
 First, you must [install some dependencies](Deps.md).
