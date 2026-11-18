@@ -701,6 +701,21 @@ private:
             }
             auto backing = back_whole ? AllocateGpuOnlyBacking(size, true, false) : std::nullopt;
             std::scoped_lock lk{m_region_mutex};
+            // A title may create the same region again from the same start with a different size,
+            // without 215 (Mario Kart World walks 300 MB -> 600 MB -> 1 GB on the same address):
+            // the earlier region goes first, as 215 would drop it. Here, on the service thread:
+            // the blocks it left behind would otherwise be released by the GPU thread's back when
+            // it backs the new region, and the back must not wait for a guest thread's turn.
+            u64 old_size = 0;
+            if (const auto old = m_sparse_regions.find(start); old != m_sparse_regions.end()) {
+                old_size = old->second.size;
+            } else if (const auto whole = m_gpu_only_regions.find(start);
+                       whole != m_gpu_only_regions.end()) {
+                old_size = whole->second.size;
+            }
+            if (old_size != 0) {
+                DestroyRegion(start, start + old_size - 1);
+            }
             if ((w[7] & SparseRegionFlag) == 0) {
                 m_gpu_only_ranges[start] = size; // kept out of 216, however it is backed
             }
@@ -793,6 +808,17 @@ private:
         };
         std::scoped_lock lk{m_region_mutex};
         freed = TakeReleasedRegions();
+        DestroyRegion(first, last);
+        // Behind the unmaps above, outside m_region_mutex.
+        Nvidia::Devices::Nx2GpuMemoryRegistry::Defer([this, slot = w[8]] { SignalAfterGpu(slot); });
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    // Drops the region at first (215, or 214 creating it again), as SubDestroySparseRegion
+    // describes. Needs m_region_mutex and an open DeferScope, which holds the listener calls back
+    // until the lock is released.
+    void DestroyRegion(u64 first, u64 last) {
         if (m_gpu_only_ranges.erase(first) != 0 && last > first) {
             DropGpuOnlyTiles(first, last - first + 1, false);
             m_shared_regions.erase(first);
@@ -830,10 +856,6 @@ private:
                 region = m_gpu_only_regions.erase(region);
             }
         }
-        // Behind the unmaps above, outside m_region_mutex.
-        Nvidia::Devices::Nx2GpuMemoryRegistry::Defer([this, slot = w[8]] { SignalAfterGpu(slot); });
-        IPC::ResponseBuilder rb{ctx, 2};
-        rb.Push(ResultSuccess);
     }
 
     // Sub 216 (nn::gpu::sdk::ExecuteSparseMapRequests, behind nvnMemoryPoolMapVirtual and NvRm's
@@ -994,27 +1016,13 @@ private:
     }
 
     // Records a mapped backing for the region at gpu_address. Needs m_region_mutex.
+    // The GPU thread's back calls it (MapBlock), so it makes no registry calls: an entry already
+    // at gpu_address was an earlier region's, and 214 drops that region before making the new one.
+    // Overwriting an entry would leave its backing mapped and its pages lost (Mario Kart World's
+    // GPU-only total grew 250 MiB -> 6.5 GiB in one session that way).
     void RegisterGpuOnlyBacking(u64 gpu_address, MappedBacking&& backing) {
-        // A title may create the same region again from the same start with a different size
-        // (Mario Kart World walks 300 MB -> 600 MB -> 1 GB on the same address). Overwriting the
-        // entry used to drop the previous mapping without undoing it: the backing stayed mapped
-        // in the alias code region and its pages never went back to the pool, so the GPU-only
-        // total grew without bound (250 MiB -> 6.5 GiB in one session) until the process died.
-        // Release the old backing the same way 215 does, i.e. only once the GPU thread is past it.
-        if (const auto it = m_gpu_only_regions.find(gpu_address); it != m_gpu_only_regions.end()) {
-            Nvidia::Devices::Nx2GpuMemoryRegistry::Get().Unmap(gpu_address, it->second.size);
-            Nvidia::Devices::Nx2GpuMemoryRegistry::Get().ReleaseBacking(it->second.cpu_address,
-                                                                        it->second.size);
-            auto done = std::make_shared<std::atomic<bool>>(false);
-            // Behind the release above (held back while a DeferScope is open).
-            Nvidia::Devices::Nx2GpuMemoryRegistry::Defer([this, done] {
-                system.GPU().RunInOrder([done] { done->store(true, std::memory_order_release); });
-            });
-            // Counted out by FreeBackings once its pages are freed.
-            m_gpu_only_bytes -= it->second.size;
-            m_released_regions.push_back({std::move(it->second), done});
-            m_gpu_only_regions.erase(it);
-        }
+        ASSERT_MSG(!m_gpu_only_regions.contains(gpu_address),
+                   "nx2:gpu GPU-only backing at {:#x} registered twice", gpu_address);
         m_gpu_only_regions[gpu_address] = {backing.address, backing.size, std::move(backing.pages),
                                            backing.reserved};
         m_gpu_only_bytes += backing.size;
@@ -4159,6 +4167,9 @@ public:
              "CalculateDecoderImagePoolBuffer"},
             {901, &INx2GraphicsSystemSession::Stub, "VideoInitialize (guessed)"},
             {902, &INx2GraphicsSystemSession::OpenVideoSession, "OpenVideoDecoderSession (guessed)"},
+            // Sent after a movie's decoder session finalizes (Ocarina of Time's intro played to
+            // its end): the close of the 901 initialize.
+            {903, &INx2GraphicsSystemSession::Stub, "VideoFinalize (guessed)"},
             {905, &INx2GraphicsSystemSession::OpenVideoSession, "OpenVideoDecoderSessionWithFlag"},
             {906, &INx2GraphicsSystemSession::OpenVideoSession, "OpenVideoDecoderSessionWithVersion"},
             {1001, &INx2GraphicsSystemSession::Stub, "VideoInitialize2 (guessed)"},
@@ -4467,17 +4478,22 @@ private:
     }
 
     // Mirrors Eden's guest syncpoint values into the shared RO page. Returns true if any changed.
-    bool UpdateSyncptValues() {
+    bool UpdateSyncptValues(std::array<u64, 0x40>* changed_ids = nullptr) {
         auto& manager = system.Host1x().GetSyncpointManager();
         bool changed = false;
         manager.WithGuestValuesStable([&] {
             for (u32 id = 0; id < std::min(m_syncpt_count, HostSyncpoints); ++id) {
-                const u64 value = manager.GetGuestSyncpointValue(id);
+                const u32 value = manager.GetGuestSyncpointValue(id);
                 const u64 address = m_syncpt_ro + SyncptValuesOffset + id * 8;
                 if (m_syncpt_memory->Read64(address) != value) {
                     m_syncpt_memory->Write64(address, value);
                     changed = true;
                 }
+                if (changed_ids != nullptr && id / 64 < changed_ids->size() &&
+                    m_syncpt_polled_values[id] != value) {
+                    (*changed_ids)[id / 64] |= u64{1} << (id % 64);
+                }
+                m_syncpt_polled_values[id] = value;
             }
         });
         return changed;
@@ -4495,12 +4511,16 @@ private:
         for (u32 w = 0; w < words; ++w) {
             armed[w] = m_syncpt_memory->Read64(m_syncpt_rw + SyncptRwBitsOffset + w * 8);
         }
-        UpdateSyncptValues();
+        std::array<u64, 0x40> changed_ids{};
+        UpdateSyncptValues(&changed_ids);
         bool acked = false;
         for (u32 w = 0; w < words; ++w) {
             const u64 ro_address = m_syncpt_ro + SyncptRoBitsOffset + w * 8;
             if (m_syncpt_memory->Read64(ro_address) != armed[w]) {
                 m_syncpt_memory->Write64(ro_address, armed[w]);
+                acked = true;
+            }
+            if (w < changed_ids.size() && (armed[w] & changed_ids[w]) != 0) {
                 acked = true;
             }
         }
@@ -4980,6 +5000,7 @@ private:
     u64 m_syncpt_rw{};
     u64 m_syncpt_ro{};
     u32 m_syncpt_count{};
+    std::array<u32, HostSyncpoints> m_syncpt_polled_values{};
     std::shared_ptr<Core::Timing::EventType> m_syncpt_poll;
 };
 

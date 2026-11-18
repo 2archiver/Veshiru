@@ -23,6 +23,7 @@ add_executable(tests
     video_core/semaphore_waiters.cpp
     video_core/hdr_output.cpp
     core/nx2_streamplay.cpp
+    core/nx2_gpu_only_regions.cpp
     core/nx2_video_ready.cpp
     core/nx2_thread_stats.cpp
     core/nx2_debug_server.cpp
@@ -225,6 +226,7 @@ add_executable(tests
     video_core/nx2_perf_texture_writes.cpp
     video_core/texture_cache_memory_limits.cpp
     video_core/h264_packet.cpp
+    video_core/vp9_range_encoder.cpp
     video_core/nx2_gpu_mapping.cpp
     video_core/vertex_repack.cpp
     video_core/ampere_lowering.cpp
@@ -265,7 +267,8 @@ target_link_libraries(tests PRIVATE common core audio_core input_common video_co
 target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain Threads::Threads)
 
 if (TARGET dynarmic::dynarmic)
-    target_sources(tests PRIVATE core/jit_codegen_options.cpp core/jit_ordered_loads.cpp core/window_trace.cpp)
+    target_sources(tests PRIVATE core/jit_codegen_options.cpp core/jit_ordered_loads.cpp
+        core/jit_shared_cache.cpp core/window_trace.cpp)
     target_link_libraries(tests PRIVATE dynarmic::dynarmic)
 endif()
 
