@@ -21,7 +21,28 @@
 
 namespace Common::Log {
 
-void WriteStandardStream(std::string_view text, bool to_stderr) noexcept {
+#ifdef _WIN32
+namespace {
+
+constexpr WORD White = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+constexpr WORD ForegroundMask = White | FOREGROUND_INTENSITY;
+
+WORD Foreground(ConsoleColor color) {
+    switch (color) {
+    case ConsoleColor::Warning:
+        return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+    case ConsoleColor::Error:
+        return FOREGROUND_RED | FOREGROUND_INTENSITY;
+    default:
+        return White;
+    }
+}
+
+} // namespace
+#endif
+
+void WriteStandardStream(std::string_view text, bool to_stderr,
+                         [[maybe_unused]] ConsoleColor color) noexcept {
 #ifdef _WIN32
     const HANDLE handle = GetStdHandle(to_stderr ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
     if (!handle || handle == INVALID_HANDLE_VALUE || text.empty()) {
@@ -36,9 +57,21 @@ void WriteStandardStream(std::string_view text, bool to_stderr) noexcept {
             if (count > 0) {
                 std::wstring wide(static_cast<std::size_t>(count), L'\0');
                 MultiByteToWideChar(CP_UTF8, 0, text.data(), size, wide.data(), count);
+                // Console attributes are shared by stdout and stderr. Keep the change and restore
+                // in one critical section, without locking file or pipe writes.
+                static std::mutex console_mutex;
+                std::scoped_lock lock{console_mutex};
+                CONSOLE_SCREEN_BUFFER_INFO info{};
+                const bool restore = color != ConsoleColor::Default &&
+                                     GetConsoleScreenBufferInfo(handle, &info) &&
+                                     SetConsoleTextAttribute(handle, static_cast<WORD>(
+                                         (info.wAttributes & ~ForegroundMask) | Foreground(color)));
                 DWORD written{};
                 WriteConsoleW(handle, wide.data(), static_cast<DWORD>(wide.size()), &written,
                               nullptr);
+                if (restore) {
+                    SetConsoleTextAttribute(handle, info.wAttributes);
+                }
             }
         } catch (...) {
             // A diagnostic should not cause termination on allocation failure.
@@ -93,6 +126,12 @@ void WriteStandardStream(std::string_view text, bool to_stderr) noexcept {
 }
 
 struct StandardStreamSink::State {
+    struct Line {
+        std::string text;
+        bool to_stderr;
+        ConsoleColor color;
+    };
+
     void Run() {
         std::unique_lock lock{mutex};
 #ifdef _WIN32
@@ -105,11 +144,11 @@ struct StandardStreamSink::State {
                 changed.notify_all();
                 return;
             }
-            auto [text, to_stderr] = std::move(pending.front());
+            auto line = std::move(pending.front());
             pending.pop_front();
             writing = true;
             lock.unlock();
-            WriteStandardStream(text, to_stderr);
+            WriteStandardStream(line.text, line.to_stderr, line.color);
             lock.lock();
             writing = false;
             if (pending.empty()) {
@@ -120,7 +159,7 @@ struct StandardStreamSink::State {
 
     std::mutex mutex;
     std::condition_variable changed;
-    std::deque<std::pair<std::string, bool>> pending;
+    std::deque<Line> pending;
     bool writing{};
     bool closing{};
     bool done{};
@@ -136,12 +175,13 @@ StandardStreamSink::~StandardStreamSink() {
     Close();
 }
 
-void StandardStreamSink::Enqueue(std::string text, bool to_stderr, bool important) {
+void StandardStreamSink::Enqueue(std::string text, bool to_stderr, bool important,
+                                 ConsoleColor color) {
     constexpr std::size_t limit = 512;
     constexpr std::size_t reserve = 32;
     std::scoped_lock lock{state->mutex};
     if (!state->closing && state->pending.size() < (important ? limit : limit - reserve)) {
-        state->pending.emplace_back(std::move(text), to_stderr);
+        state->pending.push_back(State::Line{std::move(text), to_stderr, color});
         state->changed.notify_one();
     }
 }

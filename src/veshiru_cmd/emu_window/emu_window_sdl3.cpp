@@ -27,6 +27,7 @@
 #include "input_common/main.h"
 #include "veshiru_cmd/emu_window/emu_window_sdl3.h"
 #include "veshiru_cmd/veshiru_icon.h"
+#include "video_core/renderer_base.h"
 
 EmuWindow_SDL3::EmuWindow_SDL3(InputCommon::InputSubsystem* input_subsystem_, Core::System& system_)
     : input_subsystem{input_subsystem_}, system{system_} {
@@ -36,18 +37,8 @@ EmuWindow_SDL3::EmuWindow_SDL3(InputCommon::InputSubsystem* input_subsystem_, Co
         LOG_CRITICAL(Frontend, "Failed to initialize SDL3: {}, Exiting...", SDL_GetError());
         exit(1);
     }
-    titlebar_timer = SDL_AddTimer(2000, [](void *userdata, SDL_TimerID, Uint32) -> Uint32 {
-        auto* this_ = (EmuWindow_SDL3*)userdata;
-        auto const results = this_->system.GetAndResetPerfStats();
-        auto* const title = new std::string(fmt::format("{} | {}-{} | FPS: {:.0f} ({:.0f}%)", Common::g_build_fullname, Common::g_scm_branch, Common::g_scm_desc, results.average_game_fps, results.emulation_speed * 100.0f));
-        // Timers run on their own thread and AppKit throws when a title is set off the main
-        // thread: ApplyPendingTitle sets it from the main loop.
-        delete this_->pending_title.exchange(title);
-        static const bool log_fps = std::getenv("EDEN_NX2_FPS_LOG") != nullptr;
-        if (log_fps) {
-            LOG_INFO(Frontend, "FPS: {:.1f} speed: {:.0f}% frametime: {:.2f} ms", results.average_game_fps,
-                     results.emulation_speed * 100.0, results.frametime * 1000.0);
-        }
+    titlebar_timer = SDL_AddTimer(2000, [](void* userdata, SDL_TimerID, Uint32) -> Uint32 {
+        static_cast<EmuWindow_SDL3*>(userdata)->title_pending.store(true, std::memory_order_relaxed);
         return 2000;
     }, this);
     mouse_timer = SDL_AddTimer(100, [](void *userdata, SDL_TimerID, Uint32) -> Uint32 {
@@ -63,7 +54,6 @@ EmuWindow_SDL3::EmuWindow_SDL3(InputCommon::InputSubsystem* input_subsystem_, Co
 EmuWindow_SDL3::~EmuWindow_SDL3() {
     SDL_RemoveTimer(titlebar_timer);
     SDL_RemoveTimer(mouse_timer);
-    delete pending_title.exchange(nullptr);
     system.HIDCore().UnloadInputDevices();
     input_subsystem->Shutdown();
     SDL_Quit();
@@ -164,9 +154,25 @@ bool EmuWindow_SDL3::IsOpen() const {
 }
 
 void EmuWindow_SDL3::ApplyPendingTitle() {
-    if (std::string* const title = pending_title.exchange(nullptr)) {
-        SDL_SetWindowTitle(render_window, title->c_str());
-        delete title;
+    if (!title_pending.exchange(false, std::memory_order_relaxed) || !system.IsPoweredOn()) {
+        return;
+    }
+    const auto results = system.GetAndResetPerfStats();
+    const auto stats = system.Renderer().GetFrameGenStatus();
+    const auto rates = present_sampler.Sample(stats.presents);
+    const auto presents = rates ? fmt::format(" | Vulkan presents/s: {:.1f} original + {:.1f} generated",
+                                               rates->original, rates->generated)
+                                : std::string{};
+    const auto title = fmt::format("{} | Game: {:.0f} FPS ({:.0f}%){}", Common::g_build_fullname,
+                                   results.average_game_fps, results.emulation_speed * 100.0,
+                                   presents);
+    SDL_SetWindowTitle(render_window, title.c_str());
+
+    static const bool log_fps = std::getenv("EDEN_NX2_FPS_LOG") != nullptr;
+    if (log_fps) {
+        LOG_INFO(Frontend, "Game FPS: {:.1f} speed: {:.0f}% frametime: {:.2f} ms{}",
+                 results.average_game_fps, results.emulation_speed * 100.0,
+                 results.frametime * 1000.0, presents);
     }
 }
 

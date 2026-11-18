@@ -48,6 +48,13 @@ def test(probe, root):
     if hasattr(os, "mkfifo"):
         os.mkfifo(root / "log-fifo")
         subprocess.run([probe, "fifo"], cwd=root, timeout=8, check=True)
+    if os.name == "nt":
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        subprocess.run([probe, "colors"], cwd=root, timeout=8, check=True,
+                       startupinfo=startup, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        print("Logging: native console colors and attribute restoration passed")
 
 
 if __name__ == "__main__":

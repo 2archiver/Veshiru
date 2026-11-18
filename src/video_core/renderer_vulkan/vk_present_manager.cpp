@@ -152,6 +152,7 @@ void ResetPresentation(Frame& frame) {
     frame.color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     frame.present_spacing = {};
     frame.game_frame_presents = 1;
+    frame.generated = false;
 #ifdef EGLANTINE_STREAMLINE
     frame.frame_gen = false;
 #endif
@@ -832,7 +833,10 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         });
     }
 #endif
-    swapchain.Present(render_semaphore);
+    if (swapchain.Present(render_semaphore)) {
+        auto& count = frame->generated ? generated_presents : original_presents;
+        count.fetch_add(1, std::memory_order_relaxed);
+    }
 #ifdef EGLANTINE_STREAMLINE
     if (frame->frame_gen) {
         Streamline::FrameGenAfterPresent(frame->frame_gen_frame.index);

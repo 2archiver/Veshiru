@@ -1044,8 +1044,6 @@ void MainWindow::InitializeWidgets() {
         tr("Current emulation speed. Values higher or lower than 100% "
            "indicate emulation is running faster or slower than a Switch."));
     game_fps_label = new QLabel();
-    game_fps_label->setToolTip(tr("How many frames per second the game is currently displaying. "
-                                  "This will vary from game to game and scene to scene."));
     dlss_status_label = new QLabel();
     dlss_status_label->setToolTip(
         tr("NVIDIA DLSS is upscaling the game, in the mode shown. The window adapting filter "
@@ -2438,7 +2436,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     frame_gen_frames = 0;
     frame_gen_generating = false;
     frame_gen_fps = 0.0;
-    frame_gen_fps_timer.invalidate();
+    present_sampler = {};
     refresh_button->setDisabled(true);
     SetFPSSuffix();
 
@@ -5441,14 +5439,8 @@ void MainWindow::UpdateStatusBar() {
 
     // Before statsUpdated, so the performance overlay reads this update's generated frame rate.
     const auto frame_gen = QtCommon::system->GPU().Renderer().GetFrameGenStatus();
-    const u64 new_generated_frames = frame_gen.generated_frames - frame_gen_frames;
-    const qint64 frame_gen_ms = frame_gen_fps_timer.isValid() ? frame_gen_fps_timer.restart() : 0;
-    if (!frame_gen_fps_timer.isValid()) {
-        frame_gen_fps_timer.start();
-    }
-    frame_gen_fps = frame_gen_ms > 0 ? static_cast<double>(new_generated_frames) * 1000.0 /
-                                           static_cast<double>(frame_gen_ms)
-                                     : 0.0;
+    const auto present_rates = present_sampler.Sample(frame_gen.presents);
+    frame_gen_fps = present_rates ? present_rates->generated : 0.0;
     frame_gen_generating = frame_gen.generated_frames > frame_gen_frames;
 #ifdef EGLANTINE_STREAMLINE
     // NVIDIA DLSS Frame Generation adds its frames after the renderer, at present.
@@ -5527,6 +5519,15 @@ void MainWindow::UpdateStatusBar() {
         fpsText = fpsText % QStringLiteral(" (%1)").arg(fpsSuffix);
 
     game_fps_label->setText(fpsText);
+    QString fpsTooltip = tr("Game FPS excludes all generated frames.");
+    if (present_rates) {
+        fpsTooltip += QLatin1Char('\n') +
+                      tr("Vulkan presents: %1 original + %2 generated per second (not display "
+                         "scanout; excludes driver-injected frames).")
+                          .arg(present_rates->original, 0, 'f', 1)
+                          .arg(present_rates->generated, 0, 'f', 1);
+    }
+    game_fps_label->setToolTip(fpsTooltip);
 
     emu_frametime_label->setText(tr("Frame: %1 ms").arg(results.frametime * 1000.0, 0, 'f', 2));
 

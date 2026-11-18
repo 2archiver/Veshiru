@@ -146,8 +146,8 @@ struct Filter {
 struct Options {
     bool console{};
     bool asynchronous{};
-    std::optional<Level> fixed_level;
-    std::filesystem::path extra_file;
+    std::optional<Level> fixed_level{};
+    std::filesystem::path extra_file{};
 };
 
 /// Call on the main thread, before starting other components. Returns false if the requested

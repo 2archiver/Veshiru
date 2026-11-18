@@ -6,11 +6,14 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-18
+
 ### Native Windows diagnostics
 
 - Replaced the Qt imitation terminal and logo with the standard Windows console. The Qt UI stays
-  available; shell redirects receive plain UTF-8. Added `--console`, `--no-console`, `--log-level`
-  and `--log-file`, bounded asynchronous logging, and orderly Ctrl+C/Ctrl+Break handling.
+  available. Normal output is white, warnings are yellow, and errors are red on a Windows
+  console; redirects receive plain UTF-8. Added `--console`, `--no-console`, `--log-level` and
+  `--log-file`, bounded asynchronous logging, and orderly Ctrl+C/Ctrl+Break handling.
 - **Save Diagnostic Log…** replaces the export from the old console window. Logs retain build,
   host and configured-renderer diagnostics and redact common host paths and credential fields.
 
@@ -21,8 +24,9 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   with identical candidate and directory-watch counts. This is not startup or gameplay FPS evidence.
 - Open-Frame-Gen checks Vulkan device and image capabilities, pauses outside SDR, and falls back to
   game frames after preparation failures. Optional extra frames don't wait for presentation fences.
-  Generated-frame telemetry reports queued work separately from game FPS; display pacing and input
-  latency still require a hardware pass. Packaged notices are included for the verified Nano weights.
+  Telemetry separates game FPS, queued generation, and original/generated Vulkan presents; the
+  latter are not display scanout measurements. Display pacing and input latency still require a
+  hardware pass. Packaged notices are included for the verified Nano weights.
 
 ### Artwork and upgrading
 
@@ -32,8 +36,9 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 - Keep a profile backup before upgrading. No save or game-content migration is required by these
   changes. To roll back, use the previous verified build and the unchanged profile (or its backup).
   The previous build may resume its original artwork-network behavior and console UI.
-- [1.7 validation and release gate](docs/performance/1.7-validation.md): no version bump, merge, tag,
-  or published artifact until the supported Windows and matched performance checks pass.
+- [1.7 validation and release gate](docs/performance/1.7-validation.md): download-only CI packages
+  can be checked without creating a release or tag. Windows and matched hardware validation remain
+  release gates.
 
 ## [1.6.0] - 2026-11-17
 

@@ -31,6 +31,7 @@
 #include "veshiru/compatibility_report.h"
 #include "veshiru/hotkeys.h"
 #include "veshiru/user_data_migration.h"
+#include "video_core/frame_presentation_stats.h"
 
 #ifdef __unix__
 #include <QDBusObjectPath>
@@ -582,7 +583,7 @@ private:
     QString dlss_status_text;
     bool frame_gen_generating = false;
     double frame_gen_fps = 0.0;
-    QElapsedTimer frame_gen_fps_timer;
+    VideoCore::FramePresentSampler present_sampler;
     VolumeButton* volume_button = nullptr;
     QWidget* volume_popup = nullptr;
     QSlider* volume_slider = nullptr;

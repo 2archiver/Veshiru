@@ -228,7 +228,7 @@ void ApplyLaunchParams(LaunchParams const& lp) noexcept {
     }
 
     if (lp.print_version) {
-        LOG_INFO(Frontend, "Eden {} {}", Common::g_scm_branch, Common::g_scm_desc);
+        LOG_INFO(Frontend, "Veshiru {} ({})", Common::g_build_version, Common::g_scm_rev);
     }
     if (lp.print_help) {
         LOG_INFO(Frontend,

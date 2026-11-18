@@ -150,9 +150,11 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
 ### Phase 1 (implemented)
 
 **`status`** `{fps_window_ms?}`. It reads the title and program id that `Load` saw, the build from
-`Common::g_build_fullname` and `g_scm_rev`, and `System::IsPaused`. It measures fps from
-`Core::g_nx2_present_count` (`src/core/core.cpp:78`) over a short window. It does not call
-`GetAndResetPerfStats`, which would reset the Qt status bar's counters.
+`Common::g_build_fullname` and `g_scm_rev`, and `System::IsPaused`. `game_fps` and the legacy
+`fps` key measure guest presents over a short window. `generated_queued_fps` measures software
+frames queued; `original_present_fps` and `generated_present_fps` count successful Vulkan presents
+separately (null if unavailable). These are not display scanout rates and exclude frames injected by
+the driver. This call does not reset the frontend's counters.
 
 **`frame_times`** `{seconds?, refresh_hz?}` waits for `seconds` (default 5, > 0, at most 60),
 interruptible on shutdown like `status`. It measures intervals between guest presents inside

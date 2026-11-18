@@ -565,11 +565,14 @@ struct Impl {
             return;
         }
         auto line = FormatConsoleLine(entry, message);
+        const bool error = entry.log_level >= Level::Error;
+        const bool important = entry.log_level >= Level::Warning;
+        const auto color = error ? ConsoleColor::Error
+                                 : (important ? ConsoleColor::Warning : ConsoleColor::Normal);
         if (stream_sink) {
-            stream_sink->Enqueue(std::move(line), entry.log_level >= Level::Error,
-                                 entry.log_level >= Level::Warning);
+            stream_sink->Enqueue(std::move(line), error, important, color);
         } else if (!asynchronous) {
-            WriteStandardStream(line, entry.log_level >= Level::Error);
+            WriteStandardStream(line, error, color);
         }
     }
 

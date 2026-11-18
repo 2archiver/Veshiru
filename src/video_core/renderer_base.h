@@ -16,6 +16,7 @@
 #include "common/common_types.h"
 #include "common/settings_enums.h"
 #include "core/frontend/framebuffer_layout.h"
+#include "video_core/frame_presentation_stats.h"
 #include "video_core/gpu.h"
 #include "video_core/rasterizer_interface.h"
 
@@ -48,7 +49,8 @@ enum class FrameGenState : u8 {
 
 struct FrameGenStatus {
     FrameGenState state{FrameGenState::UnsupportedRenderer};
-    u64 generated_frames{};
+    u64 generated_frames{}; ///< Software-generated frames queued for presentation.
+    std::optional<FramePresentCounts> presents{}; ///< Excludes extra driver-injected frames.
 };
 
 struct DlssStatus {
