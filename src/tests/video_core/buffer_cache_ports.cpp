@@ -2881,16 +2881,18 @@ TEST_CASE("Speculative read downloads cap each flush to a forward-biased window"
     constexpr u32 TotalSize = 0x400000; // 4 MiB, twice MaxSpeculativeReadBytes
 
     Fixture f{0x500000};
+    const Nx2TitleScope nx2_title;
     const auto id = Access::Add(*f.cache, Base, TotalSize);
     auto& buffer = Access::Get(*f.cache, id);
 
-    // Record the full 4 MiB range into buffer.cpu_read_ranges.
+    // Record the full 4 MiB range into cpu_read_ranges via Switch 2 GetFlushArea.
     std::ranges::fill(buffer.bytes, u8{0x11});
     Access::MarkWritten(*f.cache, id, Base, TotalSize);
-    f.cache->DownloadMemoryForRead(Base, 0x200000);
-    f.cache->FinishReadDownloads(Base, 0x200000);
-    f.cache->DownloadMemoryForRead(Base + 0x200000, 0x200000);
-    f.cache->FinishReadDownloads(Base + 0x200000, 0x200000);
+    const auto warm = f.cache->GetFlushArea(Base, TotalSize);
+    REQUIRE(warm);
+    REQUIRE_FALSE(warm->preemtive);
+    f.cache->DownloadMemoryForRead(warm->start_address, warm->end_address - warm->start_address);
+    f.cache->FinishReadDownloads(warm->start_address, warm->end_address - warm->start_address);
 
     // Rewrite all 4 MiB on the GPU, then read a single 4 KiB page 1 MiB in.
     std::ranges::fill(buffer.bytes, u8{0x5a});
@@ -2908,11 +2910,10 @@ TEST_CASE("Speculative read downloads cap each flush to a forward-biased window"
     const DAddr expected_window_begin = Probe - back_window;
     const DAddr expected_window_end = Probe + ProbeSize + ahead_window;
 
-    f.cache->DownloadMemoryForRead(Probe, ProbeSize);
+    REQUIRE_FALSE(ReadWord(f, Probe).preemtive);
     REQUIRE(f.runtime.host_read_barriers == 1);
     REQUIRE(f.runtime.download_calls == 1);
     REQUIRE(f.runtime.download_bytes == ProbeSize + max_spec);
-    f.cache->FinishReadDownloads(Probe, ProbeSize);
     REQUIRE(f.bytes[Probe - 0x10000] == 0x5a);
 
     // Forward and backward pages inside the prefetched window land with zero extra barriers.

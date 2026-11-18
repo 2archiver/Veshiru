@@ -839,12 +839,19 @@ void BufferCache<P>::RecordReadDownload(std::span<const std::pair<DAddr, u64>> r
                     BufferCopy& copy = copies[i].copy;
                     copy.dst_offset += staging.offset;
                     buffer.MarkUsage(copy.src_offset, copy.size);
-                    batch.push_back(copy);
-                    download.copies.push_back(BufferCopy{
-                        .src_offset = buffer.CpuAddr() + copy.src_offset,
-                        .dst_offset = copy.dst_offset,
-                        .size = copy.size,
-                    });
+                    if (!batch.empty() &&
+                        batch.back().src_offset + batch.back().size == copy.src_offset &&
+                        batch.back().dst_offset + batch.back().size == copy.dst_offset) {
+                        batch.back().size += copy.size;
+                        download.copies.back().size += copy.size;
+                    } else {
+                        batch.push_back(copy);
+                        download.copies.push_back(BufferCopy{
+                            .src_offset = buffer.CpuAddr() + copy.src_offset,
+                            .dst_offset = copy.dst_offset,
+                            .size = copy.size,
+                        });
+                    }
                     ++i;
                 }
                 // Mapped buffers too: the GPU thread's later work may write them before the copy

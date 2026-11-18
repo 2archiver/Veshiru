@@ -976,8 +976,15 @@ const EmitContext::GlobalMemoryFunctions& EmitContext::GlobalMemoryFunctionsOf(
 /// holding the address at run time.
 void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
     const Info& info{program.info};
-    global_memory_functions.resize(program.global_memory_routes.size() + 1);
-    global_memory_route = program.global_memory_route;
+    // When select_global_memory_buffer is enabled (NVIDIA proprietary driver), every access
+    // selects among all bound buffers through route 0, avoiding duplicate per-route helper/search
+    // functions and driver hangs on per-route OpSelect chains.
+    if (!profile.select_global_memory_buffer) {
+        global_memory_functions.resize(program.global_memory_routes.size() + 1);
+        global_memory_route = program.global_memory_route;
+    } else {
+        global_memory_functions.resize(1);
+    }
     if (!info.uses_global_memory || !profile.support_int64) {
         return;
     }
