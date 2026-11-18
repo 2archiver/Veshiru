@@ -63,6 +63,7 @@ std::string CurrentExceptionType() {
         LOG_CRITICAL(Debug, "std::terminate called without an active exception");
     }
     Log::Stop();
+    Log::FlushConsole();
     std::abort();
 }
 

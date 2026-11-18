@@ -39,7 +39,7 @@ ParamPackage::ParamPackage(const std::string& serialized) {
         std::vector<std::string> key_value;
         Common::SplitString(pair, KEY_VALUE_SEPARATOR, key_value);
         if (key_value.size() != 2) {
-            LOG_ERROR(Common, "invalid key pair {}", pair);
+            LOG_ERROR(Common, "Invalid parameter pair in serialized settings");
             continue;
         }
 

@@ -73,6 +73,7 @@ endif()
 
 # qt stuff
 option(ENABLE_QT "Enable the Qt frontend" ON)
+option(VESHIRU_EXPERIMENTAL_ONLINE_ARTWORK "Build opt-in SteamGridDB lookup for provider validation" OFF)
 option(ENABLE_QT_TRANSLATION "Enable translations for the Qt frontend" OFF)
 option(ENABLE_UPDATE_CHECKER "Enable update checker (for Qt and Android)" OFF)
 set(VESHIRU_BUILD_TAG "" CACHE STRING "Published build-N release tag; empty for local builds")

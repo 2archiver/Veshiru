@@ -285,37 +285,52 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     const HdrPresent output = UpdateHdrPresent();
     frame->color_space = output.color_space;
 
+    const auto layout = render_window.GetFramebufferLayout();
     scheduler.RequestOutsideRenderPassOperationContext();
-    blit_swapchain.DrawToFrame(device, rasterizer, frame, framebuffers,
-                              render_window.GetFramebufferLayout(),
-                              present_manager.SwapchainImageCount(), output_format.format, output);
+    blit_swapchain.DrawToFrame(device, rasterizer, frame, framebuffers, layout,
+                               present_manager.SwapchainImageCount(), output_format.format, output);
 
 #ifdef HAS_LSFG
-    void(frame_gen.WantedGenerations(present_manager.MaxExtraFrames(),
-                                     present_manager.FreeFrames(),
-                                     present_manager.TakeBlockedTime()));
-
-    frame_gen.Process(device, frame, frame->image_format, GuestExtent(framebuffers));
-
-    const size_t generated_frames = frame_gen.GeneratedFrameCount();
-    // Each generated frame keeps the screen for an equal share of the real frame interval. Sent
-    // back to back, a high refresh rate display shows it for one refresh only.
-    const auto spacing = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::duration<f32>(std::min(frame_gen.FrameInterval(), 0.1f) /
-                                   static_cast<f32>(generated_frames + 1)));
-    const u32 game_frame_presents = static_cast<u32>(generated_frames) + 1;
-    frame->game_frame_presents = game_frame_presents;
-    for (size_t generation = 0; generation < generated_frames; ++generation) {
-        Frame* generated = present_manager.GetRenderFrame();
+    frame_gen.Process(device, present_manager, frame, GuestExtent(framebuffers));
+    const size_t planned = frame_gen.PlannedGenerations();
+    // Give generated frames an equal share of the real frame interval, without changing guest
+    // simulation/audio timing or counting them as guest frames.
+    const auto spacing =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<f32>(
+            std::min(frame_gen.FrameInterval(), 0.1f) / static_cast<f32>(planned + 1)));
+    size_t queued = 0;
+    for (; queued < planned; ++queued) {
+        Frame* generated = present_manager.TryGetRenderFrame();
+        if (!generated) {
+            break;
+        }
         generated->color_space = output.color_space;
         generated->present_spacing = spacing;
-        generated->game_frame_presents = game_frame_presents;
-        blit_swapchain.PrepareFrame(device, generated, render_window.GetFramebufferLayout());
-        frame_gen.GenerateInto(device, generated, generation);
+        generated->game_frame_presents = static_cast<u32>(planned) + 1;
+        try {
+            blit_swapchain.PrepareFrame(device, generated, layout);
+            if (!generated->storage_view || generated->image_format != frame->image_format) {
+                present_manager.RecycleUnsubmittedFrame(generated);
+                frame_gen.ResourceFailed(frame->image_format);
+                break;
+            }
+            frame_gen.GenerateInto(device, generated, queued);
+        } catch (const vk::Exception& error) {
+            if (error.GetResult() == VK_ERROR_DEVICE_LOST) {
+                throw;
+            }
+            LOG_DEBUG(Render_Vulkan, "Could not prepare a generated frame: {}", error.what());
+            present_manager.RecycleUnsubmittedFrame(generated);
+            frame_gen.ResourceFailed(frame->image_format);
+            break;
+        }
         scheduler.Flush(*generated->render_ready);
         present_manager.Present(generated);
         scheduler.DispatchWork();
     }
+    // Keep the real frame on the same pacing subdivision as any extras already submitted.
+    frame->game_frame_presents = queued == 0 ? 1 : static_cast<u32>(planned) + 1;
+    frame_gen.CompleteFrame(queued);
 #endif
 
     if (const auto mark = scheduler.NextFrameMark(); mark != Scheduler::FrameMark::None) {

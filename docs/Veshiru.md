@@ -63,15 +63,32 @@ notices, and add a regression test or a targeted diagnostic where practical.
   `open_frame_gen_weights.cpp`), then performs bilinear flow upsampling, bidirectional warping and
   CAS sharpening at presentation resolution without Python, CUDA or TensorRT dependencies.
 
+Open-Frame-Gen is opt-in and only runs with eligible Vulkan storage, sampling and compute support.
+It pauses for non-SDR output and falls back to real frames if its resources cannot be prepared.
+Interpolation can add latency or artifacts, especially around overlays, camera cuts or uneven
+frame times. Frame-generation activity logs count **queued** frames, not display measurements.
+Use game FPS and game-frame time to evaluate emulation performance. See the
+[validation record](performance/1.7-validation.md) for device test status and model provenance.
+
 ## High-resolution game artwork
 
-Game-list icons are cached lossless up to 512x512 PNG in
-`%APPDATA%\veshiru\cache\game_list\artwork\<title_id>.png` (`Common::ArtworkCache`) without
-touching user custom overrides in `load/<title_id>/icon.*`, and rendered with `devicePixelRatioF()`
-scaling on Windows HiDPI monitors. `IconSearch` queries Nintendo CDN catalogs by 16-hex Title ID
-first and falls back to an edition-aware scored title matcher (`Nintendo Switch 2 Edition`,
-Deluxe/Demo/Region disambiguation), silently auto-fetching missing artwork in the background and
-exposing **Refresh Game Artwork** on the game-list context menu.
+The game list keeps using local custom artwork, cached images, embedded icons and a placeholder
+when no usable artwork is available. Existing sidecars under `<CacheDir>/artwork/<base_title_id>.png`
+are read offline (lower-resolution or invalid sidecars can fall back to container artwork).
+Replacing a sidecar does not modify a game container or the user's `load/<title_id>/icon.*` override.
+The cache stores PNG and small versioned JSON metadata separately. A selected local image is kept
+until replaced or removed; no automatic expiry triggers a network refresh. An over-quota write is
+refused rather than evicting other artwork.
+
+No background scraping or title-ID uploads are performed. The SteamGridDB API integration is
+**disabled in standard builds** pending provider clearance and live verification. Validation-only
+builds can compile it with `-DVESHIRU_EXPERIMENTAL_ONLINE_ARTWORK=ON`. The user must explicitly
+review/edit a single title and supply their own API key (held in memory, not saved by this build).
+Only the API host receives the key; the asset CDN receives a credential-free PNG request. Nothing
+is replaced until the user confirms a preview. Timeouts, cancellation, invalid responses and rate
+limits leave existing artwork alone. See the provider's [terms](https://www.steamgriddb.com/terms)
+and [privacy policy](https://www.steamgriddb.com/privacy). No online assets are bundled or licensed
+for redistribution by Veshiru.
 
 ## Save compatibility
 

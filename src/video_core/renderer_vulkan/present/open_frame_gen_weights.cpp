@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
-// SPDX-FileCopyrightText: Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod (Open-Frame-gen)
-// SPDX-License-Identifier: GPL-3.0-or-later AND MIT
+// SPDX-FileCopyrightText: Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod
+// (Open-Frame-gen) SPDX-License-Identifier: GPL-3.0-or-later AND MIT
 //
 // BatchNorm-folded FP16 weights from Deadly-pro/Open-Frame-gen checkpoints/nano_v17_best.pth
 // (MIT License, Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod).
+// See third_party_notices/Open-Frame-gen.txt and tools/nx2/verify_open_frame_gen_weights.py.
 
 #include <array>
 #include <bit>

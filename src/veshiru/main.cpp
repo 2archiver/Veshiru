@@ -1,18 +1,29 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <QApplication>
-#include <QMessageBox>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
+#include <utility>
+#include <QApplication>
+#include <QTimer>
 
+#include "common/console_output.h"
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
+#include "common/logging.h"
+#include "common/scm_rev.h"
+#include "common/scope_exit.h"
+#include "diagnostics_options.h"
+#include "native_console.h"
+#include "qt_common/qt_common.h"
+#ifdef VESHIRU_CRASH_DUMPS
+#include "breakpad.h"
+#endif
 #include "nx2_switches.h"
 #include "startup_checks.h"
 
 #if VESHIRU_ROOM
-#include <cstring>
 #include "dedicated_room/veshiru_room.h"
 #endif
 #ifdef __unix__
@@ -33,6 +44,9 @@
 
 #ifdef _WIN32
 #include <QScreen>
+#include <shellapi.h>
+#include <windows.h>
+#include "common/windows/crash_handler.h"
 
 static void OverrideWindowsFont() {
     // Qt5 chooses these fonts on Windows and they have fairly ugly alphanumeric/cyrillic characters
@@ -84,33 +98,84 @@ static Qt::HighDpiScaleFactorRoundingPolicy GetHighDpiRoundingPolicy() {
 #endif
 }
 
-int main(int argc, char* argv[]) {
-    LoadNx2Switches(argv[0]);
-#if VESHIRU_ROOM
-    bool launch_room = false;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--room") == 0) {
-            launch_room = true;
+static QList<QByteArray> NativeArguments(int argc, char* argv[]) {
+#ifdef _WIN32
+    int wide_argc{};
+    if (auto* wide_argv = CommandLineToArgvW(GetCommandLineW(), &wide_argc)) {
+        SCOPE_EXIT {
+            LocalFree(wide_argv);
+        };
+        QList<QByteArray> args;
+        for (int i = 0; i < wide_argc; ++i) {
+            args.push_back(QString::fromWCharArray(wide_argv[i]).toUtf8());
         }
-    }
-
-    if (launch_room) {
-        LaunchRoom(argc, argv, true);
-        return 0;
+        return args;
     }
 #endif
-
-    bool has_broken_vulkan = false;
-    bool is_child = false;
-    if (CheckEnvVars(&is_child)) {
-        return 0;
+    QList<QByteArray> args;
+    for (int i = 0; i < argc; ++i) {
+        args.push_back(QByteArray{argv[i]});
     }
+    return args;
+}
 
-    if (StartupChecks(argv[0], &has_broken_vulkan,
-                      Settings::values.perform_vulkan_check.GetValue())) {
-        return 0;
+static std::vector<std::string_view> ArgumentViews(const QList<QByteArray>& args) {
+    std::vector<std::string_view> views;
+    views.reserve(static_cast<std::size_t>(args.size()));
+    for (const auto& arg : args) {
+        views.emplace_back(arg.constData(), static_cast<std::size_t>(arg.size()));
     }
+    return views;
+}
 
+static QStringList FrontendArguments() {
+    const QStringList args = QCoreApplication::arguments();
+    QList<QByteArray> utf8;
+    for (const auto& arg : args) {
+        utf8.push_back(arg.toUtf8());
+    }
+    const auto options = Veshiru::ParseDiagnosticsOptions(ArgumentViews(utf8));
+    QStringList remaining;
+    for (const auto i : options.remaining) {
+        remaining.push_back(args[i]);
+    }
+    return remaining;
+}
+
+static void WriteStartupOutput(std::string_view text, bool to_stderr = false) noexcept {
+    try {
+        Common::Log::StandardStreamSink stream;
+        stream.Enqueue(std::string{text}, to_stderr, true);
+    } catch (const std::exception&) {
+        // Thread/allocation failure: do not block on a possibly unread inherited stream.
+    }
+}
+
+static void QtLogHandler(QtMsgType type, const QMessageLogContext&, const QString& message) {
+    switch (type) {
+    case QtDebugMsg:
+        LOG_DEBUG(Frontend, "Qt: {}", message.toStdString());
+        break;
+    case QtInfoMsg:
+        LOG_INFO(Frontend, "Qt: {}", message.toStdString());
+        break;
+    case QtWarningMsg:
+        LOG_WARNING(Frontend, "Qt: {}", message.toStdString());
+        break;
+    case QtCriticalMsg:
+        LOG_ERROR(Frontend, "Qt: {}", message.toStdString());
+        break;
+    case QtFatalMsg:
+        LOG_CRITICAL(Frontend, "Qt fatal error: {}", message.toStdString());
+        Common::Log::Flush();
+        Common::Log::FlushConsole();
+        Veshiru::NativeConsole::ShowEarlyError(
+            Common::Log::SanitizeLogMessage(message.toStdString()));
+        break;
+    }
+}
+
+static int RunFrontend(int argc, char* argv[]) {
 #ifdef VESHIRU_CRASH_DUMPS
     Breakpad::InstallCrashHandler();
 #endif
@@ -216,15 +281,128 @@ int main(int argc, char* argv[]) {
     // generating shaders
     setlocale(LC_ALL, "C");
 
-    try {
-        MainWindow main_window{has_broken_vulkan};
-        main_window.show();
-        app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window,
-                    &MainWindow::OnAppFocusStateChanged);
-        return app.exec();
-    } catch (const std::exception& exception) {
-        QMessageBox::critical(nullptr, QObject::tr("Veshiru startup stopped"),
-                              QString::fromUtf8(exception.what()));
+    if (Veshiru::NativeConsole::ShutdownRequested()) {
+        return EXIT_SUCCESS;
+    }
+    MainWindow main_window{FrontendArguments()};
+    main_window.show();
+    app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window,
+                &MainWindow::OnAppFocusStateChanged);
+    QTimer::singleShot(0, &app, [] { LOG_INFO(Frontend, "Frontend ready"); });
+#ifdef _WIN32
+    QTimer console_control;
+    QObject::connect(&console_control, &QTimer::timeout, &main_window, [&] {
+        if (Veshiru::NativeConsole::ShutdownRequested()) {
+            console_control.stop();
+            LOG_INFO(Frontend, "Console interrupt; requesting shutdown");
+            main_window.RequestConsoleShutdown();
+        }
+    });
+    console_control.start(100);
+#endif
+    return app.exec();
+}
+
+int main(int argc, char* argv[]) try {
+    if (argc == 2 && std::string_view{argv[1]} == VulkanProbeArgument) {
+        return ProbeVulkan() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+#if VESHIRU_ROOM
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--room") == 0) {
+            LoadNx2Switches(argv[0]);
+            LaunchRoom(argc, argv, true);
+            return EXIT_SUCCESS;
+        }
+    }
+#endif
+    const auto args = NativeArguments(argc, argv);
+    const auto options = Veshiru::ParseDiagnosticsOptions(ArgumentViews(args));
+    const Veshiru::NativeConsole console{options.console};
+    if (!options.error.empty()) {
+        WriteStartupOutput(fmt::format("Veshiru: {} (see --help)\n", options.error), true);
+        Veshiru::NativeConsole::ShowEarlyError(options.error);
         return EXIT_FAILURE;
     }
+
+    SCOPE_EXIT {
+        qInstallMessageHandler(nullptr);
+        Common::Log::Shutdown();
+    };
+    try {
+        // --help and --version do not load Qt's platform plugin or touch user data unless
+        // a log was explicitly requested. Resolve the path before any platform-specific chdir.
+        if ((!options.help && !options.version) || !options.log_path.empty()) {
+            const auto path = options.log_path.empty()
+                                  ? std::filesystem::path{}
+                                  : std::filesystem::absolute(std::filesystem::path{
+                                        Common::FS::ToU8String(options.log_path)});
+            if (!Common::Log::Initialize(
+                    {.console = options.console != Veshiru::ConsoleMode::Disable,
+                     .asynchronous = true,
+                     .fixed_level = options.level,
+                     .extra_file = path})) {
+                constexpr std::string_view error =
+                    "Could not open --log-file; check the path and permissions";
+                LOG_CRITICAL(Frontend, "{}", error);
+                Common::Log::Flush();
+                Common::Log::FlushConsole();
+                Veshiru::NativeConsole::ShowEarlyError(error);
+                return EXIT_FAILURE;
+            }
+            qInstallMessageHandler(QtLogHandler);
+#ifdef _WIN32
+            Common::Windows::InstallCrashHandler(
+                Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir));
+#endif
+            QtCommon::LogStartupInfo();
+        }
+
+        if (options.help) {
+            Common::Log::Flush();
+            Common::Log::FlushConsole();
+            WriteStartupOutput(
+                "Usage: veshiru [options] [game file]\n"
+                "  -g, --game PATH     Open a game.\n"
+                "  -f, --fullscreen    Start the game in fullscreen mode.\n"
+                "  -c, --config PATH   Load the specified configuration.\n"
+                "  -u, --user PROFILE  Select a user profile.\n"
+                "  --pack-nup DUMP     Pack a loose dump into a NUP.\n"
+                "  --unpack-nup FILE   Extract a NUP.\n"
+                "  --edit-nup FILE     Edit NUP metadata.\n"
+                "  --console           Enable logging to the system console (default).\n"
+                "  --no-console        Disable console logging and detach on Windows.\n"
+                "  --log-level LEVEL   Trace, Debug, Info, Warning, Error or Critical.\n"
+                "  --log-file PATH     Append a UTF-8 copy of the session log.\n"
+                "  --help, --version   Print help or the build version and exit.\n");
+            return EXIT_SUCCESS;
+        }
+        if (options.version) {
+            Common::Log::Flush();
+            Common::Log::FlushConsole();
+            WriteStartupOutput(
+                fmt::format("Veshiru {} ({})\n", Common::g_build_version, Common::g_scm_rev));
+            return EXIT_SUCCESS;
+        }
+
+        LoadNx2Switches(argv[0]);
+        return RunFrontend(argc, argv);
+    } catch (const std::exception& exception) {
+        const auto message = Common::Log::SanitizeLogMessage(exception.what());
+        if (Common::Log::IsLevelEnabled(Common::Log::Class::Frontend,
+                                        Common::Log::Level::Critical)) {
+            LOG_CRITICAL(Frontend, "Veshiru startup stopped: {}", exception.what());
+            Common::Log::Flush();
+            Common::Log::FlushConsole();
+        } else {
+            WriteStartupOutput(fmt::format("Veshiru startup stopped: {}\n", message), true);
+        }
+        Veshiru::NativeConsole::ShowEarlyError(message);
+        return EXIT_FAILURE;
+    }
+} catch (const std::exception&) {
+    constexpr std::string_view error = "Could not initialize Veshiru startup diagnostics";
+    WriteStartupOutput("Could not initialize Veshiru startup diagnostics.\n", true);
+    Veshiru::NativeConsole::ShowEarlyError(error);
+    return EXIT_FAILURE;
 }

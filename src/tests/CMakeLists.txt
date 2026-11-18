@@ -8,6 +8,7 @@ add_executable(tests
     common/artwork_cache.cpp
     video_core/vulkan_overlay_filter.cpp
     video_core/open_frame_gen_weights.cpp
+    video_core/open_frame_gen_policy.cpp
     video_core/astc_decode.cpp
     video_core/buffer_cache_ports.cpp
     video_core/unswizzle_workers.cpp
@@ -179,7 +180,6 @@ add_executable(tests
     common/container_hash.cpp
     common/core_pinning.cpp
     common/data_directories.cpp
-    common/live_console.cpp
     common/event.cpp
     common/fibers.cpp
     common/fs_iterate.cpp
@@ -273,6 +273,33 @@ target_compile_definitions(tests PRIVATE
     VESHIRU_NX_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/nx_fixtures")
 
 add_test(NAME tests COMMAND tests)
+
+add_executable(logging_tests common/logging.cpp ../veshiru/diagnostics_options.cpp)
+target_link_libraries(logging_tests PRIVATE common Catch2::Catch2WithMain Threads::Threads)
+add_test(NAME logging_tests COMMAND logging_tests)
+
+add_executable(logging_stdio_probe common/logging_stdio_probe.cpp)
+target_link_libraries(logging_stdio_probe PRIVATE common Threads::Threads)
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if (Python3_Interpreter_FOUND)
+    add_test(NAME logging_stdio
+        COMMAND ${Python3_EXECUTABLE} -I
+            ${PROJECT_SOURCE_DIR}/tools/integration/logging_stdio_test.py
+            $<TARGET_FILE:logging_stdio_probe>)
+endif()
+
+add_executable(game_discovery_tests ../../tools/integration/game_discovery_test.cpp)
+target_include_directories(game_discovery_tests PRIVATE ..)
+add_test(NAME game_discovery COMMAND game_discovery_tests)
+
+add_executable(artwork_http_tests
+    common/artwork_http.cpp
+    ../veshiru/util/artwork_http.cpp
+    ../veshiru/util/steamgriddb_provider.cpp
+)
+target_link_libraries(artwork_http_tests PRIVATE common Catch2::Catch2WithMain
+    OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+add_test(NAME artwork_http COMMAND artwork_http_tests)
 
 add_executable(profile_migration_tests
     common/profile_migration.cpp)

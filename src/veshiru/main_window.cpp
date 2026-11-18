@@ -29,20 +29,19 @@
 #include "ui_main.h"
 
 // Other Veshiru stuff //
-#include "debugger/console.h"
 #include "debugger/controller.h"
 
 #include "about_dialog.h"
-#include "console_window.h"
 #include "data_dialog.h"
 #include "deps_dialog.h"
 #include "install_dialog.h"
-#include "startup_console.h"
+#include "startup_checks.h"
 
 #include "bootmanager.h"
-#include "loading_screen.h"
-#include "qt_common/util/vk.h"
 #include "eglantine_dialog.h"
+#include "loading_screen.h"
+#include "native_console.h"
+#include "qt_common/util/vk.h"
 #include "set_play_time_dialog.h"
 #include "util/util.h"
 #include "veshiru/game/game_list.h"
@@ -75,7 +74,9 @@
 #include "multiplayer/state.h"
 
 // Qt Stuff //
+#ifndef QT_NO_OPENGL
 #define QT_NO_OPENGL
+#endif
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 #include <QStyleHints>
@@ -96,6 +97,7 @@
 #include <QMimeData>
 #include <QPalette>
 #include <QProgressDialog>
+#include <QSaveFile>
 #include <QScreen>
 #include <QShortcut>
 #include <QStatusBar>
@@ -395,7 +397,7 @@ inline static bool isDarkMode() {
 }
 #endif // _WIN32
 
-MainWindow::MainWindow(bool has_broken_vulkan)
+MainWindow::MainWindow(const QStringList& launch_arguments)
     : ui{std::make_unique<Ui::MainWindow>()},
       input_subsystem{std::make_shared<InputCommon::InputSubsystem>()}, user_data_migrator{this} {
     QtCommon::Init(this);
@@ -406,6 +408,12 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     Common::Log::Filter filter;
     filter.ParseFilterString(Settings::values.log_filter.GetValue());
     Common::Log::SetGlobalFilter(filter);
+    Common::Log::UpdateFileLoggingOptions();
+
+    const bool has_broken_vulkan =
+        Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan &&
+        Settings::values.perform_vulkan_check.GetValue() &&
+        !CheckVulkanInChild(QCoreApplication::applicationFilePath().toLocal8Bit().constData());
 
 #ifdef __unix__
     SetupSigInterrupts();
@@ -455,16 +463,17 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     ConnectMenuEvents();
     ConnectWidgetEvents();
 
+    if (Veshiru::NativeConsole::ShutdownRequested()) {
+        // An interrupt may have cancelled the startup probe. Don't open a fallback dialog or
+        // boot a command-line title before the event loop can close the initialized window.
+        return;
+    }
     QtCommon::SetupHID();
     controller_dialog->refreshConfiguration();
 
     UpdateWindowTitle();
 
     show();
-
-    // Open the Ryujinx-style startup console automatically at launch. It stays open for the whole
-    // session and streams timestamped startup logs from the live console backend.
-    StartupConsole::Show();
 
 #ifdef ENABLE_UPDATE_CHECKER
     if (UISettings::values.check_for_updates) {
@@ -531,7 +540,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         UISettings::values.has_broken_vulkan = true;
 
         QMessageBox::warning(this, tr("Broken Vulkan Installation Detected"),
-                             tr("Vulkan initialization failed during boot."));
+                             tr("Vulkan could not start. Install an up-to-date driver for a "
+                                "Vulkan-capable GPU, then restart Veshiru."));
 #ifdef HAS_OPENGL
         Settings::values.renderer_backend = Settings::RendererBackend::OpenGL_GLSL;
 #else
@@ -543,6 +553,20 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         renderer_status_button->setChecked(false);
     } else {
         VkDeviceInfo::PopulateRecords(vk_device_records, this->window()->windowHandle());
+    }
+    const auto backend = Settings::values.renderer_backend.GetValue();
+    const auto device_index = static_cast<std::size_t>(Settings::values.vulkan_device.GetValue());
+    if (backend == Settings::RendererBackend::Vulkan && device_index < vk_device_records.size()) {
+        const auto& device = vk_device_records[device_index];
+        LOG_INFO(Frontend, "Configured graphics: Vulkan | {} ({} MiB device-local memory)",
+                 device.name, device.device_local_memory / (1024 * 1024));
+    } else if (backend == Settings::RendererBackend::Vulkan) {
+        LOG_WARNING(Frontend,
+                    "Configured Vulkan device {} is unavailable; check Graphics settings "
+                    "and install a current Vulkan driver",
+                    device_index);
+    } else {
+        LOG_INFO(Frontend, "Configured graphics: {}", Settings::CanonicalizeEnum(backend));
     }
 
     // On macOS, SDL video would pump AppKit events alongside Qt and disrupt native menus.
@@ -569,9 +593,9 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // to prevent the UI from blowing up.
     UpdateUITheme();
 
-    if (QStringList args = QApplication::arguments(); args.size() >= 2) {
+    if (launch_arguments.size() >= 2 && !Veshiru::NativeConsole::ShutdownRequested()) {
         QList<QByteArray> qba{};
-        for (auto const& e : args)
+        for (auto const& e : launch_arguments)
             qba.push_back(e.toUtf8());
         std::vector<char*> args_cstr{};
         for (auto& e : qba)
@@ -1503,7 +1527,6 @@ void MainWindow::RestoreUIState() {
         UISettings::values.show_perf_overlay.GetValue());
     if (perf_overlay)
         perf_overlay->setVisible(ui->action_Show_Performance_Overlay->isChecked());
-    Debugger::ToggleConsole();
 }
 
 void MainWindow::OnAppFocusStateChanged(Qt::ApplicationState state) {
@@ -1738,7 +1761,7 @@ void MainWindow::ConnectMenuEvents() {
 
     connect_menu(ui->action_Desktop, &MainWindow::OnCreateHomeMenuDesktopShortcut);
     connect_menu(ui->action_Application_Menu, &MainWindow::OnCreateHomeMenuApplicationMenuShortcut);
-    connect_menu(ui->action_Console, [] { ConsoleWindow::Show(); });
+    connect_menu(ui->action_Save_Diagnostic_Log, &MainWindow::OnSaveDiagnosticLog);
     connect_menu(ui->action_Capture_Screenshot, &MainWindow::OnCaptureScreenshot);
 
     // TAS
@@ -4424,6 +4447,66 @@ void MainWindow::OnOpenLogFolder() {
     QtCommon::Game::OpenLogFolder();
 }
 
+void MainWindow::OnSaveDiagnosticLog() {
+    const auto path = Common::Log::GetActiveLogFilePath();
+    if (path.empty()) {
+        QMessageBox::warning(this, tr("Save Diagnostic Log"), tr("No session log is available."));
+        return;
+    }
+    const auto destination =
+        QFileDialog::getSaveFileName(this, tr("Save Diagnostic Log"), QStringLiteral("veshiru.log"),
+                                     tr("Log files (*.log *.txt)"));
+    if (destination.isEmpty()) {
+        return;
+    }
+    // Export a snapshot on the worker pool, without waiting for a redirected stream to flush.
+    ui->action_Save_Diagnostic_Log->setEnabled(false);
+    auto* watcher = new QFutureWatcher<bool>(this);
+    connect(watcher, &QFutureWatcher<bool>::finished, this, [this, watcher] {
+        watcher->deleteLater();
+        ui->action_Save_Diagnostic_Log->setEnabled(true);
+        if (!watcher->result()) {
+            QMessageBox::warning(this, tr("Save Diagnostic Log"),
+                                 tr("Could not save the session log to that file."));
+        }
+    });
+    watcher->setFuture(QtConcurrent::run([path, destination] {
+        QFile source(QString::fromStdString(Common::FS::PathToUTF8String(path)));
+        QSaveFile copy(destination);
+        const auto canonical_destination = QFileInfo(destination).canonicalFilePath();
+        if (canonical_destination == QFileInfo(source).canonicalFilePath() ||
+            !source.open(QIODevice::ReadOnly) || !copy.open(QIODevice::WriteOnly)) {
+            return false;
+        }
+        auto remaining = source.size();
+        while (remaining > 0) {
+            const auto line = source.readLine(std::min<qint64>(remaining + 1, 64 * 1024));
+            if (line.isEmpty()) {
+                return false;
+            }
+            if (line.size() > remaining) {
+                break;
+            }
+            if (!line.endsWith('\n')) {
+                // The file may be concurrently growing. Don't export an incomplete record.
+                if (line.size() == remaining) {
+                    break;
+                }
+                return false;
+            }
+            remaining -= line.size();
+            auto record = Common::Log::SanitizeLogMessage(
+                {line.constData(), static_cast<std::size_t>(line.size() - 1)});
+            record += '\n';
+            if (copy.write(record.data(), static_cast<qint64>(record.size())) !=
+                static_cast<qint64>(record.size())) {
+                return false;
+            }
+        }
+        return copy.commit();
+    }));
+}
+
 void MainWindow::OnVerifyInstalledContents() {
     QtCommon::Content::VerifyInstalledContents();
 }
@@ -5573,6 +5656,18 @@ void MainWindow::UpdateFrameGenButton() {
         unavailable = tr("This GPU can't write to the window's swapchain format from a shader, so "
                          "generated frames can't be presented.");
         break;
+    case VideoCore::FrameGenState::OpenFrameGenHdr:
+        unavailable =
+            tr("Open-Frame-Gen is paused during HDR output. Game frames are still shown.");
+        break;
+    case VideoCore::FrameGenState::OpenFrameGenUnsupported:
+        unavailable = tr("Open-Frame-Gen needs Vulkan compute and storage image support for the "
+                         "active output format. Game frames are still shown.");
+        break;
+    case VideoCore::FrameGenState::ResourceFailure:
+        unavailable = tr("Frame generation resources could not be prepared. Game frames are still "
+                         "shown. Toggle frame generation off and on to retry.");
+        break;
     case VideoCore::FrameGenState::MissingLosslessDll:
         unavailable = tr("LSFG needs Lossless.dll from Lossless Scaling in the \"lossless\" folder "
                          "of the user directory. It is missing or could not be loaded.");
@@ -5683,12 +5778,9 @@ void MainWindow::OnMouseActivity() {
 
 void MainWindow::OnCheckFirmwareDecryption(bool prompt) {
     if (!ContentManager::AreKeysPresent() && !prompt) {
-        // At startup only log it: loose ExeFS/RomFS dumps (all Switch 2 games so far) need no
-        // keys, and a modal question blocked every unattended launch. Tools > Install Decryption
-        // Keys still installs them.
-        LOG_WARNING(Frontend, "Decryption keys are missing from {}: NCA, NSP and XCI games need them",
-                    Common::FS::PathToUTF8String(
-                        Common::FS::GetEdenPath(Common::FS::EdenPath::KeysDir)));
+        LOG_WARNING(Frontend,
+                    "Decryption keys are missing. NCA, NSP and XCI games need them; "
+                    "use Tools > Install Decryption Keys with keys from your own console.");
     } else if (!ContentManager::AreKeysPresent()) {
         const auto res = QtCommon::Frontend::Warning(
             tr("Derivation Components Missing"),
@@ -5763,7 +5855,9 @@ void MainWindow::SetFirmwareVersion() {
     const auto result = pair.second;
 
     if (result.IsError() || !CheckFirmwarePresence()) {
-        LOG_INFO(Frontend, "Installed firmware: No firmware available");
+        LOG_WARNING(Frontend,
+                    "No firmware installed. If a game or applet needs it, use Tools > Install "
+                    "Firmware with firmware from your own console.");
         ui->menu_Applets->setEnabled(false);
         ui->menu_Create_Shortcuts->setEnabled(false);
         firmware_label->setVisible(false);
@@ -5869,6 +5963,11 @@ bool MainWindow::ConfirmClose() {
 
     const auto text = tr("Are you sure you want to close Veshiru?");
     return question(this, tr("Veshiru"), text);
+}
+
+void MainWindow::RequestConsoleShutdown() {
+    close_pending = true;
+    close();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {

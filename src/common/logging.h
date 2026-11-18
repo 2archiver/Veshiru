@@ -6,11 +6,12 @@
 
 #pragma once
 
-#include <chrono>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -43,13 +44,9 @@ struct fmt::formatter<SwapStructT<T, U>> {
     }
 };
 
-#ifdef _DEBUG
 #define LOG_TRACE(log_class, ...) \
     Common::Log::FmtLogMessage(Common::Log::Class::log_class, Common::Log::Level::Trace, \
        __FILE__, __LINE__, __func__, __VA_ARGS__)
-#else
-#define LOG_TRACE(log_class, fmt, ...) (void(0))
-#endif
 
 #define LOG_DEBUG(log_class, ...) \
     ::Common::Log::FmtLogMessage(::Common::Log::Class::log_class, ::Common::Log::Level::Debug, \
@@ -146,16 +143,30 @@ struct Filter {
     std::array<Level, std::size_t(Class::Count)> class_levels;
 };
 
-/// Initializes the logging system. This should be the first thing called in main.
-void Initialize();
+struct Options {
+    bool console{};
+    bool asynchronous{};
+    std::optional<Level> fixed_level;
+    std::filesystem::path extra_file;
+};
+
+/// Call on the main thread, before starting other components. Returns false if the requested
+/// extra file could not be opened (the default session log is still available if writable).
+bool Initialize(const Options& options = {});
 
 void Start();
 
-/// Explicitly stops the logger thread and flushes the buffers
+/// Request a file flush and wait briefly. Do not use on the emulation hot path.
+void Flush();
+/// Wait briefly for queued console output, without delaying the file writer.
+void FlushConsole();
 void Stop();
 
-/// Flushes all active logging backends (including the active session log file).
-void Flush();
+/// Stop accepting messages, drain the queue and join the sink worker at frontend shutdown.
+void Shutdown();
+
+/// Snapshot options from the config-owning thread after loading or editing settings.
+void UpdateFileLoggingOptions();
 
 /// Returns the active session log file path (or an empty path if file logging is inactive).
 [[nodiscard]] std::filesystem::path GetActiveLogFilePath();
@@ -163,6 +174,8 @@ void Flush();
 /// The global filter will prevent any messages from even being processed if they are filtered.
 void SetGlobalFilter(const Filter& filter);
 void SetColorConsoleBackendEnabled(bool enabled);
+
+[[nodiscard]] std::optional<Level> ParseLevel(std::string_view name);
 
 /// A line kept by the in-memory log ring (the debug server's log tail).
 struct RingLine {
@@ -174,61 +187,7 @@ void SetRingCapacity(std::size_t capacity);
 /// The kept lines numbered above `after`, oldest first.
 [[nodiscard]] std::vector<RingLine> ReadRing(u64 after);
 
-/// Broad subsystem groups used by the live console. They are a display grouping over the
-/// existing log classes, not a second logging hierarchy.
-enum class Subsystem : u8 {
-    CPU,
-    GPU,
-    HLE,
-    FS,
-    Audio,
-    Networking,
-    Performance,
-    Compatibility,
-    Other,
-    Count,
-};
-
-[[nodiscard]] std::string_view GetSubsystemName(Subsystem subsystem);
-[[nodiscard]] Subsystem GetSubsystem(Class log_class);
-[[nodiscard]] std::string_view GetLogClassName(Class log_class);
-[[nodiscard]] std::string_view GetLogLevelName(Level log_level);
-
-/// One entry kept by the asynchronous live-console backend. Messages are sanitized before they
-/// are published to the frontend; source is the trimmed compile-time source location.
-struct ConsoleEntry {
-    u64 sequence{};
-    u64 timestamp_us{};
-    Class log_class{};
-    Level log_level{};
-    Subsystem subsystem{};
-    std::string message;
-    std::string source;
-};
-
-struct ConsoleStats {
-    u64 dropped_queue{};
-    u64 dropped_buffer{};
-    u64 rate_limited{};
-    std::size_t buffered{};
-};
-
-/// Enables/disables the live-console backend. While disabled it does no work on logging threads.
-/// Enabling starts a small worker thread; disabling drains and stops it. The backend is refcounted:
-/// the worker runs while at least one console window is enabled, so closing one console window
-/// never stops logging for the others. The worker never writes to the network and never blocks
-/// emulation on the UI.
-void SetLiveConsoleEnabled(bool enabled);
-[[nodiscard]] bool IsLiveConsoleEnabled();
-/// Bounded in-memory console buffer. The oldest entries are dropped when the limit is reached.
-void SetLiveConsoleCapacity(std::size_t capacity);
-/// Entries numbered above `after`, oldest first, at most `max_entries`.
-[[nodiscard]] std::vector<ConsoleEntry> ReadLiveConsole(u64 after, std::size_t max_entries);
-void ClearLiveConsole();
-[[nodiscard]] ConsoleStats GetLiveConsoleStats();
-
-/// Redacts usernames, home directories, absolute file paths and credential-like values. Used by
-/// the live console and by diagnostic exports; it does not mutate the original log message.
+/// Redacts host paths and credential-like values for normal diagnostics.
 [[nodiscard]] std::string SanitizeLogMessage(std::string_view message);
 
 } // namespace Common::Log

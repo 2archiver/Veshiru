@@ -89,6 +89,8 @@ add_library(
     input.h
     intrusive_red_black_tree.h
     literals.h
+    console_output.cpp
+    console_output.h
     logging.cpp
     logging.h
     lz4_compression.cpp

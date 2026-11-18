@@ -57,14 +57,21 @@ int main() {
   const auto deep = discover(root, true);
   Check(deep.files.size() == 4 && deep.skipped_romfs == 1 && deep.errors == 0);
   Check(deep.directories.size() < 20);
-  Check(discover(root, false).files.size() == 3);
+  // Flat files one directory down are not discovered in shallow mode. Known loose layouts
+  // still contribute their executables and their directories remain watched.
+  touch(game / "nested-file.nsp");
+  const auto shallow = discover(root, false);
+  Check(shallow.files.size() == 3 && shallow.errors == 0);
+  Check(std::ranges::find(shallow.directories, game / "base/exefs") != shallow.directories.end());
+  Check(std::ranges::find(shallow.directories, game / "updates/0100000000000800/exefs") !=
+        shallow.directories.end());
   Check(discover(game / "base", false).files.size() == 1);
   Check(discover(game / "base/exefs", false).files.size() == 1);
   Check(discover(root / "missing", true).files.empty());
 
   touch(root / "incomplete/exefs/main");
   touch(root / "incomplete/romfs/actual-game.nsp");
-  Check(discover(root, true).files.size() == 6);
+  Check(discover(root, true).files.size() == 7);
 
   unsigned calls{};
   const auto cancelled = GameListDiscovery::Discover(

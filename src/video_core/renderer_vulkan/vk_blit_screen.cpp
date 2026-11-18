@@ -109,14 +109,12 @@ void BlitScreen::PrepareFrame(const Device& device, Frame* frame,
 
     if (frame->width != layout.width || frame->height != layout.height ||
         frame->format != swapchain_view_format ||
-        frame->image_format != present_manager.GetFrameImageFormat(swapchain_view_format)) {
-        WaitIdle(device);
-    } else if (!present_manager.NeedsStorage(frame, true)) {
-        return;
+        frame->image_format != present_manager.GetFrameImageFormat(swapchain_view_format) ||
+        present_manager.NeedsStorage(frame, true)) {
+        // Only this fence-complete frame is replaced; DrawToFrame owns render-pass changes.
+        present_manager.RecreateFrame(frame, layout.width, layout.height, swapchain_view_format,
+                                      FrameRenderPass(), true);
     }
-
-    present_manager.RecreateFrame(frame, layout.width, layout.height, swapchain_view_format,
-                                  FrameRenderPass(), true);
 }
 
 void BlitScreen::DrawToFrame(const Device& device, RasterizerVulkan& rasterizer, Frame* frame,
@@ -145,7 +143,11 @@ void BlitScreen::DrawToFrame(const Device& device, RasterizerVulkan& rasterizer,
         swapchain_view_format = current_swapchain_view_format;
     }
 
-    const bool storage_required = Settings::values.frame_gen.GetValue();
+    // Open-Frame-Gen copies history from the real frame via transfer, never via its storage
+    // view. A shader-writable image is only needed for a generated frame.
+    const bool storage_required =
+        Settings::values.frame_gen.GetValue() &&
+        Settings::values.frame_gen_type.GetValue() != Settings::FrameGenType::OpenFrameGen;
     if (resource_update_required) {
         WaitIdle(device);
         SetWindowAdaptPass(device);

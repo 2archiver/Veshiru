@@ -369,7 +369,6 @@ void GameList::OnPopulatingCompleted(const QStringList& watch_list) {
         OnTextChanged(search_field->filterText());
     }
 
-    AutoFetchMissingArtwork();
 
     emit PopulatingCompleted();
 }
@@ -575,8 +574,8 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
 #endif
     context_menu.addSeparator();
     QAction* refresh_artwork = nullptr;
-    if (program_id != 0) {
-        refresh_artwork = context_menu.addAction(tr("Refresh Game Artwork"));
+    if (program_id != 0 && IconSearch::IsOnlineAvailable()) {
+        refresh_artwork = context_menu.addAction(tr("Search SteamGridDB Artwork…"));
     }
     QAction* edit_nup = nullptr;
     if (is_nup_archive) {
@@ -655,7 +654,7 @@ void GameList::AddGamePopup(QMenu& context_menu, u64 program_id, const std::stri
     }
     if (refresh_artwork) {
         connect(refresh_artwork, &QAction::triggered, this,
-                [this, program_id, path]() { RefreshGameArtwork(program_id, path); });
+                [this, program_id]() { RefreshGameArtwork(program_id); });
     }
     connect(remove_all_content, &QAction::triggered, this, [this, program_id]() {
         emit RemoveInstalledEntryRequested(program_id, QtCommon::Game::InstalledEntryType::Game);
@@ -822,8 +821,7 @@ void GameList::AddFavoritesPopup(QMenu& context_menu) {
     });
 }
 
-void GameList::ApplyArtworkToModel(u64 program_id, const QByteArray& png,
-                                   const QString& resolved_title, bool force_title) {
+void GameList::ApplyArtworkToModel(u64 program_id, const QByteArray& png) {
     const u64 target_base = Common::ArtworkCache::BaseProgramId(program_id);
     if (target_base == 0 || png.isEmpty()) {
         return;
@@ -848,8 +846,7 @@ void GameList::ApplyArtworkToModel(u64 program_id, const QByteArray& png,
                 const u64 row_tid = Common::ArtworkCache::BaseProgramId(
                     child->data(GameListItemPath::ProgramIdRole).toULongLong());
                 if (row_tid == target_base) {
-                    static_cast<GameListItemPath*>(child)->ApplyArtwork(png, resolved_title,
-                                                                        force_title);
+                    static_cast<GameListItemPath*>(child)->ApplyArtwork(png, {}, false);
                 }
             }
             if (child->rowCount() > 0) {
@@ -863,78 +860,25 @@ void GameList::ApplyArtworkToModel(u64 program_id, const QByteArray& png,
     }
 }
 
-void GameList::AutoFetchMissingArtwork() {
-    std::set<u64> queued;
-    const auto scan_tree = [&](const auto& self, QStandardItem* parent) -> void {
-        if (parent == nullptr || queued.size() >= 8) {
-            return;
-        }
-        for (int r = 0; r < parent->rowCount(); ++r) {
-            if (queued.size() >= 8) {
-                return;
-            }
-            auto* child = parent->child(r, 0);
-            if (child == nullptr) {
-                continue;
-            }
-            if (child->type() == static_cast<int>(GameListItemType::Game)) {
-                if (!child->data(GameListItemPath::HasIconRole).toBool()) {
-                    const u64 tid = Common::ArtworkCache::BaseProgramId(
-                        child->data(GameListItemPath::ProgramIdRole).toULongLong());
-                    if (tid != 0 && !queued.contains(tid) &&
-                        Common::ArtworkCache::ShouldAutoFetchArtwork(tid)) {
-                        queued.insert(tid);
-                        const QString full_path =
-                            child->data(GameListItemPath::FullPathRole).toString();
-                        QString query_title = child->data(GameListItemPath::TitleRole).toString();
-                        if (query_title.isEmpty() || query_title == QStringLiteral(" ")) {
-                            query_title = QFileInfo(full_path).completeBaseName();
-                        }
-                        IconSearch::FetchSilentAsync(
-                            tid, query_title, this,
-                            [this, tid](QByteArray png, QString resolved_title) {
-                                ApplyArtworkToModel(tid, png, resolved_title);
-                            });
-                    }
-                }
-            }
-            if (child->rowCount() > 0) {
-                self(self, child);
-            }
-        }
-    };
-    scan_tree(scan_tree, item_model->invisibleRootItem());
-}
-
-void GameList::RefreshGameArtwork(u64 program_id, const std::string& path) {
+void GameList::RefreshGameArtwork(u64 program_id) {
     if (program_id == 0) {
         return;
     }
     if (!manual_icon_search) {
         manual_icon_search = new IconSearch(this);
-        connect(manual_icon_search, &IconSearch::IconSelected, this,
-                [this](const QByteArray& png, const QString& resolved_title) {
-                    if (manual_icon_program_id != 0) {
-                        ApplyArtworkToModel(manual_icon_program_id, png, resolved_title, true);
-                    }
-                });
+        connect(manual_icon_search, &IconSearch::IconSelected, this, [this](const QByteArray& png) {
+            if (manual_icon_program_id != 0) {
+                ApplyArtworkToModel(manual_icon_program_id, png);
+            }
+        });
     }
     if (manual_icon_search->IsRunning()) {
         return;
     }
     manual_icon_program_id = program_id;
 
-    // Clear stale/wrong cached artwork, failure cooldowns, and pre-rendered JPEG thumbnails
-    // before launching the fresh lookup so bad previous artwork can never linger.
+    // Keep the disk and model artwork intact until a replacement is selected and downloaded.
     const u64 target_base = Common::ArtworkCache::BaseProgramId(program_id);
-    Common::ArtworkCache::ClearCachedArtwork(target_base);
-    std::error_code ec;
-    std::filesystem::remove(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) / "game_list" /
-                                fmt::format("{:016X}.jpeg", target_base),
-                            ec);
-
-    // Prefer the canonical Title ID catalog name when known; otherwise read the model title or
-    // clean filename so stale/wrong cached titles cannot poison the new search.
     QString query;
     const auto find_title = [&](const auto& self, QStandardItem* parent) -> void {
         if (parent == nullptr || !query.isEmpty()) {
@@ -957,15 +901,7 @@ void GameList::RefreshGameArtwork(u64 program_id, const std::string& path) {
         }
     };
     find_title(find_title, item_model->invisibleRootItem());
-    if (query.isEmpty()) {
-        query = QFileInfo(QString::fromStdString(path)).completeBaseName();
-    }
-    const std::string canonical =
-        Common::ArtworkCache::ResolveCanonicalSearchTitle(query.toStdString(), target_base);
-    if (!canonical.empty()) {
-        query = QString::fromStdString(canonical);
-    }
-    manual_icon_search->Start(query, target_base);
+    manual_icon_search->Start(query, target_base, true);
 }
 
 void GameList::changeEvent(QEvent* event) {

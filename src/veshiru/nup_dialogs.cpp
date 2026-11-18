@@ -560,6 +560,7 @@ NupEditDialog::NupEditDialog(const std::filesystem::path& archive, QWidget* pare
     auto* icon_buttons = new QVBoxLayout;
     icon_buttons->addWidget(choose_icon);
     icon_buttons->addWidget(find_icon);
+    find_icon->setVisible(IconSearch::IsOnlineAvailable());
     icon_buttons->addWidget(clear_icon);
     icon_buttons->addWidget(icon_hint);
     icon_buttons->addStretch();
@@ -734,10 +735,10 @@ void NupEditDialog::SetIconFromFile(const QString& path) {
 }
 
 void NupEditDialog::FindIcon() {
-    icon_search->Start(name_edit->text(), current.title_id);
+    icon_search->Start(name_edit->text(), current.title_id, false);
 }
 
-void NupEditDialog::OnIconFound(const QByteArray& png, const QString& resolved_title) {
+void NupEditDialog::OnIconFound(const QByteArray& png) {
     const auto encoded = EncodeIconData(png);
     if (encoded.isEmpty()) {
         icon_hint->setText(tr("The icon that was found could not be read."));
@@ -745,9 +746,6 @@ void NupEditDialog::OnIconFound(const QByteArray& png, const QString& resolved_t
     }
     custom_icon = encoded;
     remove_icon = false;
-    if (!resolved_title.isEmpty()) {
-        name_edit->setText(resolved_title);
-    }
     UpdateIconPreview();
 }
 

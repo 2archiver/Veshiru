@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "common/common_types.h"
+#include "video_core/renderer_vulkan/present/open_frame_gen_policy.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -27,12 +28,11 @@ public:
                           VkExtent2D extent, VkFormat format, f32 flow_scale);
     ~OpenFrameGen();
 
-    void Process(const Device& device, Scheduler& scheduler, VkImage current_frame,
-                 VkImageView current_view, u64 frame_count, bool capture_history,
+    void Process(Scheduler& scheduler, VkImage current_frame, u64 frame_count, bool capture_history,
                  bool compute_flow);
 
     void Generate(const Device& device, Scheduler& scheduler, VkImage destination,
-                  VkImageView destination_storage_view, float blend_factor);
+                  VkImageView destination_storage_view, u64 allocation_id, float blend_factor);
 
     [[nodiscard]] bool IsReady() const {
         return m_initialized && m_has_history && m_flow_valid;
@@ -113,14 +113,11 @@ private:
     vk::DescriptorPool m_static_desc_pool;
     vk::DescriptorSets m_static_sets;
 
-    /// Cached warp descriptor sets keyed by (prev_slot, destination image, storage view) to avoid
-    /// allocating and rewriting descriptors on every generated frame (PresentManager reuses <= 8
-    /// Frame objects, so 16 slots cover both ping-pong directions with zero per-frame allocations).
+    // Cache both history directions per allocation. New allocations never reuse a stale set;
+    // once these slots are full, use the scheduler-managed descriptor pool.
     static constexpr size_t MaxCachedWarpSets = 16;
     struct CachedWarpSet {
-        u32 prev_slot{};
-        VkImage destination{VK_NULL_HANDLE};
-        VkImageView destination_view{VK_NULL_HANDLE};
+        OpenFrameGenWarpKey key;
         VkDescriptorSet set{VK_NULL_HANDLE};
     };
     vk::DescriptorSets m_warp_cached_sets;

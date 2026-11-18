@@ -75,6 +75,11 @@ Result Discover(const std::filesystem::path& root, bool deep, Supported supporte
         }
         if (!deep) {
             probe_layouts(directory);
+            // For immediate children a shallow scan only accepts known loose layouts. The
+            // probes above found those; walking ordinary entries cannot add files or watches.
+            if (depth != 0) {
+                continue;
+            }
         }
         std::error_code ec;
         for (fs::directory_iterator it{directory, fs::directory_options::skip_permission_denied,

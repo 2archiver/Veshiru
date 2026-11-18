@@ -105,7 +105,7 @@ private:
     void ChooseIcon();
     void SetIconFromFile(const QString& path);
     void FindIcon();
-    void OnIconFound(const QByteArray& png, const QString& resolved_title);
+    void OnIconFound(const QByteArray& png);
     void ClearIcon();
     void UpdateIconPreview();
 

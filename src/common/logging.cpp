@@ -5,61 +5,56 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <atomic>
-#include <functional>
-#include <chrono>
-#include <climits>
+#include <cctype>
+#include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <mutex>
 #include <regex>
-#include <stop_token>
 #include <thread>
-#include <unordered_map>
+#include <utility>
+
+#include <boost/algorithm/string/replace.hpp>
 
 #if defined(__ANDROID__)
 #include <android/log.h>
 #endif
 #ifdef _WIN32
-#include <windows.h> // For OutputDebugStringW
-#else
 #include <fcntl.h>
+#include <io.h>
+#include <windows.h>
+#elif !defined(__OPENORBIS__)
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
-#include <boost/algorithm/string/replace.hpp>
-#include <condition_variable>
-#include <fmt/ranges.h>
-
-#include "common/fs/file.h"
+#include "common/console_output.h"
 #include "common/fs/fs.h"
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 #include "common/literals.h"
-#include "common/polyfill_thread.h"
-#include "common/terminate_handler.h"
-#include "common/thread.h"
-
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/string_util.h"
-#include "common/bounded_threadsafe_queue.h"
+#include "common/terminate_handler.h"
+#include "common/thread.h"
 
 namespace Common::Log {
+namespace {
 
-/// @brief A log entry. Log entries are store in a structured format to permit more varied output
-/// formatting on different frontends, as well as facilitating filtering and aggregation.
+using Clock = std::chrono::steady_clock;
+using Microseconds = std::chrono::microseconds;
+
 struct Entry {
-    char const* message = nullptr;
-    size_t message_len = 0;
-    std::chrono::microseconds timestamp;
+    Microseconds timestamp{};
     Class log_class{};
     Level log_level{};
-    const char* filename = nullptr;
-    const char* function = nullptr;
-    uint32_t line_num = 0;
+    const char* filename{};
+    const char* function{};
+    unsigned int line_num{};
 };
-
-namespace {
 
 /// @brief Returns the name of the passed log class as a C-string. Subclasses are separated by periods
 /// instead of underscores as in the enumeration.
@@ -88,16 +83,6 @@ const char* GetLevelNameImpl(Level log_level) {
 #undef LVL
     default: return "?";
     }
-}
-
-// Some IDEs prefer <file>:<line> instead, so let's just do that :)
-std::string FormatLogMessage(const Entry& entry) noexcept {
-    if (!entry.filename) return "";
-    auto const time_seconds = uint32_t(entry.timestamp.count() / 1000000);
-    auto const time_fractional = uint32_t(entry.timestamp.count() % 1000000);
-    auto const class_name = GetLogClassNameImpl(entry.log_class);
-    auto const level_name = GetLevelNameImpl(entry.log_level);
-    return fmt::format("[{:4d}.{:06d}] {} <{}> {}:{}:{}: {}\n", time_seconds, time_fractional, class_name, level_name, entry.filename, entry.line_num, entry.function, entry.message);
 }
 
 template <typename It>
@@ -151,807 +136,700 @@ constexpr const char* TrimSourcePath(std::string_view source) noexcept {
     const auto rfind = [source](const std::string_view match) {
         return source.rfind(match) == source.npos ? 0 : (source.rfind(match) + match.size());
     };
-    auto idx = (std::max)({rfind("src/"), rfind("src\\"), rfind("../"), rfind("..\\")});
-    return source.data() + idx;
+    const auto idx = (std::max)({rfind("src/"), rfind("src\\"), rfind("../"), rfind("..\\")});
+    const bool absolute = source.starts_with('/') || source.starts_with('\\') ||
+                          (source.size() > 1 && source[1] == ':');
+    return source.data() + (idx || !absolute ? idx : source.find_last_of("/\\") + 1);
 }
 
-Subsystem GetSubsystemImpl(Class log_class) noexcept {
-    switch (log_class) {
-    case Class::Core:
-    case Class::Core_ARM:
-    case Class::Kernel:
-    case Class::Kernel_SVC:
-    case Class::Debug_Emulated:
-    case Class::Debug_Breakpoint:
-    case Class::Debug_GDBStub:
-        return Subsystem::CPU;
-    case Class::HW_GPU:
-    case Class::Render:
-    case Class::Render_Software:
-    case Class::Render_OpenGL:
-    case Class::Render_Vulkan:
-    case Class::Shader:
-    case Class::Shader_SPIRV:
-    case Class::Shader_GLASM:
-    case Class::Shader_GLSL:
-    case Class::Debug_GPU:
-    case Class::Service_NVDRV:
-    case Class::Service_Nvnflinger:
-    case Class::Service_VI:
-        return Subsystem::GPU;
-    case Class::Service:
-    case Class::Service_ACC:
-    case Class::Service_AM:
-    case Class::Service_AOC:
-    case Class::Service_APM:
-    case Class::Service_ARP:
-    case Class::Service_BCAT:
-    case Class::Service_BPC:
-    case Class::Service_BGTC:
-    case Class::Service_BTDRV:
-    case Class::Service_BTM:
-    case Class::Service_Capture:
-    case Class::Service_ERPT:
-    case Class::Service_ETicket:
-    case Class::Service_EUPLD:
-    case Class::Service_Fatal:
-    case Class::Service_FGM:
-    case Class::Service_Friend:
-    case Class::Service_GRC:
-    case Class::Service_HID:
-    case Class::Service_IRS:
-    case Class::Service_JIT:
-    case Class::Service_LBL:
-    case Class::Service_LDR:
-    case Class::Service_LM:
-    case Class::Service_Migration:
-    case Class::Service_Mii:
-    case Class::Service_MM:
-    case Class::Service_MNPP:
-    case Class::Service_NCM:
-    case Class::Service_NFC:
-    case Class::Service_NFP:
-    case Class::Service_NGC:
-    case Class::Service_NIM:
-    case Class::Service_NOTIF:
-    case Class::Service_NPNS:
-    case Class::Service_NS:
-    case Class::Service_OLSC:
-    case Class::Service_PCIE:
-    case Class::Service_PCTL:
-    case Class::Service_PCV:
-    case Class::Service_PM:
-    case Class::Service_PREPO:
-    case Class::Service_PSC:
-    case Class::Service_PTM:
-    case Class::Service_SET:
-    case Class::Service_SM:
-    case Class::Service_SPL:
-    case Class::Service_TCAP:
-    case Class::Service_Time:
-    case Class::Service_USB:
-    case Class::IPC:
-        return Subsystem::HLE;
-    case Class::Common_Filesystem:
-    case Class::Service_FS:
-    case Class::Loader:
-        return Subsystem::FS;
-    case Class::Audio:
-    case Class::Audio_DSP:
-    case Class::Audio_Sink:
-    case Class::Service_Audio:
-        return Subsystem::Audio;
-    case Class::Network:
-    case Class::Service_LDN:
-    case Class::Service_NIFM:
-    case Class::Service_SSL:
-    case Class::Service_WLAN:
-    case Class::WebService:
-        return Subsystem::Networking;
-    case Class::Core_Timing:
-    case Class::Performance:
-    case Class::HW_Memory:
-    case Class::Common_Memory:
-        return Subsystem::Performance;
-    case Class::Compatibility:
-        return Subsystem::Compatibility;
-    default:
-        return Subsystem::Other;
+std::string FormatFileLine(const Entry& entry, std::string_view message) {
+    using namespace std::chrono;
+    const auto seconds = duration_cast<std::chrono::seconds>(entry.timestamp);
+    const auto fraction = entry.timestamp - seconds;
+    return fmt::format("[{:4d}.{:06d}] {} <{}> {}:{}:{}: {}\n", seconds.count(), fraction.count(),
+                       GetLogClassNameImpl(entry.log_class), GetLevelNameImpl(entry.log_level),
+                       entry.filename, entry.line_num, entry.function, message);
+}
+
+std::string FormatConsoleLine(const Entry& entry, std::string_view message) {
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(entry.timestamp);
+    const std::string level = fmt::format("[{}]", GetLevelNameImpl(entry.log_level));
+    return fmt::format("[{}.{:03d}s] {:<10} [{}] {}\n", millis.count() / 1000,
+                       millis.count() % 1000, level, GetLogClassNameImpl(entry.log_class), message);
+}
+
+std::string WithoutTerminalEscapes(std::string_view message) {
+    std::string text;
+    text.reserve(message.size());
+    while (!message.empty()) {
+        const auto escape = message.find('\x1b');
+        text += message.substr(0, escape);
+        if (escape == message.npos) {
+            break;
+        }
+        message.remove_prefix(escape + 1);
+        if (message.starts_with('[')) {
+            const auto end =
+                message.substr(1).find_first_not_of("0123456789:;<=>? !\"#$%&'()*+,-./");
+            if (end != message.npos && message[end + 1] >= '@' && message[end + 1] <= '~') {
+                message.remove_prefix(end + 2);
+            }
+        }
     }
+    return text;
 }
 
-std::string SanitizeLogMessageImpl(std::string_view message) {
-    std::string text{message};
-    const auto replace_dir = [&](std::string_view dir, std::string_view token) {
-        if (dir.empty()) {
-            return;
+std::string SanitizeLogMessageImpl(std::string_view message, bool censor_username) {
+    std::string text = WithoutTerminalEscapes(message);
+    // Match paths with spaces too. When a path is unquoted, prefer removing the rest of its line
+    // over guessing where a private filename ends. Keep guest paths such as /dev/nvhost intact.
+    if (text.find_first_of("/\\") != std::string::npos) {
+        static const std::regex host_path{
+            R"((?:\b[A-Za-z]:[\\/]|\\\\)[^\r\n"'<>]*|(^|[\s"'(=])/(?:home|Users|tmp|var|mnt|media|run|srv|opt|root|private)/[^\r\n"'<>]*)"};
+        static const std::regex url_userinfo{R"((https?://)[^\s/@]+@)"};
+        text = std::regex_replace(text, host_path, "$1<path>");
+        if (text.find('@') != std::string::npos) {
+            text = std::regex_replace(text, url_userinfo, "$1<redacted>@");
         }
-        std::string fwd{dir};
-        std::ranges::replace(fwd, '\\', '/');
-        std::string back{dir};
-        std::ranges::replace(back, '/', '\\');
-        boost::ireplace_all(text, back, token);
-        if (fwd != back) {
-            boost::ireplace_all(text, fwd, token);
-        }
-    };
-    static const std::string home = []() -> std::string {
-#ifdef _WIN32
-        if (const auto* value = std::getenv("USERPROFILE"); value != nullptr) {
-            return std::string{value};
-        }
-        return {};
-#else
-        return FS::PathToUTF8String(FS::GetHomeDirectory());
-#endif
-    }();
-    static const std::string appdata = []() -> std::string {
-#ifdef _WIN32
-        return FS::PathToUTF8String(FS::GetAppDataRoamingDirectory());
-#else
-        return {};
-#endif
-    }();
-    static const std::string local_appdata = []() -> std::string {
-#ifdef _WIN32
-        if (const auto* value = std::getenv("LOCALAPPDATA"); value != nullptr) {
-            return std::string{value};
-        }
-#endif
-        return {};
-    }();
-    replace_dir(appdata, "<appdata>");
-    replace_dir(local_appdata, "<localappdata>");
-    replace_dir(home, "<home>");
-
+    }
+    if (text.find_first_of(":=") != std::string::npos) {
+        static const std::regex credential{
+            R"REGEX((\b(?:authorization|cookie|set-cookie)\s*:\s*)[^\r\n]*|(\b(?:(?:access|refresh|nex|eden)[_-]?)?token["']?\s*[:=]\s*|(?:\b|_)(?:api[_-]?key|password|secret)["']?\s*[:=]\s*)(?:"[^"\r\n]*"?|'[^'\r\n]*'?|[^\s,;"']+))REGEX",
+            std::regex::icase};
+        text = std::regex_replace(text, credential, "$1$2<redacted>");
+    }
 #ifndef __ANDROID__
-    if (Settings::values.censor_username.GetValue()) {
-        static const std::string username = []() -> std::string {
+    if (censor_username) {
+        static const std::string username = [] {
             for (const auto* var : {"LOGNAME", "USERNAME", "USER"}) {
-                if (const auto* value = std::getenv(var); value != nullptr && *value != '\0') {
+                if (const auto* value = std::getenv(var); value && *value) {
                     return std::string{value};
                 }
             }
-            return {};
+            return std::string{};
         }();
-        // Guard against single-character usernames corrupting hex/register values while still
-        // redacting real account names case-insensitively.
         if (username.size() >= 2) {
             boost::ireplace_all(text, username, "<user>");
         }
     }
+#else
+    (void)censor_username;
 #endif
-
-    // Absolute paths can name personal files. Keep relative source paths and title IDs, but
-    // replace host file locations (including Windows \\?\ extended paths) with a stable token.
-    static const std::regex win_extended_path{R"(\\\\(?:\?|\.)\\[A-Za-z]:[\\/][^\s"'<>]*)"};
-    static const std::regex windows_path{R"(\b[A-Za-z]:[\\/][^\s"'<>]*)"};
-    static const std::regex unc_path{R"(\\\\[^\s"'<>]*)"};
-    static const std::regex posix_path{
-        R"((^|[\s"'(=])(/(?:home|Users|tmp|var|mnt|media|run|srv|opt|root|private)/[^\s"'<>]*))"};
-    static const std::regex credential{
-        R"((authorization\s*:\s*(?:bearer|basic|token)\s+|(?:access[_-]?)?token\s*[:=]\s*|api[_-]?key\s*[:=]\s*|password\s*[:=]\s*|secret\s*[:=]\s*|cookie\s*:\s*)([^\s,;"']+))",
-        std::regex::icase};
-    static const std::regex url_userinfo{R"((https?://)[^\s/@:]+:[^\s/@]+@)"};
-    text = std::regex_replace(text, win_extended_path, "<path>");
-    text = std::regex_replace(text, windows_path, "<path>");
-    text = std::regex_replace(text, unc_path, "<path>");
-    text = std::regex_replace(text, posix_path, "$1<path>");
-    text = std::regex_replace(text, credential, "$1<redacted>");
-    text = std::regex_replace(text, url_userinfo, "$1<redacted>@");
     return text;
 }
 
-/// @brief Interface for logging backends.
-struct Backend {
-    virtual ~Backend() noexcept = default;
-    virtual void Write(const Entry& entry) noexcept = 0;
-    virtual void Flush() noexcept = 0;
-};
-
-/// @brief Instead of using fmt::format() just use the system's formatting capabilities directly
-struct DirectFormatArgs {
-    const char *class_name;
-    const char *level_name;
-    uint32_t time_seconds;
-    uint32_t time_fractional;
-};
-[[nodiscard]] inline DirectFormatArgs GetDirectFormatArgs(Entry const& entry) noexcept {
-    return {
-        .class_name = GetLogClassNameImpl(entry.log_class),
-        .level_name = GetLevelNameImpl(entry.log_level),
-        .time_seconds = uint32_t(entry.timestamp.count() / 1000000),
-        .time_fractional = uint32_t(entry.timestamp.count() % 1000000),
-    };
+// Keep exactly one record per line and never forward terminal control sequences. Invalid UTF-8
+// from a driver, a guest string or truncation is replaced without dropping adjacent ASCII.
+std::string MakePrintable(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t i = 0; i < text.size();) {
+        const auto lead = static_cast<unsigned char>(text[i]);
+        if (lead < 0x80) {
+            switch (lead) {
+            case '\r':
+                out += "\\r";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                out += lead >= 0x20 && lead < 0x7F ? text[i] : '?';
+                break;
+            }
+            ++i;
+            continue;
+        }
+        unsigned int count = lead < 0xC2   ? 0
+                             : lead < 0xE0 ? 2
+                             : lead < 0xF0 ? 3
+                             : lead < 0xF5 ? 4
+                                           : 0;
+        if (count > text.size() - i) {
+            count = 0;
+        }
+        const auto byte = [&](unsigned int offset) {
+            return static_cast<unsigned char>(text[i + offset]);
+        };
+        for (unsigned int j = 1; j < count; ++j) {
+            if ((byte(j) & 0xC0) != 0x80) {
+                count = 0;
+            }
+        }
+        if ((count == 3 &&
+             ((lead == 0xE0 && byte(1) < 0xA0) || (lead == 0xED && byte(1) >= 0xA0))) ||
+            (count == 4 &&
+             ((lead == 0xF0 && byte(1) < 0x90) || (lead == 0xF4 && byte(1) >= 0x90)))) {
+            count = 0;
+        }
+        if (count == 0) {
+            out += "\xEF\xBF\xBD";
+            ++i;
+        } else {
+            if (lead == 0xC2 && byte(1) < 0xA0) {
+                out += '?'; // C1 control characters
+            } else {
+                out.append(text.substr(i, count));
+            }
+            i += count;
+        }
+    }
+    return out;
 }
 
-/// @brief Backend that writes to stdout and with color
-struct ColorConsoleBackend final : public Backend {
-#ifdef _WIN32
-    explicit ColorConsoleBackend() noexcept {
-        console_handle = GetStdHandle(STD_ERROR_HANDLE);
-        GetConsoleScreenBufferInfo(console_handle, &original_info);
-    }
-    ~ColorConsoleBackend() noexcept override {
-        SetConsoleTextAttribute(console_handle, original_info.wAttributes);
-    }
-    void Write(const Entry& entry) noexcept override {
-        if (enabled && console_handle != INVALID_HANDLE_VALUE) {
-            WORD color = WORD([&entry]() {
-                switch (entry.log_level) {
-                case Level::Debug: return FOREGROUND_GREEN | FOREGROUND_BLUE; // Cyan
-                case Level::Info: return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; // Bright gray
-                case Level::Warning: return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
-                case Level::Error: return FOREGROUND_RED | FOREGROUND_INTENSITY;
-                case Level::Critical: return FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-                default: break;
-                }
-                return FOREGROUND_INTENSITY; // Grey
-            }());
-            SetConsoleTextAttribute(console_handle, color);
-            auto const df = GetDirectFormatArgs(entry);
-            // One write per line: MinGW's fprintf emits each character separately, and stdout is
-            // unbuffered here, so every character became a WriteFile on the thread that logs.
-            fmt::memory_buffer line;
-            fmt::format_to(fmt::appender(line), "[{:4d}.{:06d}] {} <{}> {}:{}:{}: ", df.time_seconds, df.time_fractional, df.class_name, df.level_name, entry.filename, entry.line_num, entry.function);
-            line.append(entry.message, entry.message + entry.message_len);
-            line.push_back('\n');
-            std::fwrite(line.data(), 1, line.size(), stdout);
-        }
-    }
-    void Flush() noexcept override {}
-    CONSOLE_SCREEN_BUFFER_INFO original_info = {};
-    HANDLE console_handle = INVALID_HANDLE_VALUE;
-    std::atomic_bool enabled = false;
-#else // ^^^ Windows vvv POSIX
-    explicit ColorConsoleBackend() noexcept {}
-    ~ColorConsoleBackend() noexcept override {}
-    void Write(const Entry& entry) noexcept override {
-        if (enabled) {
-            auto const color_str = [&entry]() -> const char* {
-                switch (entry.log_level) {
-                case Level::Debug: return "[0;36m"; // Cyan
-                case Level::Info: return "[0;37m"; // Bright gray
-                case Level::Warning: return "[1;33m"; // Bright yellow
-                case Level::Error: return "[1;31m"; // Bright red
-                case Level::Critical: return "[1;35m"; // Bright magenta
-                default: return "[1;30m"; // Grey
-                }
-            }();
-            auto const df = GetDirectFormatArgs(entry);
-            // more restrictive, because take for example this simple prelude:
-            // [  50.872256] Config <Info> common/settings.cpp:142:LogSettings:
-            char buffer[256];
-            auto result = fmt::format_to_n(buffer, sizeof(buffer) - 1, "\x1b{}[{:4d}.{:06d}] {} <{}> {}:{}:{}: ", color_str, df.time_seconds, df.time_fractional, df.class_name, df.level_name, entry.filename, entry.line_num, entry.function, entry.message);
-            std::fwrite(buffer, 1, (std::min)(sizeof(buffer) - 1, result.size), stdout);
-            std::fwrite(entry.message, 1, entry.message_len, stdout);
-            std::fwrite("\x1b[0m\n", 1, sizeof("\x1b[0m\n"), stdout);
-        }
-    }
-    void Flush() noexcept override {
-        std::fflush(stdout);
-    }
-    std::atomic_bool enabled = false;
-#endif
-};
-
 #ifndef __OPENORBIS__
-/// @brief Backend that writes to a file passed into the constructor
-struct FileBackend final : public Backend {
-    explicit FileBackend(const std::filesystem::path filename) noexcept {
-        // Move a log over its ".old.txt" copy. The rename replaces the copy atomically, and fails
-        // if the log is still open elsewhere (e.g. in a Veshiru process that hasn't exited yet).
-        // A log that can't even be checked counts as a failure, so it is never truncated.
-        const auto rotate = [](const std::filesystem::path& path) {
+class FileBackend {
+public:
+    explicit FileBackend(std::filesystem::path path, bool rotate) : active_path(std::move(path)) {
+        bool append = !rotate;
+        if (rotate && !Rotate(active_path)) {
+            auto fallback = active_path.parent_path() / active_path.stem();
+            fallback += "_2";
+            fallback += active_path.extension();
+            active_path = std::move(fallback);
+            append = !Rotate(active_path);
+        }
+        file = Open(active_path, append);
+        opened = enabled = file != nullptr;
+        // The session file has a size cap. The explicit mirror is user-managed and appends.
+        if (enabled && append && rotate) {
             std::error_code ec;
-            if (!std::filesystem::exists(path, ec))
-                return !ec;
-            auto old_path = path;
-            old_path += ".old.txt";
-            std::filesystem::rename(path, old_path, ec);
-            return !ec;
-        };
-        // If the log can't be moved, write this session to a second log (<name>_2.txt) so that
-        // the previous session is kept and this one still gets the full size limit. If that one
-        // can't be moved either, append to it.
-        auto path = filename;
-        auto mode = FS::FileAccessMode::Write;
-        if (!rotate(path)) {
-            path = filename.parent_path() / filename.stem();
-            path += "_2";
-            path += filename.extension();
-            if (!rotate(path))
-                mode = FS::FileAccessMode::Append;
+            const auto size = std::filesystem::file_size(active_path, ec);
+            bytes_written = ec ? 0 : size;
         }
-        file.emplace(path, mode, FS::FileType::TextFile);
-        active_path = path;
-        // Count what is already there so the size limit still applies when appending.
-        if (mode == FS::FileAccessMode::Append)
-            bytes_written = file->GetSize();
-        flush_thread = std::jthread([this](std::stop_token stop) {
-            Common::SetCurrentThreadName("LogFlush");
-            std::mutex wake_mutex;
-            std::condition_variable_any wake;
-            while (!stop.stop_requested()) {
-                {
-                    std::unique_lock lock{wake_mutex};
-                    wake.wait_for(lock, stop, std::chrono::seconds{1}, [] { return false; });
-                }
-                if (stop.stop_requested()) {
-                    break;
-                }
-                if (dirty.exchange(false, std::memory_order_acq_rel)) {
-                    std::scoped_lock lock{write_mutex};
-                    if (file) {
-                        file->Flush();
-                    }
-                }
-            }
-        });
-    }
-    ~FileBackend() noexcept override {
-        if (flush_thread.joinable()) {
-            flush_thread.request_stop();
-            flush_thread.join();
-        }
-        Flush();
+        capped = rotate;
     }
 
-    void Write(const Entry& entry) noexcept override {
-        if (!enabled)
-            return;
-
-        auto message = FormatLogMessage(entry);
-#ifndef __ANDROID__
-        if (Settings::values.censor_username.GetValue()) {
-            // This must be a static otherwise it would get checked on EVERY
-            // instance of logging an entry...
-            static std::string username = []() -> std::string {
-                // in order of precedence
-                // LOGNAME usually works on UNIX, USERNAME on Windows
-                // Some UNIX systems suck and don't use LOGNAME so we also need USER :(
-                for (auto const var : { "LOGNAME", "USERNAME", "USER", })
-                    if (auto const s = ::getenv(var); s != nullptr)
-                        return std::string{s};
-                return std::string{};
-            }();
-            if (!username.empty())
-                boost::replace_all(message, username, "user");
-        }
-#endif
-        std::scoped_lock lock{write_mutex};
-        if (!enabled || !file)
-            return;
-        bytes_written += file->WriteSpan(std::span<const char>{message.begin(), message.end()});
-        dirty.store(true, std::memory_order_release);
-
-        // Option to log each line rather than 4k buffers
-        if (Settings::values.log_flush_line.GetValue()) {
-            file->Flush();
-            dirty.store(false, std::memory_order_release);
-        }
-
-        using namespace Common::Literals;
-        // Prevent logs from exceeding a set maximum size in the event that log entries are spammed.
-        const auto write_limit = Settings::values.extended_logging.GetValue() ? 1_GiB : 100_MiB;
-        const bool write_limit_exceeded = bytes_written > write_limit;
-        if (entry.log_level >= Level::Error || write_limit_exceeded) {
-            // Stop writing after the write limit is exceeded.
-            // Don't close the file so we can print a stacktrace if necessary
-            if (write_limit_exceeded)
-                enabled = false;
-            file->Flush();
-            dirty.store(false, std::memory_order_release);
-        }
+    ~FileBackend() {
+        Close();
     }
 
-    void Flush() noexcept override {
-        std::scoped_lock lock{write_mutex};
-        if (file) {
-            file->Flush();
+    void Close() {
+        std::scoped_lock lock{mutex};
+        if (auto* closing = std::exchange(file, nullptr)) {
+            std::fclose(closing);
         }
-        dirty.store(false, std::memory_order_release);
+        enabled = false;
     }
 
-    void WriteCrashUnlocked(const Entry& entry) noexcept {
-        if (!file) {
-            return;
-        }
-        const auto message = FormatLogMessage(entry);
-        (void)file->WriteSpan(std::span<const char>{message.begin(), message.end()});
-        file->Flush();
+    [[nodiscard]] bool WasOpened() const {
+        return opened;
     }
-
-    [[nodiscard]] const std::filesystem::path& GetPath() const noexcept {
+    [[nodiscard]] const std::filesystem::path& GetPath() const {
         return active_path;
     }
 
-private:
-    std::mutex write_mutex;
-    std::optional<FS::IOFile> file;
-    std::filesystem::path active_path;
-    std::atomic_bool dirty{false};
-    std::jthread flush_thread;
-    std::size_t bytes_written = 0;
-    bool enabled = true;
-};
-#endif
-/// @brief Backend that keeps the last lines in memory, off unless the debug server turns it on
-struct RingBackend final : public Backend {
-    void Write(const Entry& entry) noexcept override {
-        if (capacity.load(std::memory_order_relaxed) == 0) {
+    void Write(std::string_view line, bool flush, bool extended) {
+        using namespace Common::Literals;
+        std::scoped_lock lock{mutex};
+        if (!enabled) {
             return;
         }
-        try {
-            std::string text = FormatLogMessage(entry);
-            if (!text.empty() && text.back() == '\n') {
-                text.pop_back();
-            }
-            std::scoped_lock lock{mutex};
-            lines.push_back({next_sequence++, std::move(text)});
-            while (lines.size() > capacity.load(std::memory_order_relaxed)) {
-                lines.pop_front();
-            }
-        } catch (const std::exception&) {
-            // Out of memory: drop the line rather than the process.
+        const auto written = std::fwrite(line.data(), 1, line.size(), file);
+        bytes_written += written;
+        const auto limit = extended ? 1_GiB : 100_MiB;
+        if (written != line.size() || (capped && bytes_written >= limit)) {
+            enabled = false;
+        }
+        if ((flush || !enabled) && std::fflush(file) != 0) {
+            enabled = false;
         }
     }
-    void Flush() noexcept override {}
+
+    void Flush() {
+        std::scoped_lock lock{mutex};
+        if (enabled && std::fflush(file) != 0) {
+            enabled = false;
+        }
+    }
+
+    /// Do not wait for a lock the crashing thread (or an I/O worker) might hold.
+    void TryWriteCrash(std::string_view line) {
+        std::unique_lock lock{mutex, std::try_to_lock};
+        if (lock && file) {
+            std::fwrite(line.data(), 1, line.size(), file);
+            std::fflush(file);
+        }
+    }
+
+private:
+    static std::FILE* Open(const std::filesystem::path& path, bool append) {
+#ifdef _WIN32
+        // Only open local drive paths (not the device or UNC namespaces, which also contain pipes).
+        const auto name = path.lexically_normal().native();
+        if (name.size() < 3 || name[1] != L':' || name[2] != L'\\' ||
+            name.find(L':', 2) != name.npos) {
+            return nullptr;
+        }
+        const auto access = append ? FILE_APPEND_DATA : GENERIC_WRITE;
+        HANDLE handle = CreateFileW(name.c_str(), access, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            return nullptr;
+        }
+        if (GetFileType(handle) != FILE_TYPE_DISK || (!append && !SetEndOfFile(handle))) {
+            CloseHandle(handle);
+            return nullptr;
+        }
+        const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(handle), _O_BINARY | _O_WRONLY);
+        if (fd == -1) {
+            CloseHandle(handle);
+            return nullptr;
+        }
+        if (auto* stream = _fdopen(fd, "wb")) {
+            return stream;
+        }
+        _close(fd);
+#else
+        const int fd =
+            open(path.c_str(),
+                 O_WRONLY | O_CREAT | O_CLOEXEC | O_NONBLOCK | (append ? O_APPEND : 0), 0600);
+        if (fd < 0) {
+            return nullptr;
+        }
+        struct stat status{};
+        if (fstat(fd, &status) == 0 && S_ISREG(status.st_mode) &&
+            (append || ftruncate(fd, 0) == 0)) {
+            if (auto* stream = fdopen(fd, append ? "ab" : "wb")) {
+                return stream;
+            }
+        }
+        close(fd);
+#endif
+        return nullptr;
+    }
+
+    static bool Rotate(const std::filesystem::path& path) {
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec)) {
+            return !ec;
+        }
+        // Never rename a directory passed by mistake.
+        if (!std::filesystem::is_regular_file(path, ec)) {
+            return false;
+        }
+        auto old_path = path;
+        old_path += ".old.txt";
+        std::filesystem::rename(path, old_path, ec);
+        return !ec;
+    }
+
+    std::filesystem::path active_path;
+    std::mutex mutex;
+    std::FILE* file{};
+    std::uintmax_t bytes_written{};
+    bool capped{};
+    bool opened{};
+    bool enabled{};
+};
+#endif
+
+struct RingBackend {
+    void Write(std::string_view line) {
+        std::scoped_lock lock{mutex};
+        if (const auto limit = capacity.load(std::memory_order_relaxed); limit != 0) {
+            lines.push_back({next_sequence++, std::string{line}});
+            while (lines.size() > limit) {
+                lines.pop_front();
+            }
+        }
+    }
 
     std::atomic<std::size_t> capacity{};
     std::mutex mutex;
     std::deque<RingLine> lines;
     u64 next_sequence = 1;
 };
-/// @brief Asynchronous, bounded backend for the Qt live console. Logging threads only copy the
-/// already-formatted message into a bounded MPSC queue; sanitising, rate limiting and buffering
-/// happen on a worker that is started only while the console is open.
-struct LiveConsoleBackend final : public Backend {
-    struct Pending {
-        std::string message;
-        const char* filename{};
-        const char* function{};
-        u32 line_num{};
-        u64 timestamp_us{};
-        Class log_class{};
-        Level log_level{};
-    };
 
-    void Write(const Entry& entry) noexcept override {
-        if (!enabled.load(std::memory_order_relaxed)) {
+struct Pending {
+    Entry entry;
+    std::string message;
+};
+
+struct Impl {
+    explicit Impl(const Options& options)
+        : fixed_level{options.fixed_level}, asynchronous{options.asynchronous},
+          console_enabled{options.console} {
+        for (auto& level : filter) {
+            level.store(fixed_level.value_or(Level::Info), std::memory_order_relaxed);
+        }
+    }
+
+    ~Impl() {
+        Shutdown();
+    }
+
+    [[nodiscard]] Microseconds Elapsed() const {
+        return std::chrono::duration_cast<Microseconds>(Clock::now() - time_origin);
+    }
+
+    void StartWorker() {
+        if (console_enabled.load(std::memory_order_relaxed)) {
+            stream_sink.emplace();
+        }
+        worker = std::thread{[this] { Run(); }};
+    }
+
+    void Submit(Entry entry, std::string message) {
+        if (!asynchronous) {
+            entry.timestamp = Elapsed();
+            Emit(entry, message);
             return;
         }
-        try {
-            Pending pending{
-                .message = std::string(entry.message, entry.message_len),
-                .filename = entry.filename,
-                .function = entry.function,
-                .line_num = entry.line_num,
-                .timestamp_us = static_cast<u64>(entry.timestamp.count()),
-                .log_class = entry.log_class,
-                .log_level = entry.log_level,
-            };
-            if (!queue.TryEmplace(std::move(pending))) {
-                dropped_queue.fetch_add(1, std::memory_order_relaxed);
-            }
-        } catch (...) {
-            dropped_queue.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
 
-    void Flush() noexcept override {}
-
-    void Enable() {
-        bool expected = false;
-        if (!enabled.compare_exchange_strong(expected, true)) {
-            return;
-        }
-        if (!worker.joinable()) {
-            worker = std::jthread([this](std::stop_token stop_token) { Loop(stop_token); });
-        }
-    }
-
-    void Disable() {
-        enabled.store(false, std::memory_order_relaxed);
-        if (worker.joinable()) {
-            worker.request_stop();
-            worker.join();
-        }
-    }
-
-    void Loop(std::stop_token stop_token) noexcept {
-        Pending pending;
-        while (!stop_token.stop_requested()) {
-            if (!queue.TryPop(pending)) {
-                queue.PopWait(pending, stop_token);
-                if (stop_token.stop_requested()) {
-                    break;
-                }
-            }
-            Process(pending);
-            while (queue.TryPop(pending)) {
-                Process(pending);
-            }
-        }
-        // Drain what was already queued when the console closed so the bounded buffer and the
-        // dropped counters stay consistent.
-        while (queue.TryPop(pending)) {
-            Process(pending);
-        }
-    }
-
-    void Process(const Pending& pending) noexcept {
-        try {
-            constexpr u64 window_us = 1'000'000;
-            constexpr u32 max_per_window = 32;
-            const std::size_t key = std::hash<std::string>{}(pending.message) ^
-                                    (static_cast<std::size_t>(pending.log_class) << 8) ^
-                                    (static_cast<std::size_t>(pending.log_level) << 16);
-            auto& state = rate_limits[key];
-            if (pending.timestamp_us - state.window_start_us >= window_us) {
-                state.window_start_us = pending.timestamp_us;
-                state.count = 0;
-            }
-            if (++state.count > max_per_window) {
-                rate_limited.fetch_add(1, std::memory_order_relaxed);
-                if (rate_limits.size() > 4096) {
-                    rate_limits.clear();
-                }
+        // Leave room for warnings and errors if verbose messages saturate the queue.
+        constexpr std::size_t capacity = 4096;
+        constexpr std::size_t reserve = 128;
+        {
+            std::scoped_lock lock{queue_mutex};
+            if (closing) {
                 return;
             }
-            if (rate_limits.size() > 4096) {
-                rate_limits.clear();
+            const bool important = entry.log_level >= Level::Warning;
+            if (pending.size() >= (important ? capacity : capacity - reserve)) {
+                ++dropped[important ? 1 : 0];
+                return;
             }
-
-            ConsoleEntry entry{
-                .sequence = next_sequence++,
-                .timestamp_us = pending.timestamp_us,
-                .log_class = pending.log_class,
-                .log_level = pending.log_level,
-                .subsystem = GetSubsystemImpl(pending.log_class),
-                .message = SanitizeLogMessageImpl(pending.message),
-                .source = fmt::format("{}:{}:{}", pending.filename ? pending.filename : "?",
-                                      pending.line_num,
-                                      pending.function ? pending.function : "?"),
-            };
-            std::scoped_lock lock{mutex};
-            entries.push_back(std::move(entry));
-            const std::size_t limit = capacity.load(std::memory_order_relaxed);
-            while (entries.size() > limit) {
-                entries.pop_front();
-                dropped_buffer.fetch_add(1, std::memory_order_relaxed);
-            }
-        } catch (...) {
-            dropped_buffer.fetch_add(1, std::memory_order_relaxed);
+            entry.timestamp = Elapsed();
+            pending.push_back({entry, std::move(message)});
         }
+        queue_changed.notify_one();
     }
 
-    std::vector<ConsoleEntry> Read(u64 after, std::size_t max_entries) {
-        std::vector<ConsoleEntry> result;
-        if (max_entries == 0) {
-            return result;
-        }
-        std::scoped_lock lock{mutex};
-        result.reserve((std::min)(max_entries, entries.size()));
-        for (const auto& entry : entries) {
-            if (entry.sequence > after) {
-                result.push_back(entry);
-                if (result.size() >= max_entries) {
-                    break;
+    void Run() {
+        Common::SetCurrentThreadName("LogWriter");
+        std::deque<Pending> batch;
+        auto next_flush = Clock::now() + std::chrono::seconds{1};
+        for (;;) {
+            std::unique_lock lock{queue_mutex};
+            queue_changed.wait_until(lock, next_flush, [this] {
+                return closing || !pending.empty() || flush_requested != flush_done;
+            });
+            batch.swap(pending);
+            const auto missed = std::exchange(dropped, std::array<u64, 2>{});
+            const auto drop_time = Elapsed();
+            const auto ticket = flush_requested;
+            const bool flush = ticket != flush_done;
+            const bool stop = closing;
+            lock.unlock();
+
+            for (const auto& item : batch) {
+                Emit(item.entry, item.message);
+            }
+            batch.clear();
+            if (missed[0] || missed[1]) {
+                try {
+                    Emit(
+                        {drop_time, Class::Log, Level::Warning, "common/logging.cpp", "Run", 0},
+                        fmt::format("Log queue full: dropped {} below Warning, {} Warning or above",
+                                    missed[0], missed[1]));
+                } catch (const std::bad_alloc&) {
                 }
             }
-        }
-        return result;
-    }
-
-    void Clear() {
-        std::scoped_lock lock{mutex};
-        entries.clear();
-    }
-
-    ConsoleStats Stats() {
-        ConsoleStats stats{
-            .dropped_queue = dropped_queue.load(std::memory_order_relaxed),
-            .dropped_buffer = dropped_buffer.load(std::memory_order_relaxed),
-            .rate_limited = rate_limited.load(std::memory_order_relaxed),
-        };
-        std::scoped_lock lock{mutex};
-        stats.buffered = entries.size();
-        return stats;
-    }
-
-    struct RateState {
-        u64 window_start_us{};
-        u32 count{};
-    };
-
-    std::atomic_bool enabled{false};
-    std::atomic<std::size_t> capacity{10000};
-    /// Number of live console windows sharing this backend. The worker runs while this is > 0 so
-    /// closing one console window never stops logging for the others.
-    std::atomic<std::size_t> refcount{0};
-    Common::MPSCQueue<Pending, 4096> queue;
-    std::jthread worker;
-    std::mutex mutex;
-    std::deque<ConsoleEntry> entries;
-    std::unordered_map<std::size_t, RateState> rate_limits;
-    u64 next_sequence{1};
-    std::atomic<u64> dropped_queue{0};
-    std::atomic<u64> dropped_buffer{0};
-    std::atomic<u64> rate_limited{0};
-};
-
-#ifdef _WIN32
-/// @brief Backend that writes to Visual Studio's output window
-struct DebuggerBackend final : public Backend {
-    explicit DebuggerBackend() noexcept = default;
-    ~DebuggerBackend() noexcept override = default;
-    void Write(const Entry& entry) noexcept override {
-        ::OutputDebugStringW(UTF8ToUTF16W(FormatLogMessage(entry)).c_str());
-    }
-    void Flush() noexcept override {}
-};
-#endif
-#ifdef __ANDROID__
-/// @brief Backend that writes to the Android logcat
-struct LogcatBackend : public Backend {
-    explicit LogcatBackend() noexcept = default;
-    ~LogcatBackend() noexcept override = default;
-    void Write(const Entry& entry) noexcept override {
-        android_LogPriority android_log_priority = [&]() {
-            switch (entry.log_level) {
-            case Level::Debug: return ANDROID_LOG_DEBUG;
-            case Level::Info: return ANDROID_LOG_INFO;
-            case Level::Warning: return ANDROID_LOG_WARN;
-            case Level::Error: return ANDROID_LOG_ERROR;
-            case Level::Critical: return ANDROID_LOG_FATAL;
-            case Level::Count:
-            case Level::Trace: return ANDROID_LOG_VERBOSE;
+            if (flush || stop || Clock::now() >= next_flush) {
+                FlushFiles();
+                next_flush = Clock::now() + std::chrono::seconds{1};
             }
-        }();
-        auto const df = GetDirectFormatArgs(entry);
-        __android_log_print(android_log_priority, "VeshiruNative", "%s %s:%u:%s: %s", df.class_name, entry.filename, entry.line_num, entry.function, entry.message);
+            if (flush) {
+                lock.lock();
+                flush_done = ticket;
+                lock.unlock();
+                flushed.notify_all();
+            }
+            if (stop) {
+                return;
+            }
+        }
     }
-    void Flush() noexcept override {}
-};
-#endif
 
-/// @brief Static state as a singleton.
-struct Impl {
-    // Well, I mean it's the default constructor!
-    explicit Impl() noexcept : filter(Level::Trace) {}
+    void Flush() {
+        using namespace std::chrono_literals;
+        if (!asynchronous) {
+            FlushFiles();
+            return;
+        }
+        std::unique_lock lock{queue_mutex};
+        if (closing || !worker.joinable() || std::this_thread::get_id() == worker.get_id()) {
+            return;
+        }
+        const auto ticket = ++flush_requested;
+        queue_changed.notify_one();
+        flushed.wait_for(lock, 1s, [this, ticket] { return flush_done >= ticket; });
+    }
 
-    template<typename F>
-    void ForEachBackend(F&& lambda) noexcept {
-        lambda(static_cast<Backend&>(color_console_backend));
-        lambda(static_cast<Backend&>(ring_backend));
-        lambda(static_cast<Backend&>(live_console_backend));
+    void WriteConsole(const Entry& entry, std::string_view message) {
+        if (!console_enabled.load(std::memory_order_relaxed)) {
+            return;
+        }
+        auto line = FormatConsoleLine(entry, message);
+        if (stream_sink) {
+            stream_sink->Enqueue(std::move(line), entry.log_level >= Level::Error,
+                                 entry.log_level >= Level::Warning);
+        } else if (!asynchronous) {
+            WriteStandardStream(line, entry.log_level >= Level::Error);
+        }
+    }
+
+    void Shutdown() {
+        accepting.store(false, std::memory_order_relaxed);
+        if (asynchronous) {
+            {
+                std::scoped_lock lock{queue_mutex};
+                if (closing) {
+                    return;
+                }
+                closing = true;
+            }
+            queue_changed.notify_one();
+            if (worker.joinable()) {
+                worker.join();
+            }
+            if (stream_sink) {
+                stream_sink->Close();
+            }
+        } else {
+            FlushFiles();
+        }
 #ifndef __OPENORBIS__
-        if (file_backend)
-            lambda(static_cast<Backend&>(*file_backend));
+        if (file_backend) {
+            file_backend->Close();
+        }
+        if (extra_backend) {
+            extra_backend->Close();
+        }
 #endif
+    }
+
+    void FlushFiles() {
+#ifndef __OPENORBIS__
+        if (file_backend) {
+            file_backend->Flush();
+        }
+        if (extra_backend) {
+            extra_backend->Flush();
+        }
+#endif
+    }
+
+    void Emit(const Entry& entry, std::string_view message) noexcept {
+        try {
+            const auto printable = MakePrintable(
+                SanitizeLogMessageImpl(message, censor_username.load(std::memory_order_relaxed)));
+            const auto line = FormatFileLine(entry, printable);
+#ifndef __OPENORBIS__
+            const bool flush =
+                entry.log_level >= Level::Warning || flush_line.load(std::memory_order_relaxed);
+            const bool extend = extended.load(std::memory_order_relaxed);
+            if (file_backend) {
+                file_backend->Write(line, flush, extend);
+            }
+            if (extra_backend) {
+                extra_backend->Write(line, flush, extend);
+            }
+#endif
+            if (ring.capacity.load(std::memory_order_relaxed) != 0) {
+                ring.Write(std::string_view{line}.substr(0, line.size() - 1));
+            }
 #ifdef _WIN32
-        lambda(static_cast<Backend&>(debugger_backend));
+            if (IsDebuggerPresent()) {
+                ::OutputDebugStringW(UTF8ToUTF16W(line).c_str());
+            }
 #endif
 #ifdef __ANDROID__
-        lambda(static_cast<Backend&>(lc_backend));
+            constexpr std::array priorities{ANDROID_LOG_VERBOSE, ANDROID_LOG_DEBUG,
+                                            ANDROID_LOG_INFO,    ANDROID_LOG_WARN,
+                                            ANDROID_LOG_ERROR,   ANDROID_LOG_FATAL};
+            __android_log_write(priorities[std::size_t(entry.log_level)], "VeshiruNative",
+                                line.c_str());
 #endif
+            WriteConsole(entry, printable);
+        } catch (const std::exception&) {
+            // In particular, a failed allocation in a diagnostic sink is not fatal.
+        }
     }
 
-    Filter filter;
-    ColorConsoleBackend color_console_backend{};
-    RingBackend ring_backend{};
-    LiveConsoleBackend live_console_backend{};
+    const std::optional<Level> fixed_level;
+    const bool asynchronous;
+    const Clock::time_point time_origin{Clock::now()};
+    std::atomic_bool accepting{true};
+    std::atomic_bool console_enabled;
+    std::atomic_bool flush_line{};
+    std::atomic_bool extended{};
+    std::atomic_bool censor_username{true};
+    std::array<std::atomic<Level>, std::size_t(Class::Count)> filter;
+    RingBackend ring;
 #ifndef __OPENORBIS__
     std::optional<FileBackend> file_backend;
+    std::optional<FileBackend> extra_backend;
 #endif
-#ifdef _WIN32
-    DebuggerBackend debugger_backend{};
-#endif
-#ifdef __ANDROID__
-    LogcatBackend lc_backend{};
-#endif
-    std::chrono::steady_clock::time_point time_origin{std::chrono::steady_clock::now()};
+    std::optional<StandardStreamSink> stream_sink;
+    std::mutex queue_mutex;
+    std::condition_variable queue_changed;
+    std::condition_variable flushed;
+    std::deque<Pending> pending;
+    std::array<u64, 2> dropped{};
+    u64 flush_requested{};
+    u64 flush_done{};
+    bool closing{};
+    std::thread worker;
 };
-} // Anonymous namespace
+
+std::optional<Impl> logging_instance;
+
+} // namespace
 
 void Filter::ParseFilterString(std::string_view filter_view) {
     auto clause_begin = filter_view.cbegin();
     while (clause_begin < filter_view.cend()) {
         auto clause_end = std::find(clause_begin, filter_view.cend(), ' ');
-        // If clause isn't empty
         if (clause_end != clause_begin) {
             ParseFilterRule(*this, clause_begin, clause_end);
         }
         if (clause_end != filter_view.cend()) {
-            // Skip over the whitespace
             ++clause_end;
         }
         clause_begin = clause_end;
     }
 }
 
-// Constructor shall NOT depend upon Settings() or whatever
-// it's ran at global static ctor() time... so BE CAREFUL MFER!
-static std::optional<Common::Log::Impl> logging_instance{};
-
-void Initialize() {
+bool Initialize(const Options& options) {
     if (logging_instance) {
         LOG_WARNING(Log, "Reinitializing logging backend");
-    } else {
-        logging_instance.emplace();
-        logging_instance->filter.ParseFilterString(Settings::values.log_filter.GetValue());
-#ifndef __OPENORBIS__
-        using namespace Common::FS;
-        const auto& log_dir = GetEdenPath(EdenPath::LogDir);
-        void(CreateDir(log_dir));
-        logging_instance->file_backend.emplace(log_dir / LOG_FILE);
-#endif
-        InstallTerminateHandler();
+        return options.extra_file.empty();
     }
+
+    auto& impl = logging_instance.emplace(options);
+    UpdateFileLoggingOptions();
+    bool extra_opened = options.extra_file.empty();
+#ifndef __OPENORBIS__
+    using namespace Common::FS;
+    const auto& log_dir = GetEdenPath(EdenPath::LogDir);
+    void(CreateDirs(log_dir));
+    impl.file_backend.emplace(log_dir / LOG_FILE, true);
+    if (!impl.file_backend->WasOpened()) {
+        LOG_WARNING(Log,
+                    "Could not open the session log; check that the log directory is writable");
+    }
+    if (!options.extra_file.empty()) {
+        std::error_code ec;
+        // Don't write twice if the requested mirror points to the active session log.
+        if (impl.file_backend->WasOpened() &&
+            std::filesystem::equivalent(options.extra_file, impl.file_backend->GetPath(), ec)) {
+            extra_opened = true;
+        } else {
+            impl.extra_backend.emplace(options.extra_file, false);
+            extra_opened = impl.extra_backend->WasOpened();
+        }
+    }
+#endif
+    InstallTerminateHandler();
+    if (impl.asynchronous) {
+        impl.StartWorker();
+    }
+    if (!options.fixed_level) {
+        Filter filter;
+        filter.ParseFilterString(Settings::values.log_filter.GetValue());
+        SetGlobalFilter(filter);
+    }
+    return extra_opened;
 }
 
-void Start() {
-}
+void Start() {}
 
 void Stop() {
-    if (logging_instance) {
-        logging_instance->ForEachBackend([](Backend& backend) { backend.Flush(); });
-        logging_instance->live_console_backend.Disable();
-    }
+    Flush();
 }
 
 void Flush() {
     if (logging_instance) {
-        logging_instance->ForEachBackend([](Backend& backend) { backend.Flush(); });
+        logging_instance->Flush();
+    }
+}
+
+void FlushConsole() {
+    if (logging_instance && logging_instance->stream_sink) {
+        logging_instance->stream_sink->Flush(std::chrono::milliseconds{250});
+    }
+}
+
+void Shutdown() {
+    if (logging_instance) {
+        logging_instance->Shutdown();
+    }
+}
+
+void UpdateFileLoggingOptions() {
+    if (logging_instance) {
+        logging_instance->flush_line.store(Settings::values.log_flush_line.GetValue(),
+                                           std::memory_order_relaxed);
+        logging_instance->extended.store(Settings::values.extended_logging.GetValue(),
+                                         std::memory_order_relaxed);
+        logging_instance->censor_username.store(Settings::values.censor_username.GetValue(),
+                                                std::memory_order_relaxed);
     }
 }
 
 std::filesystem::path GetActiveLogFilePath() {
 #ifndef __OPENORBIS__
-    if (logging_instance && logging_instance->file_backend) {
+    if (logging_instance && logging_instance->accepting.load(std::memory_order_relaxed) &&
+        logging_instance->file_backend && logging_instance->file_backend->WasOpened()) {
         return logging_instance->file_backend->GetPath();
     }
 #endif
     return {};
 }
 
-void FmtCrashMessageImpl(const char* filename, unsigned int line_num, const char* function, fmt::string_view format, const fmt::format_args& args) noexcept {
-#ifndef __OPENORBIS__
-    if (!logging_instance || !logging_instance->file_backend)
+void FmtCrashMessageImpl(const char* filename, unsigned int line_num, const char* function,
+                         fmt::string_view format, const fmt::format_args& args) noexcept {
+    if (!logging_instance) {
         return;
-    char buffer[2048];
-    const auto result = fmt::vformat_to_n(buffer, sizeof(buffer) - 1, format, args);
-    const std::size_t length = (std::min)(result.size, sizeof(buffer) - 1);
-    buffer[length] = '\0';
-    const Entry e{
-        .message = buffer,
-        .message_len = length,
-        .timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - logging_instance->time_origin),
-        .log_class = Class::Common,
-        .log_level = Level::Critical,
-        .filename = TrimSourcePath(filename),
-        .function = function,
-        .line_num = line_num,
-    };
-    logging_instance->file_backend->WriteCrashUnlocked(e);
+    }
+    try {
+        const Entry entry{logging_instance->Elapsed(), Class::Common, Level::Critical,
+                          TrimSourcePath(filename),    function,      line_num};
+        const auto message = MakePrintable(SanitizeLogMessageImpl(
+            fmt::vformat(format, args),
+            logging_instance->censor_username.load(std::memory_order_relaxed)));
+#ifndef __OPENORBIS__
+        const auto line = FormatFileLine(entry, message);
+        if (logging_instance->file_backend) {
+            logging_instance->file_backend->TryWriteCrash(line);
+        }
+        if (logging_instance->extra_backend) {
+            logging_instance->extra_backend->TryWriteCrash(line);
+        }
 #endif
+        // Crash handlers must not take the live console queue's lock. Qt reports fatal
+        // platform errors via its separate pre-GUI diagnostic path.
+
+    } catch (const std::exception&) {
+    }
 }
 
 void SetGlobalFilter(const Filter& filter) {
-    if (logging_instance)
-        logging_instance->filter = filter;
+    if (!logging_instance || logging_instance->fixed_level) {
+        return;
+    }
+    for (std::size_t index = 0; index < filter.class_levels.size(); ++index) {
+        logging_instance->filter[index].store(filter.class_levels[index],
+                                              std::memory_order_relaxed);
+    }
 }
 
 void SetColorConsoleBackendEnabled(bool enabled) {
-    if (logging_instance)
-        logging_instance->color_console_backend.enabled = enabled;
+    if (logging_instance) {
+        logging_instance->console_enabled.store(enabled, std::memory_order_relaxed);
+    }
 }
 
 void SetRingCapacity(std::size_t capacity) {
-    if (!logging_instance)
+    if (!logging_instance) {
         return;
-    auto& ring = logging_instance->ring_backend;
+    }
+    auto& ring = logging_instance->ring;
     std::scoped_lock lock{ring.mutex};
     ring.capacity.store(capacity, std::memory_order_relaxed);
     while (ring.lines.size() > capacity) {
@@ -961,9 +839,10 @@ void SetRingCapacity(std::size_t capacity) {
 
 std::vector<RingLine> ReadRing(u64 after) {
     std::vector<RingLine> result;
-    if (!logging_instance)
+    if (!logging_instance) {
         return result;
-    auto& ring = logging_instance->ring_backend;
+    }
+    auto& ring = logging_instance->ring;
     std::scoped_lock lock{ring.mutex};
     for (const RingLine& line : ring.lines) {
         if (line.sequence > after) {
@@ -974,128 +853,42 @@ std::vector<RingLine> ReadRing(u64 after) {
 }
 
 bool IsLevelEnabled(Class log_class, Level log_level) {
-    return logging_instance && logging_instance->filter.CheckMessage(log_class, log_level);
+    return logging_instance && logging_instance->accepting.load(std::memory_order_relaxed) &&
+           log_level >=
+               logging_instance->filter[std::size_t(log_class)].load(std::memory_order_relaxed);
 }
 
-void FmtLogMessageImpl(Class log_class, Level log_level, const char* filename, unsigned int line_num, const char* function, fmt::string_view format, const fmt::format_args& args) {
-    if (logging_instance && logging_instance->filter.CheckMessage(log_class, log_level)) {
-        auto const flush = ::Settings::values.log_flush_line.GetValue();
-        char buffer[BUFSIZ];
-        auto result = fmt::vformat_to_n(buffer, sizeof(buffer) - 1, format, args);
-        Entry e{
-            .message = nullptr,
-            .message_len = 0,
-            .timestamp = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - logging_instance->time_origin),
-            .log_class = log_class,
-            .log_level = log_level,
-            .filename = TrimSourcePath(filename),
-            .function = function,
-            .line_num = line_num,
-        };
-        if (result.size <= sizeof(buffer) - 1) {
-            buffer[(std::min)(result.size, sizeof(buffer) - 1)] = '\0';
-            e.message = buffer;
-            e.message_len = (std::min)(result.size, sizeof(buffer) - 1);
-            logging_instance->ForEachBackend([=](Backend& backend) {
-                backend.Write(e);
-                if (flush) backend.Flush();
-            });
-        } else {
-            std::string s = fmt::vformat(format, args);
-            e.message = s.c_str();
-            e.message_len = s.size();
-            logging_instance->ForEachBackend([=](Backend& backend) {
-                backend.Write(e);
-                if (flush) backend.Flush();
-            });
+void FmtLogMessageImpl(Class log_class, Level log_level, const char* filename,
+                       unsigned int line_num, const char* function, fmt::string_view format,
+                       const fmt::format_args& args) {
+    if (IsLevelEnabled(log_class, log_level)) {
+        constexpr std::string_view suffix = " ... [truncated]";
+        char buffer[16 * 1024];
+        const auto limit = sizeof(buffer) - suffix.size();
+        const auto result = fmt::vformat_to_n(buffer, limit, format, args);
+        std::string message(buffer, std::min(result.size, limit));
+        if (result.size > limit) {
+            message += suffix;
+        }
+        logging_instance->Submit(
+            {{}, log_class, log_level, TrimSourcePath(filename), function, line_num},
+            std::move(message));
+    }
+}
+
+std::optional<Level> ParseLevel(std::string_view name) {
+    const auto lower = [](unsigned char ch) { return std::tolower(ch); };
+    for (u32 i = 0; i < u32(Level::Count); ++i) {
+        const auto level = static_cast<Level>(i);
+        if (std::ranges::equal(name, std::string_view{GetLevelNameImpl(level)}, {}, lower, lower)) {
+            return level;
         }
     }
-}
-std::string_view GetSubsystemName(Subsystem subsystem) {
-    switch (subsystem) {
-    case Subsystem::CPU: return "CPU";
-    case Subsystem::GPU: return "GPU";
-    case Subsystem::HLE: return "HLE";
-    case Subsystem::FS: return "FS";
-    case Subsystem::Audio: return "Audio";
-    case Subsystem::Networking: return "Networking";
-    case Subsystem::Performance: return "Performance";
-    case Subsystem::Compatibility: return "Compatibility";
-    case Subsystem::Other: return "Other";
-    default: return "?";
-    }
-}
-
-Subsystem GetSubsystem(Class log_class) {
-    return GetSubsystemImpl(log_class);
-}
-
-std::string_view GetLogClassName(Class log_class) {
-    return GetLogClassNameImpl(log_class);
-}
-
-std::string_view GetLogLevelName(Level log_level) {
-    return GetLevelNameImpl(log_level);
-}
-
-void SetLiveConsoleEnabled(bool enabled) {
-    if (!logging_instance) {
-        return;
-    }
-    auto& backend = logging_instance->live_console_backend;
-    if (enabled) {
-        // Refcounted: the worker only starts on the first console window and keeps running until
-        // the last one closes, so closing a diagnostic console never stops the startup console.
-        if (backend.refcount.fetch_add(1) == 0) {
-            backend.Enable();
-        }
-    } else {
-        const auto current = backend.refcount.load(std::memory_order_relaxed);
-        if (current > 0 && backend.refcount.fetch_sub(1) == 1) {
-            backend.Disable();
-        }
-    }
-}
-
-bool IsLiveConsoleEnabled() {
-    return logging_instance && logging_instance->live_console_backend.enabled.load(std::memory_order_relaxed);
-}
-
-void SetLiveConsoleCapacity(std::size_t capacity) {
-    if (!logging_instance) {
-        return;
-    }
-    auto& backend = logging_instance->live_console_backend;
-    backend.capacity.store(capacity, std::memory_order_relaxed);
-    std::scoped_lock lock{backend.mutex};
-    while (backend.entries.size() > capacity) {
-        backend.entries.pop_front();
-        backend.dropped_buffer.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-std::vector<ConsoleEntry> ReadLiveConsole(u64 after, std::size_t max_entries) {
-    if (!logging_instance) {
-        return {};
-    }
-    return logging_instance->live_console_backend.Read(after, max_entries);
-}
-
-void ClearLiveConsole() {
-    if (logging_instance) {
-        logging_instance->live_console_backend.Clear();
-    }
-}
-
-ConsoleStats GetLiveConsoleStats() {
-    if (!logging_instance) {
-        return {};
-    }
-    return logging_instance->live_console_backend.Stats();
+    return std::nullopt;
 }
 
 std::string SanitizeLogMessage(std::string_view message) {
-    return SanitizeLogMessageImpl(message);
+    return MakePrintable(SanitizeLogMessageImpl(message, true));
 }
 
 } // namespace Common::Log

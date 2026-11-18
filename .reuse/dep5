@@ -194,3 +194,15 @@ License: GPL-3.0-or-later
 Comment: CPM.cmake has had additional modifications from crueter to better work with CPMUtil
          https://git.crueter.xyz/CMake/CPMUtil
          https://git.crueter.xyz/CMake/Modules
+
+Files: third_party_notices/Open-Frame-gen.txt
+Copyright: 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod
+License: MIT
+
+Files: third_party_notices/RIFE.txt
+Copyright: Megvii Inc.
+License: MIT
+
+Files: third_party_notices/Practical-RIFE.txt
+Copyright: 2021 hzwer
+License: MIT

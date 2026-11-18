@@ -184,6 +184,11 @@ jobs:
             exit 1
           fi
 
+      - name: Check Veshiru uses the Windows console subsystem
+        run: |
+          headers=$("$LLVM_ROOT/bin/llvm-readobj" --file-headers build/bin/veshiru.exe)
+          grep -F 'IMAGE_SUBSYSTEM_WINDOWS_CUI' <<< "$headers"
+
       - name: Run tests
         id: tests
         shell: bash

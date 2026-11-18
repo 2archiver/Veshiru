@@ -252,7 +252,18 @@ void OpenFrameGen::CreateResources(const Device& device) {
         m_frame_initialized[i] = false;
     }
 
-    m_flow_mask_image = CreateWrappedImage(m_allocator, {m_w4, m_h4}, VK_FORMAT_R16G16B16A16_SFLOAT);
+    m_flow_mask_image = m_allocator.CreateImage(VkImageCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+        .extent = {m_w4, m_h4, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    });
     m_flow_mask_view =
         CreateWrappedImageView(device, m_flow_mask_image, VK_FORMAT_R16G16B16A16_SFLOAT);
     m_flow_mask_initialized = false;
@@ -550,8 +561,8 @@ void OpenFrameGen::ReleaseWeightsUploadIfFree(Scheduler& scheduler) {
     }
 }
 
-void OpenFrameGen::Process(const Device&, Scheduler& scheduler, VkImage current_frame, VkImageView,
-                           u64 frame_count, bool capture_history, bool compute_flow) {
+void OpenFrameGen::Process(Scheduler& scheduler, VkImage current_frame, u64 frame_count,
+                           bool capture_history, bool compute_flow) {
     ReleaseWeightsUploadIfFree(scheduler);
 
     if (frame_count == 0) {
@@ -742,7 +753,8 @@ void OpenFrameGen::Process(const Device&, Scheduler& scheduler, VkImage current_
 }
 
 void OpenFrameGen::Generate(const Device& device, Scheduler& scheduler, VkImage destination,
-                            VkImageView destination_storage_view, float blend_factor) {
+                            VkImageView destination_storage_view, u64 allocation_id,
+                            float blend_factor) {
     ReleaseWeightsUploadIfFree(scheduler);
 
     if (!m_has_history || !m_flow_valid) {
@@ -750,11 +762,11 @@ void OpenFrameGen::Generate(const Device& device, Scheduler& scheduler, VkImage 
     }
 
     const u32 prev_slot = m_curr_slot ^ 1u;
+    const OpenFrameGenWarpKey key{allocation_id, prev_slot};
     VkDescriptorSet set = VK_NULL_HANDLE;
     for (size_t i = 0; i < m_warp_cache_count; ++i) {
         const auto& entry = m_warp_cache[i];
-        if (entry.prev_slot == prev_slot && entry.destination == destination &&
-            entry.destination_view == destination_storage_view) {
+        if (entry.key == key) {
             set = entry.set;
             break;
         }
@@ -763,12 +775,7 @@ void OpenFrameGen::Generate(const Device& device, Scheduler& scheduler, VkImage 
         bool cached = false;
         if (m_warp_cache_count < MaxCachedWarpSets) {
             set = m_warp_cached_sets[m_warp_cache_count];
-            m_warp_cache[m_warp_cache_count++] = CachedWarpSet{
-                .prev_slot = prev_slot,
-                .destination = destination,
-                .destination_view = destination_storage_view,
-                .set = set,
-            };
+            m_warp_cache[m_warp_cache_count++] = CachedWarpSet{key, set};
             cached = true;
         }
         if (!cached) {

@@ -24,10 +24,10 @@ void AssertFailSoftImpl();
 #endif
 
 #define ASSERT_MSG(_a_, ...)                                                                       \
-    ([&]() VESHIRU_NO_INLINE {                                                                       \
+    ([&]() VESHIRU_NO_INLINE {                                                                     \
         auto&& assert_condition = (_a_);                                                           \
-        if (!(assert_condition)) [[unlikely]] {                                                   \
-            LOG_CRITICAL(Debug, __FILE__ ": assert " __VA_ARGS__);                                \
+        if (!(assert_condition)) [[unlikely]] {                                                    \
+            LOG_CRITICAL(Debug, "assert " __VA_ARGS__);                                            \
             AssertFailSoftImpl();                                                                  \
         }                                                                                          \
     }())
@@ -35,7 +35,7 @@ void AssertFailSoftImpl();
 
 #define UNREACHABLE_MSG(...)                                                                       \
     do {                                                                                           \
-        LOG_CRITICAL(Debug, __FILE__ ": unreachable " __VA_ARGS__);                               \
+        LOG_CRITICAL(Debug, "unreachable " __VA_ARGS__);                                           \
         AssertFatalImpl();                                                                         \
     } while (0)
 #define UNREACHABLE() UNREACHABLE_MSG("")

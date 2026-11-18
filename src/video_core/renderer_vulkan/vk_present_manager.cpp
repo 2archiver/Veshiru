@@ -139,6 +139,24 @@ bool CanBlitToSwapchain(const vk::PhysicalDevice& physical_device, VkFormat form
     };
 }
 
+bool IsFrameReady(const Frame* frame) {
+    const auto status = frame->present_done.GetStatus();
+    if (status == VK_NOT_READY) {
+        return false;
+    }
+    vk::Check(status);
+    return true;
+}
+
+void ResetPresentation(Frame& frame) {
+    frame.color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    frame.present_spacing = {};
+    frame.game_frame_presents = 1;
+#ifdef EGLANTINE_STREAMLINE
+    frame.frame_gen = false;
+#endif
+}
+
 } // Anonymous namespace
 
 PresentManager::PresentManager(const vk::Instance& instance_,
@@ -198,8 +216,8 @@ PresentManager::PresentManager(const vk::Instance& instance_,
 }
 
 void PresentManager::StartPresentThread() {
-    use_present_thread = true;
     present_thread = std::jthread([this](std::stop_token token) { PresentThread(token); });
+    use_present_thread = true;
 }
 
 void PresentManager::LogPacing(const Frame* frame, std::chrono::steady_clock::duration took,
@@ -256,25 +274,39 @@ Frame* PresentManager::GetRenderFrame() {
     blocked_time.fetch_add((std::chrono::steady_clock::now() - waiting).count(),
                            std::memory_order_relaxed);
 
-    // Wait for the presentation to be finished so all frame resources are free
-    frame->present_done.Wait();
-    frame->present_done.Reset();
-    frame->color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    frame->present_spacing = {};
-    frame->game_frame_presents = 1;
-#ifdef EGLANTINE_STREAMLINE
-    frame->frame_gen = false;
-#endif
-
+    vk::Check(frame->present_done.Wait());
+    ResetPresentation(*frame);
     return frame;
 }
 
+Frame* PresentManager::TryGetRenderFrame() {
+    std::scoped_lock lock{free_mutex};
+    const auto ready = std::ranges::find_if(free_queue, IsFrameReady);
+    if (ready == free_queue.end()) {
+        return nullptr;
+    }
+    Frame* frame = *ready;
+    free_queue.erase(ready);
+    ResetPresentation(*frame);
+    return frame;
+}
+
+void PresentManager::RecycleUnsubmittedFrame(Frame* frame) {
+    // A partially rebuilt image may have an invalid view or framebuffer. Force recreation.
+    frame->width = 0;
+    std::scoped_lock lock{free_mutex};
+    free_queue.push_back(frame);
+    free_cv.notify_one();
+}
+
 void PresentManager::Present(Frame* frame) {
-    if (!use_present_thread && Settings::values.frame_gen.GetValue()) {
+    if (!use_present_thread &&
+        (frame->present_spacing.count() != 0 || Settings::values.frame_gen.GetValue())) {
         // Frame generation was turned on from the status bar while a game runs. Earlier frames
         // were presented here, so none are in flight.
         StartPresentThread();
     }
+    frame->present_done.Reset();
     if (use_present_thread) {
         scheduler.Record([this, frame](vk::CommandBuffer) {
             std::unique_lock lock{queue_mutex};
@@ -292,12 +324,12 @@ void PresentManager::Present(Frame* frame) {
 }
 
 size_t PresentManager::MaxExtraFrames() const {
-    return image_count - 1;
+    return frames.empty() ? 0 : frames.size() - 1;
 }
 
 size_t PresentManager::FreeFrames() {
     std::scoped_lock lock{free_mutex};
-    return free_queue.size();
+    return static_cast<size_t>(std::ranges::count_if(free_queue, IsFrameReady));
 }
 
 bool PresentManager::NeedsStorage(const Frame* frame, bool required) const {
@@ -317,6 +349,11 @@ void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height, VkFormat
                                    VkRenderPass rd, bool storage) {
     auto& dld = device.GetLogical();
 
+    // The checkout fence has completed. Tear down objects in dependency order.
+    frame->framebuffer = {};
+    frame->storage_view = {};
+    frame->image_view = {};
+    frame->image = {};
     frame->width = width;
     frame->height = height;
     frame->format = image_view_format;
@@ -377,7 +414,6 @@ void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height, VkFormat
             },
     });
 
-    frame->storage_view = vk::ImageView{};
     if (with_storage) {
         frame->storage_view = dld.CreateImageView({
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -416,6 +452,7 @@ void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height, VkFormat
         .height = height,
         .layers = 1,
     });
+    frame->allocation_id = next_allocation_id++;
 }
 
 void PresentManager::WaitPresent() {

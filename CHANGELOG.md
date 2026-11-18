@@ -6,6 +6,35 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+### Native Windows diagnostics
+
+- Replaced the Qt imitation terminal and logo with the standard Windows console. The Qt UI stays
+  available; shell redirects receive plain UTF-8. Added `--console`, `--no-console`, `--log-level`
+  and `--log-file`, bounded asynchronous logging, and orderly Ctrl+C/Ctrl+Break handling.
+- **Save Diagnostic Log…** replaces the export from the old console window. Logs retain build,
+  host and configured-renderer diagnostics and redact common host paths and credential fields.
+
+### Performance and frame generation
+
+- Shallow library discovery no longer enumerates irrelevant assets inside immediate game folders.
+  In the synthetic 110-title fixture, discovery median was **10.70–10.96 ms → 0.65–0.68 ms**,
+  with identical candidate and directory-watch counts. This is not startup or gameplay FPS evidence.
+- Open-Frame-Gen checks Vulkan device and image capabilities, pauses outside SDR, and falls back to
+  game frames after preparation failures. Optional extra frames don't wait for presentation fences.
+  Generated-frame telemetry reports queued work separately from game FPS; display pacing and input
+  latency still require a hardware pass. Packaged notices are included for the verified Nano weights.
+
+### Artwork and upgrading
+
+- Library discovery and startup no longer download artwork. Existing HD sidecars, custom artwork
+  and container icons remain usable offline; online lookup is disabled in standard builds pending
+  provider validation. No new API keys are saved to the profile.
+- Keep a profile backup before upgrading. No save or game-content migration is required by these
+  changes. To roll back, use the previous verified build and the unchanged profile (or its backup).
+  The previous build may resume its original artwork-network behavior and console UI.
+- [1.7 validation and release gate](docs/performance/1.7-validation.md): no version bump, merge, tag,
+  or published artifact until the supported Windows and matched performance checks pass.
+
 ## [1.6.0] - 2026-11-17
 
 ### Ryujinx-Inspired Startup Console

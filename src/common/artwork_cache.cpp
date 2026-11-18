@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <mutex>
 #include <set>
 #include <unordered_map>
 
@@ -18,6 +20,7 @@
 
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "common/scope_exit.h"
 #include "common/string_util.h"
 
 namespace Common::ArtworkCache {
@@ -643,23 +646,173 @@ int ScoreArtworkCandidate(std::string_view candidate, std::string_view target_qu
     return score;
 }
 
-bool IsValidImageBytes(std::span<const u8> bytes) noexcept {
-    if (bytes.size() < 64) {
+bool IsSafeArtworkTitle(std::string_view title) noexcept {
+    if (title.empty() || title.size() > 256 || title.find_first_of("/\\<>") != title.npos) {
         return false;
     }
-    // PNG signature + IHDR chunk header check
-    static constexpr std::array<u8, 8> png_sig{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
-    if (std::equal(png_sig.begin(), png_sig.end(), bytes.begin())) {
-        if (bytes[12] != 'I' || bytes[13] != 'H' || bytes[14] != 'D' || bytes[15] != 'R') {
+    if (title.find("\xE2\x80\xA8") != title.npos || title.find("\xE2\x80\xA9") != title.npos ||
+        title.find("\xE2\x80\xAE") != title.npos) {
+        return false;
+    }
+    return std::ranges::none_of(title, [](unsigned char c) { return c < 0x20 || c == 0x7F; });
+}
+
+namespace {
+constexpr std::size_t MaxIconSize = 2 * 1024 * 1024;
+constexpr std::size_t MaxMetaSize = 8 * 1024;
+constexpr std::uintmax_t CacheLimit = 128 * 1024 * 1024;
+constexpr std::size_t MaxEntries = 2048;
+std::mutex cache_write_mutex;
+
+template <typename Buffer>
+Buffer ReadSmallFile(const std::filesystem::path& path, std::size_t max_size) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path, ec))) {
+        return {};
+    }
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec || size == 0 || size > max_size) {
+        return {};
+    }
+    std::ifstream in(path, std::ios::binary);
+    Buffer data(static_cast<std::size_t>(size), 0);
+    if (!in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()))) {
+        return {};
+    }
+    return data;
+}
+
+nlohmann::json ReadMetadata(u64 base) {
+    const auto bytes = ReadSmallFile<std::string>(ArtworkMetaPath(base), MaxMetaSize);
+    struct InvalidDepth {};
+    try {
+        auto json = nlohmann::json::parse(
+            bytes,
+            [](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
+                if (depth > 8) {
+                    throw InvalidDepth{};
+                }
+                return true;
+            },
+            false);
+        if (json.is_object() && json.contains("title_id") &&
+            json["title_id"] == fmt::format("{:016X}", base) &&
+            (!json.contains("schema") || json["schema"] == 1)) {
+            return json;
+        }
+    } catch (const InvalidDepth&) {
+    }
+    return {};
+}
+
+bool Store(const std::filesystem::path& icon_path, std::span<const u8> png,
+           const std::filesystem::path& meta_path, const nlohmann::json& metadata) {
+    namespace fs = std::filesystem;
+    const auto text = metadata.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    if (text.size() > MaxMetaSize) {
+        return false;
+    }
+    std::error_code ec;
+    const auto directory = meta_path.parent_path();
+    fs::create_directories(directory, ec);
+    if (ec || !fs::is_directory(fs::symlink_status(directory, ec))) {
+        return false;
+    }
+
+    // Keep local data rather than evicting it behind the user's back. Refuse new writes when full.
+    std::uintmax_t total = png.size() + text.size();
+    std::size_t count = 0;
+    for (fs::directory_iterator it(directory, ec); !ec && it != fs::directory_iterator{};
+         it.increment(ec)) {
+        if (++count >= MaxEntries) {
             return false;
         }
-        const u32 width = ReadBigEndianU32(bytes.data() + 16);
-        const u32 height = ReadBigEndianU32(bytes.data() + 20);
-        return width >= 32 && height >= 32 && width <= 4096 && height <= 4096;
+        const auto status = it->symlink_status(ec);
+        if (ec) {
+            return false;
+        }
+        if (!fs::is_regular_file(status) || it->path() == meta_path || it->path() == icon_path) {
+            continue;
+        }
+        const auto size = it->file_size(ec);
+        if (ec || size > CacheLimit - total) {
+            return false;
+        }
+        total += size;
     }
-    // JPEG SOI + marker check
-    if (bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
-        return true;
+    if (ec) {
+        return false;
+    }
+
+    // Reserve a unique temporary directory atomically. A fixed .tmp filename races other
+    // sessions and can follow a pre-existing symlink. Never unlink the destination before rename.
+    static std::atomic<u64> sequence{};
+    fs::path temp;
+    bool created = false;
+    for (int i = 0; i < 8 && !created; ++i) {
+        temp = directory / fmt::format(".write-{}-{}",
+                                       std::chrono::steady_clock::now().time_since_epoch().count(),
+                                       sequence.fetch_add(1, std::memory_order_relaxed));
+        created = fs::create_directory(temp, ec);
+        if (ec) {
+            return false;
+        }
+    }
+    if (!created) {
+        return false;
+    }
+    SCOPE_EXIT {
+        fs::remove_all(temp, ec);
+    };
+    const auto write = [](const fs::path& path, std::string_view data) {
+        std::ofstream stream(path, std::ios::binary);
+        stream.write(data.data(), static_cast<std::streamsize>(data.size()));
+        stream.close();
+        return static_cast<bool>(stream);
+    };
+    const auto tmp_meta = temp / "title.json";
+    const auto tmp_icon = temp / "icon.png";
+    if (!write(tmp_meta, text) ||
+        !write(tmp_icon, {reinterpret_cast<const char*>(png.data()), png.size()})) {
+        return false;
+    }
+    fs::rename(tmp_icon, icon_path, ec);
+    if (ec) {
+        return false;
+    }
+    fs::rename(tmp_meta, meta_path, ec);
+    // The replaced PNG is still usable offline if replacing its metadata failed.
+    return true;
+}
+} // namespace
+
+bool IsValidImageBytes(std::span<const u8> bytes) noexcept {
+    constexpr std::array<u8, 8> png_sig{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    if (bytes.size() < 64 || bytes.size() > MaxIconSize ||
+        !std::equal(png_sig.begin(), png_sig.end(), bytes.begin())) {
+        return false;
+    }
+    const u32 width = ReadBigEndianU32(bytes.data() + 16);
+    const u32 height = ReadBigEndianU32(bytes.data() + 20);
+    if (ReadBigEndianU32(bytes.data() + 8) != 13 ||
+        std::string_view{reinterpret_cast<const char*>(bytes.data() + 12), 4} != "IHDR" ||
+        width < 32 || height < 32 || width > 512 || height > 512) {
+        return false;
+    }
+    // Reject truncated, oversized and non-PNG sidecars before passing them to a decoder.
+    bool image_data = false;
+    bytes = bytes.subspan(33);
+    while (bytes.size() >= 12) {
+        const auto size = ReadBigEndianU32(bytes.data());
+        const auto type = std::string_view{reinterpret_cast<const char*>(bytes.data() + 4), 4};
+        if (size > bytes.size() - 12) {
+            return false;
+        }
+        if (type == "IEND") {
+            return size == 0 && bytes.size() == 12 && image_data;
+        }
+        image_data |= type == "IDAT" && size != 0;
+        bytes = bytes.subspan(12 + size);
     }
     return false;
 }
@@ -677,121 +830,47 @@ std::filesystem::path ArtworkMetaPath(u64 title_id) {
 }
 
 std::vector<u8> ReadCachedArtwork(u64 title_id) {
-    const u64 base = BaseProgramId(title_id);
+    const auto base = BaseProgramId(title_id);
     if (base == 0) {
         return {};
     }
-    const auto path = ArtworkPngPath(base);
-    std::error_code ec;
-    const auto size = std::filesystem::file_size(path, ec);
-    if (ec || size < 64 || size > 16 * 1024 * 1024) {
-        return {};
+    auto bytes = ReadSmallFile<std::vector<u8>>(ArtworkPngPath(base), MaxIconSize);
+    if (!IsValidImageBytes(bytes)) {
+        bytes.clear();
     }
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        return {};
-    }
-    std::vector<u8> data(static_cast<std::size_t>(size));
-    in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
-    if (in.gcount() != static_cast<std::streamsize>(data.size()) || !IsValidImageBytes(data)) {
-        return {};
-    }
-    return data;
+    return bytes;
 }
 
 std::string ReadSidecarTitle(u64 title_id) {
-    const u64 base = BaseProgramId(title_id);
+    const auto base = BaseProgramId(title_id);
     if (base == 0) {
         return {};
     }
-    const auto meta_path = ArtworkMetaPath(base);
-    std::error_code ec;
-    if (std::filesystem::is_regular_file(meta_path, ec)) {
-        std::ifstream in(meta_path, std::ios::binary);
-        if (in) {
-            const auto json = nlohmann::json::parse(in, nullptr, false);
-            if (!json.is_discarded() && json.is_object() && json.contains("resolved_title") &&
-                json["resolved_title"].is_string()) {
-                const auto resolved = json["resolved_title"].get<std::string>();
-                if (!resolved.empty()) {
-                    return resolved;
-                }
-            }
+    const auto json = ReadMetadata(base);
+    if (json.is_object() && json.contains("status") && json["status"] == "ok" &&
+        json.contains("resolved_title") && json["resolved_title"].is_string()) {
+        const auto& resolved = json["resolved_title"].get_ref<const std::string&>();
+        if (IsSafeArtworkTitle(resolved)) {
+            return resolved;
         }
     }
-    if (const auto exact = LookupTitleByProgramId(base); !exact.empty()) {
-        return std::string{exact};
-    }
-    return {};
+    return std::string{LookupTitleByProgramId(base)};
 }
 
 bool WriteCachedArtwork(u64 title_id, std::span<const u8> png_bytes,
                         std::string_view resolved_title, std::string_view source) {
-    const u64 base = BaseProgramId(title_id);
-    if (base == 0 || !IsValidImageBytes(png_bytes)) {
+    const auto base = BaseProgramId(title_id);
+    if (base == 0 || !IsValidImageBytes(png_bytes) || source.size() > 64 ||
+        (!resolved_title.empty() && !IsSafeArtworkTitle(resolved_title))) {
         return false;
     }
-    std::error_code ec;
-    const auto dir = ArtworkDirectory();
-    std::filesystem::create_directories(dir, ec);
-    if (ec) {
-        LOG_WARNING(Frontend, "Could not create artwork cache directory: {}", ec.message());
-        return false;
-    }
-
-    const auto png_path = ArtworkPngPath(base);
-    const auto tmp_png = dir / fmt::format("{:016X}.png.tmp", base);
-    {
-        std::ofstream out(tmp_png, std::ios::binary | std::ios::trunc);
-        if (!out) {
-            return false;
-        }
-        out.write(reinterpret_cast<const char*>(png_bytes.data()),
-                  static_cast<std::streamsize>(png_bytes.size()));
-        out.flush();
-        if (!out) {
-            std::filesystem::remove(tmp_png, ec);
-            return false;
-        }
-    }
-    std::filesystem::rename(tmp_png, png_path, ec);
-    if (ec) {
-        std::filesystem::remove(png_path, ec);
-        ec.clear();
-        std::filesystem::rename(tmp_png, png_path, ec);
-        if (ec) {
-            std::filesystem::remove(tmp_png, ec);
-            return false;
-        }
-    }
-
     const nlohmann::json meta{
-        {"title_id", fmt::format("{:016X}", base)},
-        {"status", "ok"},
-        {"resolved_title", resolved_title},
-        {"source", source},
-        {"fetched_at_unix", CurrentUnixSeconds()},
+        {"schema", 1},      {"title_id", fmt::format("{:016X}", base)},
+        {"status", "ok"},   {"resolved_title", resolved_title},
+        {"source", source}, {"fetched_at_unix", CurrentUnixSeconds()},
     };
-    const auto meta_path = ArtworkMetaPath(base);
-    const auto tmp_meta = dir / fmt::format("{:016X}.json.tmp", base);
-    {
-        std::ofstream out(tmp_meta, std::ios::binary | std::ios::trunc);
-        if (out) {
-            out << meta.dump(2) << '\n';
-            out.flush();
-        }
-        const bool written = static_cast<bool>(out);
-        out.close();
-        if (written && out) {
-            std::filesystem::rename(tmp_meta, meta_path, ec);
-            if (ec) {
-                std::filesystem::remove(meta_path, ec);
-                ec.clear();
-                std::filesystem::rename(tmp_meta, meta_path, ec);
-            }
-        }
-    }
-    return true;
+    const std::scoped_lock lock{cache_write_mutex};
+    return Store(ArtworkPngPath(base), png_bytes, ArtworkMetaPath(base), meta);
 }
 
 void ClearCachedArtwork(u64 title_id) {
@@ -800,76 +879,10 @@ void ClearCachedArtwork(u64 title_id) {
         return;
     }
     std::error_code ec;
+    const std::scoped_lock lock{cache_write_mutex};
     std::filesystem::remove(ArtworkPngPath(base), ec);
     ec.clear();
     std::filesystem::remove(ArtworkMetaPath(base), ec);
-}
-
-void RecordArtworkFailure(u64 title_id, std::string_view reason, u64 cooldown_seconds) {
-    const u64 base = BaseProgramId(title_id);
-    if (base == 0 || !ReadCachedArtwork(base).empty()) {
-        return;
-    }
-    std::error_code ec;
-    const auto dir = ArtworkDirectory();
-    std::filesystem::create_directories(dir, ec);
-    if (ec) {
-        return;
-    }
-    const u64 now = CurrentUnixSeconds();
-    const nlohmann::json meta{
-        {"title_id", fmt::format("{:016X}", base)},
-        {"status", "failed"},
-        {"error", reason},
-        {"failed_at_unix", now},
-        {"retry_after_unix", now + cooldown_seconds},
-    };
-    const auto meta_path = ArtworkMetaPath(base);
-    const auto tmp_meta = dir / fmt::format("{:016X}.json.tmp", base);
-    std::ofstream out(tmp_meta, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return;
-    }
-    out << meta.dump(2) << '\n';
-    out.flush();
-    const bool written = static_cast<bool>(out);
-    out.close();
-    if (written && out) {
-        std::filesystem::rename(tmp_meta, meta_path, ec);
-        if (ec) {
-            std::filesystem::remove(meta_path, ec);
-            ec.clear();
-            std::filesystem::rename(tmp_meta, meta_path, ec);
-        }
-    }
-}
-
-bool ShouldAutoFetchArtwork(u64 title_id, u64 now_unix_seconds) {
-    const u64 base = BaseProgramId(title_id);
-    if (base == 0) {
-        return false;
-    }
-    if (!ReadCachedArtwork(base).empty()) {
-        return false;
-    }
-    const auto meta_path = ArtworkMetaPath(base);
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(meta_path, ec)) {
-        return true;
-    }
-    std::ifstream in(meta_path, std::ios::binary);
-    if (!in) {
-        return true;
-    }
-    const auto json = nlohmann::json::parse(in, nullptr, false);
-    if (json.is_discarded() || !json.is_object()) {
-        return true;
-    }
-    if (json.contains("retry_after_unix") && json["retry_after_unix"].is_number_unsigned()) {
-        const u64 now = now_unix_seconds != 0 ? now_unix_seconds : CurrentUnixSeconds();
-        return now >= json["retry_after_unix"].get<u64>();
-    }
-    return true;
 }
 
 } // namespace Common::ArtworkCache

@@ -322,9 +322,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, bg_blue, QString(), QString());
 
     INSERT(Settings, frame_gen, tr("Enable Frame Generation"),
-           tr("Paused while HDR output is active."));
+           tr("Generated frames can add input latency and visual artifacts. They do not speed up "
+              "the game. Open-Frame-Gen pauses during HDR output."));
     INSERT(Settings, frame_gen_type, tr("Frame Generation Type"),
-           tr("Optical Flow Interpolation is built in and runs on any GPU.\nOpen-Frame-Gen "
+           tr("Optical Flow Interpolation is built in and needs a supported Vulkan "
+              "device.\nOpen-Frame-Gen "
               "NanoModel (Experimental) runs an in-process 89.9K-parameter neural optical-flow "
               "and occlusion network directly on Vulkan compute without external DLLs.\nNVIDIA "
               "DLSS Frame Generation (Windows only) needs a GeForce RTX 40 series or newer GPU "

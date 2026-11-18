@@ -172,6 +172,9 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
                 break;
             }
         } else {
+            if (optind >= argc) {
+                break;
+            }
             // only kept due to shortcuts made by Qt frontend which use "-qlaunch"
             if (strcmp(argv[optind], "-hlaunch") == 0) {
                 p.launch_hlaunch = true;

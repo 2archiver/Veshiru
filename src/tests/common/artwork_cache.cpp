@@ -2,38 +2,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <array>
+#include <chrono>
 #include <filesystem>
-#include <random>
+#include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include "common/artwork_cache.h"
 #include "common/fs/path_util.h"
+#include "common/scope_exit.h"
 
 namespace {
-std::vector<u8> MakeValidMinimalPngHeader(u32 width = 512, u32 height = 512) {
-    std::vector<u8> bytes(72, 0);
-    // PNG signature
-    const std::array<u8, 8> sig{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
-    std::copy(sig.begin(), sig.end(), bytes.begin());
-    // IHDR length (13) + "IHDR"
-    bytes[11] = 13;
-    bytes[12] = 'I';
-    bytes[13] = 'H';
-    bytes[14] = 'D';
-    bytes[15] = 'R';
-    bytes[16] = static_cast<u8>((width >> 24) & 0xFF);
-    bytes[17] = static_cast<u8>((width >> 16) & 0xFF);
-    bytes[18] = static_cast<u8>((width >> 8) & 0xFF);
-    bytes[19] = static_cast<u8>(width & 0xFF);
-    bytes[20] = static_cast<u8>((height >> 24) & 0xFF);
-    bytes[21] = static_cast<u8>((height >> 16) & 0xFF);
-    bytes[22] = static_cast<u8>((height >> 8) & 0xFF);
-    bytes[23] = static_cast<u8>(height & 0xFF);
-    return bytes;
-}
+// A generated 32x32 black PNG, no external artwork.
+constexpr std::array<u8, 75> test_png{
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+    0x52, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x20, 0x08, 0x00, 0x00, 0x00, 0x00, 0x56,
+    0x11, 0x25, 0x28, 0x00, 0x00, 0x00, 0x12, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x60,
+    0x18, 0x05, 0xa3, 0x60, 0x14, 0x8c, 0x02, 0xec, 0x00, 0x00, 0x04, 0x20, 0x00, 0x01, 0x86,
+    0xb3, 0x3d, 0x44, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
 } // namespace
 
 TEST_CASE("Artwork lookup prioritizes exact Program ID and cleans dump filenames",
@@ -195,37 +184,52 @@ TEST_CASE("Artwork subtitle extraction and Libretro No-Intro name variants", "[a
     CHECK(mkw_variants[0] == "Mario Kart World");
 }
 
-TEST_CASE("Sidecar artwork cache stores validated PNGs, clears cleanly, and enforces cooldown",
+TEST_CASE("Artwork sidecars replace atomically and reject corrupt or mis-keyed data",
           "[artwork_cache]") {
     using namespace Common::ArtworkCache;
-    constexpr u64 test_tid = 0x0400BEEF12340000ULL;
-    ClearCachedArtwork(test_tid);
+    using namespace Common::FS;
+    const auto original_cache = GetEdenPath(EdenPath::CacheDir);
+    const auto parent =
+        std::filesystem::temp_directory_path() /
+        ("veshiru-artwork-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    REQUIRE(std::filesystem::create_directory(parent));
+    SetEdenPath(EdenPath::CacheDir, parent);
+    SCOPE_EXIT {
+        SetEdenPath(EdenPath::CacheDir, original_cache);
+        std::error_code ec;
+        std::filesystem::remove_all(parent, ec);
+    };
 
-    CHECK(ShouldAutoFetchArtwork(test_tid, 1000));
+    constexpr u64 title = 0x0400BEEF12340000ULL;
+    CHECK_FALSE(IsSafeArtworkTitle("/home/test/game.nsp"));
+    CHECK_FALSE(IsSafeArtworkTitle("<img src=x>"));
+    CHECK_FALSE(IsValidImageBytes(std::span{test_png}.first(40)));
+    auto huge = test_png;
+    huge[17] = 1;
+    CHECK_FALSE(IsValidImageBytes(huge));
+    REQUIRE(IsValidImageBytes(test_png));
+    REQUIRE(WriteCachedArtwork(title, test_png, "First local title", "unit_test"));
+    CHECK(ReadCachedArtwork(title) == std::vector<u8>(test_png.begin(), test_png.end()));
+    CHECK(ReadSidecarTitle(title) == "First local title");
 
-    // Reject truncated/non-image payloads
-    const std::array<u8, 12> garbage{'n', 'o', 't', '-', 'a', '-', 'p', 'n', 'g', 0, 1, 2};
-    CHECK_FALSE(IsValidImageBytes(garbage));
-    CHECK_FALSE(WriteCachedArtwork(test_tid, garbage, "Test Game", "unit_test"));
+    // A rejected replacement leaves old artwork and sidecar intact.
+    CHECK_FALSE(WriteCachedArtwork(title, huge, "Wrong", "unit_test"));
+    CHECK(ReadSidecarTitle(title) == "First local title");
+    CHECK(WriteCachedArtwork(title, test_png, "New local title", "unit_test"));
+    CHECK(ReadSidecarTitle(title) == "New local title");
+    std::ofstream{ArtworkMetaPath(title)}
+        << R"({"schema":1,"title_id":"0000000000000000","status":"ok","resolved_title":"Wrong title"})";
+    CHECK(ReadSidecarTitle(title).empty());
+    std::ofstream{ArtworkMetaPath(title)} << std::string(10'000, ' ');
+    CHECK(ReadSidecarTitle(title).empty());
 
-    // Record failure cooldown and verify auto-fetch backs off until retry_after
-    RecordArtworkFailure(test_tid, "HTTP 503", 600);
-    CHECK_FALSE(ShouldAutoFetchArtwork(test_tid, 0));
-
-    // Clearing cached artwork removes failure cooldown immediately
-    ClearCachedArtwork(test_tid);
-    CHECK(ShouldAutoFetchArtwork(test_tid, 0));
-
-    // Valid HD PNG succeeds and populates sidecar metadata
-    const auto png = MakeValidMinimalPngHeader(512, 512);
-    REQUIRE(IsValidImageBytes(png));
-    REQUIRE(WriteCachedArtwork(test_tid, png, "Donkey Kong Bananza", "switchiconshowdown"));
-    CHECK(ReadCachedArtwork(test_tid) == png);
-    CHECK(ReadSidecarTitle(test_tid) == "Donkey Kong Bananza");
-    CHECK_FALSE(ShouldAutoFetchArtwork(test_tid, 9999999999ULL));
-
-    // Clearing cached artwork removes both the cached PNG and sidecar metadata
-    ClearCachedArtwork(test_tid);
-    CHECK(ReadCachedArtwork(test_tid).empty());
-    CHECK(ReadSidecarTitle(test_tid).empty());
+    // A full cache is read-only; do not discard old artwork or create temporary files.
+    const auto fill = ArtworkDirectory() / "fill";
+    std::ofstream{fill}.close();
+    std::filesystem::resize_file(fill, 128 * 1024 * 1024);
+    CHECK_FALSE(WriteCachedArtwork(title, test_png, "Over quota", "unit_test"));
+    CHECK(ReadCachedArtwork(title) == std::vector<u8>(test_png.begin(), test_png.end()));
+    ClearCachedArtwork(title);
+    CHECK(ReadCachedArtwork(title).empty());
 }

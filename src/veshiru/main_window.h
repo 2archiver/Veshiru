@@ -177,7 +177,8 @@ class MainWindow : public QMainWindow {
 public:
     void filterBarSetChecked(bool state);
     void UpdateUITheme();
-    explicit MainWindow(bool has_broken_vulkan);
+    explicit MainWindow(const QStringList& launch_arguments);
+    void RequestConsoleShutdown();
     ~MainWindow() override;
 
     bool DropAction(QDropEvent* event);
@@ -412,6 +413,7 @@ private slots:
     void OnOpenSDMCFolder();
     void OnOpenModFolder();
     void OnOpenLogFolder();
+    void OnSaveDiagnosticLog();
     void OnVerifyInstalledContents();
     void OnInstallFirmware();
     void OnInstallFirmwareFromZIP();

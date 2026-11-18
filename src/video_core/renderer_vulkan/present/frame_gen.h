@@ -21,6 +21,7 @@ namespace Vulkan {
 
 class Device;
 class Scheduler;
+class PresentManager;
 struct Frame;
 
 class FrameGen {
@@ -28,14 +29,12 @@ public:
     explicit FrameGen(MemoryAllocator& memory_allocator, Scheduler& scheduler);
     ~FrameGen();
 
-    void Process(const Device& device, Frame* frame, VkFormat format, VkExtent2D guest_extent);
+    void Process(const Device& device, PresentManager& present, Frame* frame,
+                 VkExtent2D guest_extent);
 
-    /// free_frames: present frames currently free without blocking (PresentManager::FreeFrames).
-    /// blocked: the time the renderer waited for the present thread since the last call.
-    [[nodiscard]] size_t WantedGenerations(size_t capacity, size_t free_frames,
-                                           std::chrono::steady_clock::duration blocked = {});
-
-    [[nodiscard]] size_t GeneratedFrameCount() const;
+    [[nodiscard]] size_t PlannedGenerations() const;
+    void CompleteFrame(size_t queued_generations);
+    void ResourceFailed(VkFormat format);
 
     /// The measured time between real frames in seconds, or 0 while it is unknown.
     [[nodiscard]] f32 FrameInterval() const {
@@ -50,12 +49,21 @@ public:
     }
 
 private:
-    void Rebuild(const Device& device, VkExtent2D extent, VkFormat format, f32 flow_scale,
-                 Settings::FrameGenType type);
+    struct Config {
+        u32 width;
+        u32 height;
+        VkFormat format;
+        f32 scale;
+        Settings::FrameGenType type;
+        bool operator==(const Config&) const = default;
+    };
+    void ResetHistory();
+    void Rebuild(const Device& device, const Config& config);
+    void PlanGenerations(PresentManager& present);
     /// Updates the status bar state and logs each change with its reason.
     void SetState(VideoCore::FrameGenState new_state, VkFormat format);
     /// Logs every 10 s how many frames were generated, when that changes.
-    void LogActivity();
+    void LogActivity(size_t queued_generations);
     void DumpDebugImages(u64 count);
 
     MemoryAllocator& memory_allocator;
@@ -68,16 +76,14 @@ private:
     FrameGenPacer pacer;
     FrameGenPlan plan{};
     VkExtent2D peak_guest_extent{};
-    VkExtent2D built_extent{};
-    VkFormat built_format{VK_FORMAT_UNDEFINED};
-    Settings::FrameGenType built_type{};
-    f32 built_flow_scale{};
+    std::optional<Config> current_config;
+    std::optional<Config> blocked_config;
+    VideoCore::FrameGenState blocked_state{};
     u64 frame_count{};
     u64 last_count{};
     size_t last_generations{};
     u32 warm_streak{};
     bool generated{};
-    bool unavailable{};
     bool dumped{};
     std::atomic<VideoCore::FrameGenState> state{VideoCore::FrameGenState::Pending};
     std::atomic<u64> generated_frames{};
