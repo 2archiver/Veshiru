@@ -98,7 +98,7 @@ TEST_CASE("Async logger drains both files and keeps the explicit level across co
     } cleanup{dir, old_log_dir};
     SetEdenPath(EdenPath::LogDir, dir);
     const auto extra = dir / fs::path{u8"boot-\u00E9.log"};
-    std::ofstream{extra} << "previous session\n";
+    std::ofstream{extra, std::ios::binary} << "previous session\n";
     REQUIRE(Initialize({.asynchronous = true, .fixed_level = Level::Info, .extra_file = extra}));
     SetGlobalFilter(Filter{Level::Critical});
     LOG_DEBUG(Frontend, "debug record should not appear");
