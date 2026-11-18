@@ -44,10 +44,13 @@ namespace Common::ArtworkCache {
 /// soundtracks, wrong editions, wrong series entries, and sequel number mismatches.
 [[nodiscard]] int ScoreArtworkCandidate(std::string_view candidate, std::string_view target_query);
 
-/// Checks that raw image bytes carry a valid PNG (with sane IHDR dimensions) or JPEG header.
+/// Validates a display/search title without accepting paths, markup or control characters.
+[[nodiscard]] bool IsSafeArtworkTitle(std::string_view title) noexcept;
+
+/// Checks the size, dimensions and chunk bounds of a cached PNG (not a full decode).
 [[nodiscard]] bool IsValidImageBytes(std::span<const u8> bytes) noexcept;
 
-/// Sidecar paths inside <CacheDir>/artwork/ (never modifies .nup or ROM containers on disk).
+/// Sidecar paths inside <CacheDir>/artwork/ (never modify game containers).
 [[nodiscard]] std::filesystem::path ArtworkDirectory();
 [[nodiscard]] std::filesystem::path ArtworkPngPath(u64 title_id);
 [[nodiscard]] std::filesystem::path ArtworkMetaPath(u64 title_id);
@@ -58,17 +61,11 @@ namespace Common::ArtworkCache {
 /// Reads the resolved canonical title from the sidecar JSON (or exact Program ID table), if any.
 [[nodiscard]] std::string ReadSidecarTitle(u64 title_id);
 
-/// Atomically stores validated PNG artwork + JSON metadata in <CacheDir>/artwork/.
+/// Replaces a validated PNG by rename. JSON metadata is stored separately and is best effort.
 bool WriteCachedArtwork(u64 title_id, std::span<const u8> png_bytes,
                         std::string_view resolved_title, std::string_view source);
 
-/// Removes cached artwork PNG and sidecar JSON metadata (including failure cooldowns) for a title.
+/// Removes a title's cached PNG and sidecar JSON.
 void ClearCachedArtwork(u64 title_id);
-
-/// Records a failed lookup with a retry cooldown so offline/unknown titles do not spam requests.
-void RecordArtworkFailure(u64 title_id, std::string_view reason, u64 cooldown_seconds = 3600);
-
-/// Returns true when no valid cached icon exists and any previous failure cooldown has elapsed.
-[[nodiscard]] bool ShouldAutoFetchArtwork(u64 title_id, u64 now_unix_seconds = 0);
 
 } // namespace Common::ArtworkCache

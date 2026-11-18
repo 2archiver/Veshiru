@@ -484,6 +484,16 @@ if (NOT MSVC AND (APPLE OR NOT VESHIRU_STATIC_BUILD))
 endif()
 
 # Remember that the linker is incredibly stupid.
+if (VESHIRU_EXPERIMENTAL_ONLINE_ARTWORK)
+    target_sources(veshiru PRIVATE
+        util/artwork_http.cpp
+        util/artwork_http.h
+        util/steamgriddb_provider.cpp
+        util/steamgriddb_provider.h
+    )
+    target_compile_definitions(veshiru PRIVATE VESHIRU_EXPERIMENTAL_ONLINE_ARTWORK)
+endif()
+
 target_link_libraries(veshiru PRIVATE OpenSSL::SSL OpenSSL::Crypto SDL3::SDL3)
 
 # NX archive conversion and editing (nx_tools.cpp) runs nxformat in the process, linked statically.
