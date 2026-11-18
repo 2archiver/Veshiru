@@ -29,6 +29,7 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/rasterizer_interface.h"
@@ -111,6 +112,16 @@ struct GpuSplitTestAccess {
     static bool ShareWriteSlot(DAddr a, DAddr b) {
         return GpuSplit::WriteSlot(a >> GpuSplit::WriteGranuleBits) ==
                GpuSplit::WriteSlot(b >> GpuSplit::WriteGranuleBits);
+    }
+
+    static void RunBack(GpuSplit& split) {
+        GpuSplit::on_back_thread = true;
+        u64 position = split.consumed.load();
+        while (position < split.write_position) {
+            position = Execute(split, position, split.write_position);
+        }
+        split.consumed.store(position);
+        GpuSplit::on_back_thread = false;
     }
 };
 
