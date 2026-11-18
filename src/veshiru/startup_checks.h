@@ -1,23 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-FileCopyrightText: Copyright 2026 Veshiru Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <sys/types.h>
-#endif
+inline constexpr char VulkanProbeArgument[] = "--internal-vulkan-probe";
 
-constexpr char IS_CHILD_ENV_VAR[] = "VESHIRU_IS_CHILD";
-constexpr char STARTUP_CHECK_ENV_VAR[] = "VESHIRU_DO_STARTUP_CHECKS";
-constexpr char ENV_VAR_ENABLED_TEXT[] = "ON";
-
-void CheckVulkan();
-bool CheckEnvVars(bool* is_child);
-bool StartupChecks(const char* arg0, bool* has_broken_vulkan, bool perform_vulkan_check);
-
-#ifdef _WIN32
-bool SpawnChild(const char* arg0, PROCESS_INFORMATION* pi, int flags);
-#else
-pid_t SpawnChild(const char* arg0);
-#endif
+/// Run in an isolated child, without touching config or session logs.
+[[nodiscard]] bool ProbeVulkan();
+/// Spawn and check the child. False means the frontend should offer a fallback renderer.
+[[nodiscard]] bool CheckVulkanInChild(const char* executable);

@@ -13,9 +13,6 @@
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
-#ifdef _WIN32
-#include "common/windows/crash_handler.h"
-#endif
 #include "common/scm_rev.h"
 #include "common/cpu_features.h"
 #include "core/memory.h"
@@ -26,7 +23,6 @@
 #include "common/settings_enums.h"
 #include "core/frontend/emu_window.h"
 #include "qt_common/util/meta.h"
-#include "qt_common/util/vk.h"
 
 #include <QFile>
 
@@ -149,35 +145,6 @@ const QString tr(const std::string& str) {
     return rootObject->tr(str.c_str());
 }
 
-static void LogRuntimes() {
-#ifdef _MSC_VER
-    // It is possible that the name of the dll will change.
-    // vcruntime140.dll is for 2015 and onwards
-    static constexpr char runtime_dll_name[] = "vcruntime140.dll";
-    UINT sz = GetFileVersionInfoSizeA(runtime_dll_name, nullptr);
-    bool runtime_version_inspection_worked = false;
-    if (sz > 0) {
-        std::vector<u8> buf(sz);
-        if (GetFileVersionInfoA(runtime_dll_name, 0, sz, buf.data())) {
-            VS_FIXEDFILEINFO* pvi;
-            sz = sizeof(VS_FIXEDFILEINFO);
-            if (VerQueryValueA(buf.data(), "\\", reinterpret_cast<LPVOID*>(&pvi), &sz)) {
-                if (pvi->dwSignature == VS_FFI_SIGNATURE) {
-                    runtime_version_inspection_worked = true;
-                    LOG_INFO(Frontend, "MSVC Compiler: {} Runtime: {}.{}.{}.{}", _MSC_VER,
-                             pvi->dwProductVersionMS >> 16, pvi->dwProductVersionMS & 0xFFFF,
-                             pvi->dwProductVersionLS >> 16, pvi->dwProductVersionLS & 0xFFFF);
-                }
-            }
-        }
-    }
-    if (!runtime_version_inspection_worked) {
-        LOG_INFO(Frontend, "Unable to inspect {}", runtime_dll_name);
-    }
-#endif
-    LOG_INFO(Frontend, "Qt Compile: {} Runtime: {}", QT_VERSION_STR, qVersion());
-}
-
 static QString PrettyProductName() {
 #ifdef _WIN32
     // After Windows 10 Version 2004, Microsoft decided to switch to a different notation: 20H2
@@ -216,6 +183,20 @@ static void RemoveCachedContents() {
     Common::FS::RemoveDirRecursively(offline_system_data);
 }
 
+void LogStartupInfo() {
+    LOG_INFO(Frontend, "Veshiru Version: {} | Commit: {} | Built: {} | {} | Qt {}",
+             Common::g_build_version, Common::g_scm_rev, Common::g_build_date,
+             Common::g_compiler_id, qVersion());
+#ifdef ARCHITECTURE_x86_64
+    const std::string_view cpu = Common::g_cpu_caps.cpu_string;
+#else
+    const auto cpu = QSysInfo::currentCpuArchitecture().toStdString();
+#endif
+    LOG_INFO(Frontend, "Host: {} | {} ({} threads) | {:.1f} GiB RAM",
+             PrettyProductName().toStdString(), cpu, std::thread::hardware_concurrency(),
+             Common::GetMemInfo().TotalPhysicalMemory / f64{1_GiB});
+}
+
 void Init(QWidget* root) {
     rootObject = root;
 
@@ -223,84 +204,16 @@ void Init(QWidget* root) {
     vfs = std::make_unique<FileSys::RealVfsFilesystem>();
     provider = std::make_unique<FileSys::ManualContentProvider>();
 
-    // initialization stuff
     Common::FS::CreateEdenPaths();
-
     system->Initialize();
-
-    Common::Log::Initialize();
-    Common::Log::Start();
-
-    // Start the live-console backend immediately, before the first startup logs below. This lets
-    // the Ryujinx-style startup console (and the on-demand console window) capture the whole boot
-    // sequence. The backend is refcounted: it starts here and keeps running while any console
-    // window is open.
-    Common::Log::SetLiveConsoleCapacity(10000);
-    Common::Log::SetLiveConsoleEnabled(true);
-#ifdef _WIN32
-    Common::Windows::InstallCrashHandler(Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir));
-#endif
-
     Network::Init();
-
     QtCommon::Meta::RegisterMetaTypes();
 
-    // build version
-    const auto branch_name = std::string(Common::g_scm_branch);
-    const auto description = std::string(Common::g_scm_desc);
-    const auto build_id = std::string(Common::g_build_id);
-
-    const auto veshiru_build =
-        Common::g_is_dev_build
-            ? fmt::format("Veshiru Development Build | {}-{}", branch_name, description)
-            : fmt::format("Veshiru {}", Common::g_build_version);
-    const auto override_build =
-        fmt::format(fmt::runtime(std::string(Common::g_title_bar_format_idle)), build_id);
-    const auto veshiru_build_version = override_build.empty() ? veshiru_build : override_build;
-    const auto processor_count = std::thread::hardware_concurrency();
-
-    // info logging
-    LOG_INFO(Frontend, "Veshiru Version: {}", veshiru_build_version);
-    LOG_INFO(Frontend, "Veshiru Commit: {} | Built: {} | Compiler: {}", Common::g_scm_rev,
-             Common::g_build_date, Common::g_compiler_id);
-    LogRuntimes();
-#ifdef ARCHITECTURE_x86_64
-    const auto& caps = Common::g_cpu_caps;
-    std::string cpu_string = caps.cpu_string;
-    if (caps.avx || caps.avx2 || caps.avx512f) {
-        cpu_string += " | AVX";
-        if (caps.avx512f) {
-            cpu_string += "512";
-        } else if (caps.avx2) {
-            cpu_string += '2';
-        }
-        if (caps.fma) {
-            cpu_string += " | FMA";
-        }
-    }
-    LOG_INFO(Frontend, "Host CPU: {}", cpu_string);
-    if (std::optional<int> processor_core = Common::GetProcessorCount()) {
-        LOG_INFO(Frontend, "Host CPU Cores: {}", *processor_core);
-    }
-#endif
-    LOG_INFO(Frontend, "Host CPU Threads: {}", processor_count);
-    LOG_INFO(Frontend, "Host OS: {}", PrettyProductName().toStdString());
-    LOG_INFO(Frontend, "Host RAM: {:.2f} GiB",
-             Common::GetMemInfo().TotalPhysicalMemory / f64{1_GiB});
-    LOG_INFO(Frontend, "Host Swap: {:.2f} GiB", Common::GetMemInfo().TotalSwapMemory / f64{1_GiB});
-    {
-        std::vector<VkDeviceInfo::Record> vk_records;
-        VkDeviceInfo::PopulateRecords(vk_records, nullptr);
-        for (std::size_t i = 0; i < vk_records.size(); ++i) {
-            LOG_INFO(Frontend, "Vulkan Device [{}]: {} ({} MiB VRAM)", i, vk_records[i].name,
-                     vk_records[i].device_local_memory / (1024 * 1024));
-        }
-    }
 #ifdef _WIN32
-    LOG_INFO(Frontend, "Host Timer Resolution: {:.4f} ms",
-             std::chrono::duration_cast<std::chrono::duration<f64, std::milli>>(
-                 Common::Windows::SetCurrentTimerResolutionToMaximum())
-                 .count());
+    LOG_DEBUG(Frontend, "Host timer resolution: {:.4f} ms",
+              std::chrono::duration_cast<std::chrono::duration<f64, std::milli>>(
+                  Common::Windows::SetCurrentTimerResolutionToMaximum())
+                  .count());
     QtCommon::system->CoreTiming().SetTimerResolutionNs(
         Common::Windows::GetCurrentTimerResolution());
 #endif

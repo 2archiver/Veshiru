@@ -25,10 +25,10 @@ add_executable(veshiru
     aboutdialog.ui
     compatibility_report.cpp
     compatibility_report.h
-    console_window.cpp
-    console_window.h
-    startup_console.cpp
-    startup_console.h
+    diagnostics_options.cpp
+    diagnostics_options.h
+    native_console.cpp
+    native_console.h
     applets/qt_amiibo_settings.cpp
     applets/qt_amiibo_settings.h
     applets/qt_amiibo_settings.ui
@@ -164,8 +164,6 @@ add_executable(veshiru
     configuration/input_profiles.h
     configuration/shared_widget.cpp
     configuration/shared_widget.h
-    debugger/console.cpp
-    debugger/console.h
     debugger/controller.cpp
     debugger/controller.h
 
@@ -401,13 +399,14 @@ if (APPLE)
         XCODE_FILE_ATTRIBUTES "CodeSignOnCopy")
     target_sources(veshiru PRIVATE ${MOLTENVK_LIBRARY})
 elseif(WIN32)
-    # compile as a win32 gui application instead of a console application
-    target_link_libraries(veshiru PRIVATE Qt6::EntryPointPrivate)
+    # The Qt UI uses main(), but the OS owns the console and standard handles.
+    set_target_properties(veshiru PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_libraries(veshiru PRIVATE shell32 user32)
     if(MSVC)
+        target_link_options(veshiru PRIVATE /SUBSYSTEM:CONSOLE)
         target_link_libraries(veshiru PRIVATE version.lib)
-        set_target_properties(veshiru PROPERTIES LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS")
     elseif(MINGW)
-        set_target_properties(veshiru PROPERTIES LINK_FLAGS_RELEASE "-Wl,--subsystem,windows")
+        target_link_options(veshiru PRIVATE -mconsole)
         target_link_libraries(veshiru PRIVATE dwmapi)
     endif()
 endif()

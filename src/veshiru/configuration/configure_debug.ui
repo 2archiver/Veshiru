@@ -260,13 +260,6 @@
            </layout>
           </widget>
          </item>
-         <item row="1" column="1">
-          <widget class="QCheckBox" name="toggle_console">
-           <property name="text">
-            <string>Show Log in Console</string>
-           </property>
-          </widget>
-         </item>
          <item row="1" column="2">
           <widget class="QCheckBox" name="extended_logging">
            <property name="enabled">
@@ -796,7 +789,6 @@
  </widget>
  <tabstops>
   <tabstop>log_filter_edit</tabstop>
-  <tabstop>toggle_console</tabstop>
   <tabstop>extended_logging</tabstop>
   <tabstop>open_log_button</tabstop>
   <tabstop>homebrew_args_edit</tabstop>

@@ -37,6 +37,7 @@ Core::Frontend::WindowSystemType GetWindowSystemType();
 
 Core::Frontend::EmuWindow::WindowSystemInfo GetWindowSystemInfo(QWindow* window);
 
+void LogStartupInfo();
 void Init(QWidget* root);
 
 void SetupContentProviders();

@@ -15,7 +15,6 @@
 #include "qt_common/config/uisettings.h"
 #include "ui_configure_debug.h"
 #include "veshiru/configuration/configure_debug.h"
-#include "veshiru/debugger/console.h"
 
 ConfigureDebug::ConfigureDebug(const Core::System& system_, QWidget* parent)
     : QScrollArea(parent), ui{std::make_unique<Ui::ConfigureDebug>()}, system{system_} {
@@ -67,8 +66,6 @@ void ConfigureDebug::SetConfiguration() {
     ui->homebrew_args_edit->setEnabled(runtime_lock);
     ui->homebrew_args_edit->setText(
         QString::fromStdString(Settings::values.program_args.GetValue()));
-    ui->toggle_console->setEnabled(runtime_lock);
-    ui->toggle_console->setChecked(UISettings::values.show_console.GetValue());
     ui->fs_access_log->setEnabled(runtime_lock);
     ui->fs_access_log->setChecked(Settings::values.enable_fs_access_log.GetValue());
     ui->enable_renderdoc_hotkey->setEnabled(runtime_lock);
@@ -111,7 +108,6 @@ void ConfigureDebug::SetConfiguration() {
 void ConfigureDebug::ApplyConfiguration() {
     Settings::values.use_gdbstub = ui->toggle_gdbstub->isChecked();
     Settings::values.gdbstub_port = ui->gdbport_spinbox->value();
-    UISettings::values.show_console = ui->toggle_console->isChecked();
     Settings::values.log_filter = ui->log_filter_edit->text().toStdString();
     Settings::values.log_flush_line = ui->flush_line->isChecked();
     Settings::values.censor_username = ui->censor_username->isChecked();
@@ -144,10 +140,10 @@ void ConfigureDebug::ApplyConfiguration() {
     Settings::values.gpu_log_level =
         static_cast<Settings::GpuLogLevel>(ui->gpu_log_level->currentIndex());
     Settings::values.gpu_log_shader_dumps = ui->gpu_log_shader_dumps->isChecked();
-    Debugger::ToggleConsole();
     Common::Log::Filter filter;
     filter.ParseFilterString(Settings::values.log_filter.GetValue());
     Common::Log::SetGlobalFilter(filter);
+    Common::Log::UpdateFileLoggingOptions();
     Core::Crypto::KeyManager::Instance().ReloadKeys();
 }
 

@@ -30,5 +30,6 @@ void AssertFailSoftImpl() {
 }
 void AssertFatalImpl() {
     Common::Log::Stop();
+    Common::Log::FlushConsole();
     std::abort();
 }
