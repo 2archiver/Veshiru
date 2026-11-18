@@ -19,8 +19,15 @@ class IOFile;
 
 namespace FileSys {
 
+#ifdef _WIN32
+struct NativeReadHandle;
+#endif
+
 struct FileReference : public Common::IntrusiveListBaseNode<FileReference> {
     std::shared_ptr<Common::FS::IOFile> file{};
+#ifdef _WIN32
+    std::shared_ptr<NativeReadHandle> read_handle{};
+#endif
 };
 
 class RealVfsFile;
@@ -51,9 +58,15 @@ private:
     using ReferenceListType = Common::IntrusiveListBaseTraits<FileReference>::ListType;
     std::map<std::string, std::weak_ptr<VfsFile>, std::less<>> cache;
     ReferenceListType open_references;
+#ifdef _WIN32
+    ReferenceListType open_read_references;
+#endif
     ReferenceListType closed_references;
     std::mutex list_lock;
     size_t num_open_files{};
+#ifdef _WIN32
+    size_t num_open_read_handles{};
+#endif
     // TODO: Workaround for improper dtor() ordering on clang + FreeBSD
     bool in_dtor = false;
 
@@ -61,6 +74,10 @@ private:
     friend class RealVfsFile;
     std::unique_lock<std::mutex> RefreshReference(const std::string& path, OpenMode perms,
                                                   FileReference& reference);
+#ifdef _WIN32
+    std::shared_ptr<NativeReadHandle> AcquireReadHandle(const std::string& path,
+                                                        FileReference& reference);
+#endif
     void DropReference(std::unique_ptr<FileReference>&& reference, const std::string& path);
 
 private:
@@ -70,6 +87,12 @@ private:
 
 private:
     void EvictSingleReferenceLocked();
+#ifdef _WIN32
+    void EvictSingleReadReferenceLocked();
+#endif
+    void CloseReferenceLocked(FileReference& reference);
+    void UncacheFileLocked(const std::string& path);
+    void UncacheDirectoryLocked(std::string_view dir_path);
     void InsertReferenceIntoListLocked(FileReference& reference);
     void RemoveReferenceFromListLocked(FileReference& reference);
 };

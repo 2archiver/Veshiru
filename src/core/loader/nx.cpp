@@ -896,7 +896,7 @@ ResultStatus AppLoader_NX::ReadRomFS(FileSys::VirtualFile& out_file) {
     }
     std::call_once(impl->tree_romfs_once, [this] {
         if (impl->tree_romfs_dir != nullptr) {
-            impl->tree_romfs = FileSys::CreateRomFS(impl->tree_romfs_dir);
+            impl->tree_romfs = BuildLooseRomFS(impl->tree_romfs_dir);
         }
     });
     out_file = impl->tree_romfs;

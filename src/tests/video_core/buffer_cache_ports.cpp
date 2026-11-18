@@ -103,6 +103,7 @@ struct Runtime {
     void FreeDeferredStagingBuffer(Staging&) {}
     void CopyBuffer(Buffer* dst, Buffer& src, std::span<const VideoCommon::BufferCopy> copies,
                     bool) {
+        ++download_calls;
         for (const auto& copy : copies) {
             REQUIRE(copy.src_offset + copy.size <= src.bytes.size());
             REQUIRE(copy.dst_offset + copy.size <= dst->bytes.size());
@@ -111,6 +112,7 @@ struct Runtime {
                             copy.size);
             });
             ++downloads;
+            download_bytes += copy.size;
         }
     }
     void CopyBuffer(Buffer& dst, Buffer& src, std::span<const VideoCommon::BufferCopy> copies,
@@ -191,9 +193,9 @@ struct Runtime {
     }
 
     u32 alignment{256};
-    u32 allocations{}, downloads{}, uploads{}, finishes{}, waits{};
+    u32 allocations{}, downloads{}, download_calls{}, uploads{}, finishes{}, waits{};
     u32 host_read_barriers{}, host_read_waits{}, queued_host_reads{};
-    u64 upload_bytes{}, waited_tick{};
+    u64 download_bytes{}, upload_bytes{}, waited_tick{};
     u64 submitted_tick{}, completed_tick{};
     std::vector<std::unique_ptr<Buffer>> stagings;
     std::vector<u8> stream;
@@ -339,6 +341,21 @@ struct BufferCacheTestAccess {
         channel.uniform_buffers[0][0] = {.device_addr = address, .size = size, .buffer_id = id};
         cache.BindHostGraphicsUniformBuffer(0, 0, 0, true);
     }
+    /// A dispatch binds `binding` as compute storage buffer `index`; a native one marks only
+    /// `write_mark` bytes of it written.
+    static void ComputeStorage(Cache& cache, BufferCacheChannelInfo& channel, u32 index,
+                               Binding binding, bool written, bool native = false,
+                               u32 write_mark = 0) {
+        cache.channel_state = &channel;
+        cache.maxwell3d = &channel.maxwell3d;
+        cache.kepler_compute = &channel.kepler_compute;
+        cache.gpu_memory = &channel.gpu_memory;
+        channel.enabled_compute_storage_buffers |= u64{1} << index;
+        channel.written_compute_storage_buffers |= u64{written ? 1U : 0U} << index;
+        channel.native_compute_storage_buffers |= u64{native ? 1U : 0U} << index;
+        channel.compute_storage_buffers[index] = binding;
+        channel.compute_storage_write_marks[index] = write_mark;
+    }
     static void NextFrame(Cache& cache) {
         cache.native_indirect_uniforms_this_frame.clear();
     }
@@ -369,7 +386,8 @@ struct BufferCacheTestAccess {
     static void GpuWrite(KeepCache& cache, BufferId id, DAddr address, u32 size) {
         cache.MarkWrittenBuffer(id, address, size);
     }
-    static void MarkWritten(Cache& cache, BufferId id, DAddr address, u32 size) {
+    template <class C>
+    static void MarkWritten(C& cache, BufferId id, DAddr address, u32 size) {
         cache.MarkWrittenBuffer(id, address, size);
     }
     static size_t ReadDownloads(Cache& cache) {
@@ -384,6 +402,12 @@ struct BufferCacheTestAccess {
     static u64 EarlyBytesPerFrame() {
         return Cache::EarlyBytesPerFrame;
     }
+    static u64 MaxSpeculativeReadBytes() {
+        return Cache::MaxSpeculativeReadBytes;
+    }
+    static void ResetEarlyFrameBytes(Cache& cache) {
+        cache.early_bytes_this_frame = 0;
+    }
     /// Every read download compared with a synchronous flush (EDEN_NX2_READ_CHECK=1).
     static void CheckEveryRead(Cache& cache) {
         cache.read_check.every = 1;
@@ -396,6 +420,18 @@ struct BufferCacheTestAccess {
     }
     static void Delete(Cache& cache, BufferId id) {
         cache.DeleteBuffer(id);
+    }
+    static void UpdateIndex(Cache& cache) {
+        cache.UpdateIndexBuffer();
+    }
+    static BufferId InlineIndexBuffer(Cache& cache) {
+        return cache.inline_buffer_id;
+    }
+    static u64 BufferBytes(Cache& cache) {
+        return cache.buffer_bytes;
+    }
+    static u64 CachingPageSize() {
+        return Cache::CACHING_PAGESIZE;
     }
     static void UpdateUniforms(Cache& cache, size_t stage) {
         cache.UpdateUniformBuffers(stage);
@@ -432,15 +468,17 @@ struct BasicFixture {
     std::unique_ptr<Kernel::KProcess> process;
     Core::Asid asid{};
     u8* bytes{};
+    size_t mapped_bytes{};
 
-    BasicFixture() {
+    explicit BasicFixture(size_t mapped_bytes_ = 0x40000) : mapped_bytes{mapped_bytes_} {
         system.Initialize();
         process = std::make_unique<Kernel::KProcess>(system.Kernel());
         auto& table = process->GetPageTable().GetImpl();
         table.Resize(24, 12);
         bytes = physical.GetPointerFromRaw<u8>(0x10000);
-        std::memset(bytes, 0, 0x40000);
-        for (u64 page = 0; page < 64; ++page) {
+        std::memset(bytes, 0, mapped_bytes);
+        const u64 num_pages = mapped_bytes >> 12;
+        for (u64 page = 0; page < num_pages; ++page) {
             table.entries.GetAndFault(0x10 + page)
                 .Store(false, Common::PageType::Memory, 1,
                        reinterpret_cast<uintptr_t>(bytes) - 0x10000);
@@ -448,14 +486,14 @@ struct BasicFixture {
         process->GetMemory().SetCurrentPageTable(*process);
         asid = device.RegisterProcess(&process->GetMemory());
         device.BindInterface(&rasterizer);
-        device.Map(0x10000, 0x10000, 0x40000, asid);
+        device.Map(0x10000, 0x10000, mapped_bytes, asid);
         ResetMemory();
         cache = std::make_unique<C>(device, runtime);
     }
     ~BasicFixture() {
         cache.reset();
         memory.reset();
-        device.Unmap(0x10000, 0x40000);
+        device.Unmap(0x10000, mapped_bytes);
         device.UnregisterProcess(asid);
         system.Kernel().UnregisterKernelObject(process.get());
     }
@@ -1523,6 +1561,36 @@ TEST_CASE("Read download check finds an earlier read's bytes the GPU changed unr
     REQUIRE(Access::ReadChecks(*f.cache).rewritten == 0);
 }
 
+TEST_CASE("A dispatch's outputs hold GPU data once the GPU wrote every range it writes",
+          "[video_core][buffer_ports]") {
+    Fixture f;
+    Tegra::Control::ChannelState state{0};
+    state.memory_manager = &*f.memory;
+    state.payload.emplace(f.system, *f.memory, state);
+    VideoCommon::BufferCacheChannelInfo channel{state};
+    const auto id = Access::Add(*f.cache, 0x10000, 0x10000);
+    const auto binding = [id](DAddr address, u32 size) {
+        return VideoCommon::Binding{.device_addr = address, .size = size, .buffer_id = id};
+    };
+    // What it only reads doesn't count.
+    Access::ComputeStorage(*f.cache, channel, 0, binding(0x10000, 0x100), false);
+    REQUIRE(f.cache->ComputeWritesHoldGpuData());
+    Access::ComputeStorage(*f.cache, channel, 1, binding(0x11000, 0x100), true);
+    REQUIRE_FALSE(f.cache->ComputeWritesHoldGpuData());
+    // Part of the range is not enough: the rest still holds what the guest left there.
+    Access::MarkWritten(*f.cache, id, 0x11000, 0x40);
+    REQUIRE_FALSE(f.cache->ComputeWritesHoldGpuData());
+    Access::MarkWritten(*f.cache, id, 0x11040, 0xc0);
+    REQUIRE(f.cache->ComputeWritesHoldGpuData());
+    // A native binding counts as far as the dispatch marks it written.
+    Access::ComputeStorage(*f.cache, channel, 2, binding(0x12000, 0x1000), true, true, 0x40);
+    REQUIRE_FALSE(f.cache->ComputeWritesHoldGpuData());
+    Access::MarkWritten(*f.cache, id, 0x12800, 0x100);
+    REQUIRE_FALSE(f.cache->ComputeWritesHoldGpuData());
+    Access::MarkWritten(*f.cache, id, 0x12000, 0x40);
+    REQUIRE(f.cache->ComputeWritesHoldGpuData());
+}
+
 namespace {
 struct Nx2TitleScope {
     Nx2TitleScope() {
@@ -2550,6 +2618,45 @@ TEST_CASE("Deleting a buffer clears its id from every channel's bindings", "[buf
     REQUIRE(Access::Get(*f.cache, resolved).IsInBounds(0x10800, 0x100));
 }
 
+TEST_CASE("The inline index buffer is unregistered when it is deleted or outgrown",
+          "[buffer_ports]") {
+    struct ChannelFixture : Fixture {
+        ChannelFixture() {
+            state.memory_manager = &*memory;
+            state.payload.emplace(system, *memory, state);
+            cache->CreateChannel(state);
+            cache->BindToChannel(0);
+        }
+        ~ChannelFixture() {
+            cache.reset();
+        }
+        Tegra::Control::ChannelState state{0};
+    } f;
+    auto& channel = Access::Channel(*f.cache, 0);
+    auto& indexes = channel.maxwell3d.draw_manager.draw_state.inline_index_draw_indexes;
+    const auto draw = [&](size_t size) {
+        indexes.assign(size, 0);
+        channel.maxwell3d.dirty.flags[VideoCommon::Dirty::IndexBuffer] = true;
+        Access::UpdateIndex(*f.cache);
+        REQUIRE(channel.index_buffer.buffer_id == Access::InlineIndexBuffer(*f.cache));
+        return channel.index_buffer.buffer_id;
+    };
+    const u64 bytes{Access::BufferBytes(*f.cache)};
+
+    // The collector deletes it once it goes unused; the next inline index draw makes a new one.
+    Access::Delete(*f.cache, draw(0x10));
+    REQUIRE(Access::InlineIndexBuffer(*f.cache) == VideoCommon::NULL_BUFFER_ID);
+    REQUIRE(Access::BufferBytes(*f.cache) == bytes);
+
+    // A larger draw replaces it, and the old one leaves the cache's accounting with it.
+    draw(0x10);
+    const auto large = draw(Access::CachingPageSize() + 1);
+    REQUIRE(Access::Get(*f.cache, large).SizeBytes() > Access::CachingPageSize());
+    Access::Delete(*f.cache, large);
+    REQUIRE(Access::InlineIndexBuffer(*f.cache) == VideoCommon::NULL_BUFFER_ID);
+    REQUIRE(Access::BufferBytes(*f.cache) == bytes);
+}
+
 TEST_CASE("Claimed CPU writes keep their bytes when an earlier one downloads their page",
           "[buffer_ports]") {
     Fixture f;
@@ -2665,4 +2772,167 @@ TEST_CASE("A command list page's copy holds the CPU's bytes the buffer had not t
     std::memset(f.bytes + 0x8000, 9, 0x20);
     REQUIRE(f.CopyHolds(ListPageFixture::Page, 9));
     REQUIRE(f.CopyHolds(ListPageFixture::Page + 0x100, 5));
+}
+
+TEST_CASE("A DMA copy names the destination ranges whose GPU-written bytes guest memory lacks",
+          "[buffer_ports]") {
+    KeepFixture f{nullptr};
+    f.Draw(nullptr); // Binds the channel DMACopy uses.
+    auto& buffer = Access::Get(*f.cache, f.id);
+    // The GPU wrote the first half of the source; guest memory holds older bytes there.
+    std::memset(f.bytes + 0x4000, 1, 0x40);
+    std::fill_n(buffer.bytes.begin() + 0x4000, 0x20, u8{9});
+    Access::MarkWritten(*f.cache, f.id, 0x14000, 0x20);
+    boost::container::small_vector<std::pair<DAddr, size_t>, 4> gpu_written;
+    REQUIRE(f.cache->DMACopy(0x104000, 0x106000, 0x40, &gpu_written));
+    REQUIRE(gpu_written.size() == 1);
+    REQUIRE(gpu_written[0] == std::pair<DAddr, size_t>{0x16000, 0x20});
+    // An image over the first half uploading now would take the older bytes.
+    REQUIRE(std::all_of(f.bytes + 0x6000, f.bytes + 0x6040, [](u8 b) { return b == 1; }));
+    f.cache->DownloadMemory(0x16000, 0x40);
+    REQUIRE(std::all_of(f.bytes + 0x6000, f.bytes + 0x6020, [](u8 b) { return b == 9; }));
+    REQUIRE(std::all_of(f.bytes + 0x6020, f.bytes + 0x6040, [](u8 b) { return b == 1; }));
+
+    // A source only the CPU wrote: the destination's guest memory has its bytes at once.
+    std::memset(f.bytes + 0x5000, 7, 0x20);
+    f.cache->WriteMemory(0x15000, 0x20);
+    REQUIRE(f.cache->DMACopy(0x105000, 0x107000, 0x20, &gpu_written));
+    REQUIRE(gpu_written.empty());
+    REQUIRE(std::all_of(f.bytes + 0x7000, f.bytes + 0x7020, [](u8 b) { return b == 7; }));
+}
+
+TEST_CASE("Large cyclic readback rings stay warm and coalesce contiguous early copies",
+          "[buffer_ports]") {
+    constexpr u32 RingPages = 2400;
+    constexpr u32 RingBytes = RingPages * 0x1000;
+    constexpr DAddr Base = 0x20000;
+
+    Fixture f{0xb00000};
+    const Nx2TitleScope nx2_title;
+    const auto id = Access::Add(*f.cache, Base, RingBytes);
+    auto& buffer = Access::Get(*f.cache, id);
+
+    // Warm all 2,400 pages across two full write-then-read cycles (over twice the old 1,024-page
+    // tracker capacity).
+    for (u8 cycle = 1; cycle <= 2; ++cycle) {
+        WriteByDispatch(f, id, Base, RingBytes, cycle);
+        for (u32 page = 0; page < RingPages; ++page) {
+            ReadWord(f, Base + page * u64{0x1000});
+        }
+        Access::ResetEarlyFrameBytes(*f.cache);
+    }
+
+    // Cycle 3: rewrite the whole ring plus a duplicate subrange before NoteWorkRecorded to verify
+    // both per-page queued deduplication and contiguous copy coalescing.
+    f.runtime.downloads = 0;
+    f.runtime.download_calls = 0;
+    f.runtime.download_bytes = 0;
+    f.runtime.queued_host_reads = 0;
+    f.runtime.host_read_barriers = 0;
+    f.runtime.pending.push_back([&buffer] { std::ranges::fill(buffer.bytes, u8{0x33}); });
+    Access::MarkWritten(*f.cache, id, Base, RingBytes);
+    Access::MarkWritten(*f.cache, id, Base + 0x4000, 0x8000);
+    f.cache->NoteWorkRecorded(true);
+
+    REQUIRE(f.runtime.queued_host_reads == 1);
+    REQUIRE(f.runtime.download_calls == 1);
+    REQUIRE(f.runtime.downloads == 1);
+    REQUIRE(f.runtime.download_bytes == RingBytes);
+
+    f.runtime.Complete(f.runtime.submitted_tick);
+    for (const u32 sample_page : {0U, 1U, 511U, 1024U, 1799U, RingPages - 1}) {
+        const DAddr addr = Base + sample_page * u64{0x1000};
+        REQUIRE(ReadWord(f, addr).preemtive);
+        REQUIRE(f.bytes[(addr - 0x10000) + 0x10] == 0x33);
+    }
+    REQUIRE(f.runtime.host_read_barriers == 0);
+
+    // Cycle 4: two disjoint dirty spans in the same buffer verify that queued flags reset cleanly
+    // and that non-contiguous spans batch into a single DownloadBufferMemory submission.
+    Access::ResetEarlyFrameBytes(*f.cache);
+    f.runtime.downloads = 0;
+    f.runtime.download_calls = 0;
+    f.runtime.download_bytes = 0;
+    f.runtime.queued_host_reads = 0;
+    f.runtime.pending.push_back([&buffer] {
+        std::fill_n(buffer.bytes.begin(), 0x3000, u8{0x44});
+        std::fill_n(buffer.bytes.begin() + 0x8000, 0x2000, u8{0x55});
+    });
+    Access::MarkWritten(*f.cache, id, Base + 0x8000, 0x2000);
+    Access::MarkWritten(*f.cache, id, Base, 0x3000);
+    f.cache->NoteWorkRecorded(true);
+
+    REQUIRE(f.runtime.queued_host_reads == 1);
+    REQUIRE(f.runtime.download_calls == 1);
+    REQUIRE(f.runtime.downloads == 2);
+    REQUIRE(f.runtime.download_bytes == 0x5000);
+
+    f.runtime.Complete(f.runtime.submitted_tick);
+    REQUIRE(ReadWord(f, Base).preemtive);
+    REQUIRE(ReadWord(f, Base + 0x9000).preemtive);
+    REQUIRE(f.bytes[0x10000] == 0x44);
+    REQUIRE(f.bytes[0x14000] == 0x33);
+    REQUIRE(f.bytes[0x19000] == 0x55);
+}
+
+TEST_CASE("Speculative read downloads cap each flush to a forward-biased window",
+          "[buffer_ports]") {
+    constexpr DAddr Base = 0x20000;
+    constexpr u32 TotalSize = 0x400000; // 4 MiB, twice MaxSpeculativeReadBytes
+
+    Fixture f{0x500000};
+    const Nx2TitleScope nx2_title;
+    const auto id = Access::Add(*f.cache, Base, TotalSize);
+    auto& buffer = Access::Get(*f.cache, id);
+
+    // Record the full 4 MiB range into cpu_read_ranges via Switch 2 GetFlushArea.
+    std::ranges::fill(buffer.bytes, u8{0x11});
+    Access::MarkWritten(*f.cache, id, Base, TotalSize);
+    const auto warm = f.cache->GetFlushArea(Base, TotalSize);
+    REQUIRE(warm);
+    REQUIRE_FALSE(warm->preemtive);
+    f.cache->DownloadMemoryForRead(warm->start_address, warm->end_address - warm->start_address);
+    f.cache->FinishReadDownloads(warm->start_address, warm->end_address - warm->start_address);
+
+    // Rewrite all 4 MiB on the GPU, then read a single 4 KiB page 1 MiB in.
+    std::ranges::fill(buffer.bytes, u8{0x5a});
+    Access::MarkWritten(*f.cache, id, Base, TotalSize);
+    f.runtime.downloads = 0;
+    f.runtime.download_calls = 0;
+    f.runtime.download_bytes = 0;
+    f.runtime.host_read_barriers = 0;
+
+    constexpr DAddr Probe = Base + 0x100000;
+    constexpr u64 ProbeSize = 0x1000;
+    const u64 max_spec = Access::MaxSpeculativeReadBytes();
+    const u64 back_window = max_spec / 4;
+    const u64 ahead_window = max_spec - back_window;
+    const DAddr expected_window_begin = Probe - back_window;
+    const DAddr expected_window_end = Probe + ProbeSize + ahead_window;
+
+    REQUIRE_FALSE(ReadWord(f, Probe).preemtive);
+    REQUIRE(f.runtime.host_read_barriers == 1);
+    REQUIRE(f.runtime.download_calls == 1);
+    REQUIRE(f.runtime.download_bytes == ProbeSize + max_spec);
+    REQUIRE(f.bytes[Probe - 0x10000] == 0x5a);
+
+    // Forward and backward pages inside the prefetched window land with zero extra barriers.
+    REQUIRE(ReadWord(f, expected_window_begin).preemtive);
+    REQUIRE(ReadWord(f, expected_window_end - 0x1000).preemtive);
+    REQUIRE(f.bytes[expected_window_begin - 0x10000] == 0x5a);
+    REQUIRE(f.bytes[(expected_window_end - 0x1000) - 0x10000] == 0x5a);
+    REQUIRE(f.runtime.host_read_barriers == 1);
+
+    // Ranges outside the capped window remain scheduled for later reads until everything lands.
+    REQUIRE(Access::Pending(*f.cache, Base, expected_window_begin - Base));
+    REQUIRE(Access::Pending(*f.cache, expected_window_end, (Base + TotalSize) - expected_window_end));
+
+    const auto tail = ReadWord(f, Base + TotalSize - 0x1000);
+    REQUIRE_FALSE(tail.preemtive);
+    REQUIRE(f.bytes[(Base + TotalSize - 0x1000) - 0x10000] == 0x5a);
+
+    // The remaining leading range also fits in that second capped batch, leaving no stale bytes.
+    REQUIRE(ReadWord(f, Base).preemtive);
+    REQUIRE(f.bytes[Base - 0x10000] == 0x5a);
+    REQUIRE_FALSE(Access::Pending(*f.cache, Base, TotalSize));
 }

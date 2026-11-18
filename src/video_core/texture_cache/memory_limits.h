@@ -53,26 +53,21 @@ struct NativeBufferGcThresholds {
 
 [[nodiscard]] constexpr NativeBufferGcThresholds ResolveNativeBufferGcThresholds(
     u64 device_local_memory) {
-    // 4 GB discrete/laptop GPUs (e.g. GTX 1650 reporting ~3935 MiB device-local): prevent buffer
-    // cache from idling at 500+ MiB (~16% of usable VRAM) with zero collection.
+    // Keep the 512 MiB collection start across VRAM tiers: Switch 2 scenes keep ~300-550 MiB of
+    // live GPU-written buffers (e.g. Mario Kart World at 285-330 MiB), and firing aggressive
+    // eviction below that forces synchronous host-readback stalls and constant re-creation every
+    // frame. On 4 GB GPUs (e.g. GTX 1650 at ~3935 MiB), shed only clean (non-GPU-modified) stale
+    // buffers above 256 MiB when device-wide memory is critical, and reserve aggressive eviction
+    // for 768 MiB+ buffer footprints.
     if (device_local_memory > 0 && device_local_memory <= (u64{9} << 29)) { // <= 4.5 GiB
         return {
-            .expected_bytes = 192_MiB,
-            .critical_bytes = 384_MiB,
-            .pressure_floor_bytes = 128_MiB,
+            .expected_bytes = 512_MiB,
+            .critical_bytes = 768_MiB,
+            .pressure_floor_bytes = 256_MiB,
             .tight_vram = true,
         };
     }
-    // 6 GB GPUs (e.g. RTX 2060 / 3050 6 GB): moderate cap before aggressive eviction.
-    if (device_local_memory > 0 && device_local_memory <= (u64{13} << 29)) { // <= 6.5 GiB
-        return {
-            .expected_bytes = 320_MiB,
-            .critical_bytes = 640_MiB,
-            .pressure_floor_bytes = 256_MiB,
-            .tight_vram = false,
-        };
-    }
-    // 8+ GB GPUs (or unknown device-local memory): preserve original thresholds.
+    // 6+ GB GPUs (or unknown device-local memory): 512 MiB non-aggressive, 1 GiB aggressive.
     return {
         .expected_bytes = 512_MiB,
         .critical_bytes = 1_GiB,

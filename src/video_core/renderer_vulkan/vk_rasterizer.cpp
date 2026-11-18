@@ -2409,10 +2409,16 @@ void RasterizerVulkan::DispatchCompute() {
     const bool marking_effects = oot_effects_frame == render_trace_frame && OcarinaTemporalEnabled() &&
                                  !indirect_address && !frame_dump.Capturing();
     ComputePipeline::BindCommand deferred_bind;
-    if (!pipeline->Configure(*kepler_compute, *gpu_memory, scheduler, buffer_cache,
-                             texture_cache, texture_cache_runtime, byte_addressed_shadow,
-                             can_replace || marking_effects ? &deferred_bind : nullptr)) {
+    switch (pipeline->Configure(*kepler_compute, *gpu_memory, scheduler, buffer_cache,
+                                texture_cache, texture_cache_runtime, pipeline_cache,
+                                byte_addressed_shadow,
+                                can_replace || marking_effects ? &deferred_bind : nullptr)) {
+    case ComputePipeline::ConfigureResult::Ready:
+        break;
+    case ComputePipeline::ConfigureResult::Failed:
         if (kepler_compute->IsNativeMode()) throw Shader::RuntimeError("Native compute resources unavailable");
+        return;
+    case ComputePipeline::ConfigureResult::Skipped:
         return;
     }
     SCOPE_EXIT {
@@ -3070,6 +3076,15 @@ void RasterizerVulkan::WaitForIdle() {
 
     if (device.IsMoltenVK() && scheduler.IsRenderPassActive()) {
         scheduler.DeferFragmentBarrier();
+        fence_manager.SignalOrdering();
+        return;
+    }
+    // Inside a render pass whose draws wrote no storage buffers, images, or transform feedback,
+    // later draws in the pass need nothing from earlier draws that rasterization order does not
+    // already provide: defer the barrier until the pass ends instead of splitting it.
+    if (scheduler.IsRenderPassActive() && !scheduler.RenderPassHasStores() &&
+        maxwell3d != nullptr && maxwell3d->regs.transform_feedback_enabled == 0) {
+        scheduler.DeferWaitForIdle(flags);
         fence_manager.SignalOrdering();
         return;
     }
@@ -4007,13 +4022,20 @@ bool AccelerateDMA::BufferClear(GPUVAddr src_address, u64 amount, u32 value) {
 }
 
 bool AccelerateDMA::BufferCopy(GPUVAddr src_address, GPUVAddr dest_address, u64 amount) {
-    std::scoped_lock lock{buffer_cache.mutex};
+    std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
     buffer_cache.Nx2CollectListCopies(true);
-    const bool copied = buffer_cache.DMACopy(src_address, dest_address, amount);
+    boost::container::small_vector<std::pair<DAddr, size_t>, 4> gpu_written;
+    const bool copied = buffer_cache.DMACopy(src_address, dest_address, amount, &gpu_written);
     if (buffer_cache.Nx2CopyListPages(scheduler.CurrentTick())) {
         scheduler.Flush();
     }
     buffer_cache.Nx2CollectListCopies(false);
+    // DMACopy copies guest memory without telling the texture cache. Images over the destination
+    // (pitch linear data textures such as Kirby Air Riders' vertex lighting) would keep their old
+    // contents, and stale pages would skip the upload of images made there later.
+    if (copied) {
+        texture_cache.WriteDmaCopy(src_address, dest_address, amount, gpu_written);
+    }
     return copied;
 }
 
@@ -4176,6 +4198,8 @@ void RasterizerVulkan::HandleTransformFeedback() {
     query_cache.CounterEnable(VideoCommon::QueryType::StreamingByteCount,
                               regs.transform_feedback_enabled);
     if (regs.transform_feedback_enabled != 0) {
+        // Transform feedback writes buffers from inside the pass (WaitForIdle must not defer).
+        scheduler.NoteRenderPassStores();
         // Log extension usage for transform feedback
         if (GPU::Logging::IsActive()) {
             GPU::Logging::GPULogger::GetInstance().LogExtensionUsage(

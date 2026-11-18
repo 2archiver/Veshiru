@@ -6,6 +6,11 @@
 add_executable(tests
     common/addon_config.cpp
     common/artwork_cache.cpp
+    video_core/scaled_image_fits.cpp
+    video_core/stale_targets.cpp
+    video_core/superseded_images.cpp
+    video_core/ampere_stage_buffer_output.cpp
+    video_core/pipeline_layout_cache.cpp
     video_core/vulkan_overlay_filter.cpp
     video_core/open_frame_gen_weights.cpp
     video_core/open_frame_gen_policy.cpp
@@ -23,11 +28,13 @@ add_executable(tests
     video_core/semaphore_waiters.cpp
     video_core/hdr_output.cpp
     core/nx2_streamplay.cpp
+    core/nx2_gpu_only_regions.cpp
     core/nx2_video_ready.cpp
     core/nx2_thread_stats.cpp
     core/nx2_debug_server.cpp
     core/nx2_present_pacer.cpp
     core/nx2_frame_interval.cpp
+    core/vfs_real.cpp
     core/ldn_lan_protocol.cpp
     core/perf_stats.cpp
     core/key_derivation.cpp
@@ -43,6 +50,7 @@ add_executable(tests
     video_core/ampere_yoshi_title.cpp
     video_core/ampere_yoshi_compute.cpp
     video_core/texture_rect_descriptor.cpp
+    video_core/astc_opaque.cpp
     video_core/join_whole_copy.cpp
     audio_core/batch_decoder.cpp
     audio_core/adpcm_decode.cpp
@@ -225,6 +233,7 @@ add_executable(tests
     video_core/nx2_perf_texture_writes.cpp
     video_core/texture_cache_memory_limits.cpp
     video_core/h264_packet.cpp
+    video_core/vp9_range_encoder.cpp
     video_core/nx2_gpu_mapping.cpp
     video_core/vertex_repack.cpp
     video_core/ampere_lowering.cpp
@@ -265,7 +274,8 @@ target_link_libraries(tests PRIVATE common core audio_core input_common video_co
 target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain Threads::Threads)
 
 if (TARGET dynarmic::dynarmic)
-    target_sources(tests PRIVATE core/jit_codegen_options.cpp core/jit_ordered_loads.cpp core/window_trace.cpp)
+    target_sources(tests PRIVATE core/jit_codegen_options.cpp core/jit_ordered_loads.cpp
+        core/jit_shared_cache.cpp core/window_trace.cpp)
     target_link_libraries(tests PRIVATE dynarmic::dynarmic)
 endif()
 
@@ -369,7 +379,8 @@ add_test(NAME shader_jobs_tests COMMAND shader_jobs_tests)
 add_executable(shader_translation_tests
     video_core/stage_translation.cpp
     ../video_core/shader_jobs.cpp
-    ../video_core/shader_stage_translation.cpp)
+    ../video_core/shader_stage_translation.cpp
+    ../video_core/stage_cache.cpp)
 target_link_libraries(shader_translation_tests PRIVATE common shader_recompiler
     Catch2::Catch2WithMain Threads::Threads)
 target_compile_definitions(shader_translation_tests PRIVATE

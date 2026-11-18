@@ -7,7 +7,10 @@
 #include <array>
 #include <bitset>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
+#include <deque>
+#include <mutex>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -442,11 +445,89 @@ VKAPI_ATTR VkResult VKAPI_CALL TimedAllocateMemory(VkDevice device,
     return g_vma_allocate_memory(device, allocate_info, allocator, memory);
 }
 
+// vkFreeMemory takes 5-14 ms per dedicated allocation on NVIDIA's Linux driver, and the texture
+// cache frees dozens of them per frame when an area streams in. VMA already forgot the memory, so
+// a worker frees it. Device destruction drains the queue before the logical device goes.
+class MemoryFreeWorker {
+public:
+    void Push(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks* allocator) {
+        {
+            std::scoped_lock lock{mutex};
+            queue.push_back({device, memory, allocator});
+            if (!thread.joinable()) {
+                thread = std::jthread([this](std::stop_token token) { Run(token); });
+            }
+        }
+        work.notify_one();
+    }
+
+    void AddDevice() {
+        std::scoped_lock lock{mutex};
+        ++live_devices;
+    }
+
+    void RemoveDevice() {
+        std::jthread to_join;
+        {
+            std::unique_lock lock{mutex};
+            idle.wait(lock, [this] { return queue.empty() && !busy; });
+            if (live_devices > 0) {
+                --live_devices;
+            }
+            // Stop and join before process teardown so Windows ExitProcess never hits a live
+            // static std::jthread destructor under the loader lock.
+            if (live_devices == 0 && thread.joinable()) {
+                thread.request_stop();
+                to_join = std::move(thread);
+                work.notify_all();
+            }
+        }
+        if (to_join.joinable()) {
+            to_join.join();
+        }
+    }
+
+private:
+    struct Entry {
+        VkDevice device;
+        VkDeviceMemory memory;
+        const VkAllocationCallbacks* allocator;
+    };
+
+    void Run(std::stop_token token) {
+        std::unique_lock lock{mutex};
+        while (work.wait(lock, token, [this] { return !queue.empty(); })) {
+            const Entry entry = queue.front();
+            queue.pop_front();
+            busy = true;
+            lock.unlock();
+            {
+                using namespace VideoCommon::StutterTrace;
+                const SiteScope site{Site::MemoryFree};
+                g_vma_free_memory(entry.device, entry.memory, entry.allocator);
+            }
+            lock.lock();
+            busy = false;
+            if (queue.empty()) {
+                idle.notify_all();
+            }
+        }
+    }
+
+    std::mutex mutex;
+    std::condition_variable_any work;
+    std::condition_variable_any idle;
+    std::deque<Entry> queue;
+    u32 live_devices = 0;
+    bool busy = false;
+    std::jthread thread;
+};
+
+MemoryFreeWorker g_memory_free_worker;
+
 VKAPI_ATTR void VKAPI_CALL TimedFreeMemory(VkDevice device, VkDeviceMemory memory,
                                            const VkAllocationCallbacks* allocator) {
-    using namespace VideoCommon::StutterTrace;
-    const SiteScope site{Site::MemoryFree};
-    g_vma_free_memory(device, memory, allocator);
+    g_memory_free_worker.Push(device, memory, allocator);
 }
 
 } // Anonymous namespace
@@ -974,6 +1055,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     };
 
     vk::Check(vmaCreateAllocator(&allocator_info, &allocator));
+    g_memory_free_worker.AddDevice();
 
     owns_static_pipeline_cache = surface != VkSurfaceKHR{};
     LoadStaticPipelineCache();
@@ -998,6 +1080,7 @@ Device::~Device() {
         }
     }
     vmaDestroyAllocator(allocator);
+    g_memory_free_worker.RemoveDevice();
 }
 
 VideoCommon::Fsr4PortDevice Device::Fsr4PortDevice() const {
@@ -1032,14 +1115,15 @@ VideoCommon::Fsr4PortDevice Device::Fsr4PortDevice() const {
     };
 }
 
-VmaPool Device::GetSeparatePool(SeparatePool kind, u32 memory_type) const {
+VmaPool Device::GetSeparatePool(SeparatePool kind, u32 memory_type, bool create) const {
     std::scoped_lock lk{separate_pools_mutex};
     VmaPool& pool = separate_pools[static_cast<u32>(kind)][memory_type];
-    if (pool == VK_NULL_HANDLE) {
+    if (pool == VK_NULL_HANDLE && create) {
         const VmaPoolCreateInfo ci{
             .memoryTypeIndex = memory_type,
             .flags = 0,
-            .blockSize = SeparatePoolBlockSize,
+            .blockSize = kind == SeparatePool::DeviceBuffers ? DeviceBufferBlockSize
+                                                             : SeparatePoolBlockSize,
             .minBlockCount = 0,
             .maxBlockCount = 0,
             .priority = 0.f,
@@ -1100,7 +1184,13 @@ void Device::LoadStaticPipelineCache() {
         create(0, nullptr);
         return;
     }
-    create(data.size(), data.empty() ? nullptr : data.data());
+    try {
+        create(data.size(), data.empty() ? nullptr : data.data());
+    } catch (const vk::Exception& e) {
+        LOG_ERROR(Render_Vulkan, "Driver rejected the static pipeline cache ({}), starting empty",
+                  e.what());
+        create(0, nullptr);
+    }
 }
 
 void Device::SaveStaticPipelineCache() const {
@@ -1119,8 +1209,11 @@ void Device::SaveStaticPipelineCache() const {
     }
     data.resize(size);
     static_pipeline_cache.Read(&size, data.data());
+    // Written beside the cache and renamed over it, so an exit mid-write keeps the old one.
+    auto temporary = filename;
+    temporary += ".tmp";
     try {
-        std::ofstream file(filename, std::ios::binary | std::ios::trunc);
+        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
         file.exceptions(std::ofstream::failbit);
         if (!file.is_open()) {
             return;
@@ -1129,8 +1222,16 @@ void Device::SaveStaticPipelineCache() const {
             .write(reinterpret_cast<const char*>(&STATIC_CACHE_VERSION),
                    sizeof(STATIC_CACHE_VERSION))
             .write(data.data(), static_cast<std::streamsize>(size));
+        file.close();
     } catch (const std::ios_base::failure& e) {
-        Common::FS::RemoveFile(filename);
+        Common::FS::RemoveFile(temporary);
+        return;
+    }
+    std::error_code error;
+    std::filesystem::rename(temporary, filename, error);
+    if (error) {
+        LOG_ERROR(Render_Vulkan, "Couldn't replace the static pipeline cache: {}", error.message());
+        Common::FS::RemoveFile(temporary);
     }
 }
 

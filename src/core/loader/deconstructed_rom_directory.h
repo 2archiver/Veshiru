@@ -18,6 +18,10 @@ class System;
 
 namespace Loader {
 
+/// The RomFS image of a loose romfs/ directory, built once and shared by every loader of that
+/// directory while any of them holds it.
+FileSys::VirtualFile BuildLooseRomFS(const FileSys::VirtualDir& romfs_dir);
+
 /**
  * This class loads a "deconstructed ROM directory", which are the typical format we see for Switch
  * game dumps. The path should be a "main" NSO, which must be in a directory that contains the other

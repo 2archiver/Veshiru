@@ -29,6 +29,7 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/rasterizer_interface.h"
@@ -111,6 +112,16 @@ struct GpuSplitTestAccess {
     static bool ShareWriteSlot(DAddr a, DAddr b) {
         return GpuSplit::WriteSlot(a >> GpuSplit::WriteGranuleBits) ==
                GpuSplit::WriteSlot(b >> GpuSplit::WriteGranuleBits);
+    }
+
+    static void RunBack(GpuSplit& split) {
+        GpuSplit::on_back_thread = true;
+        u64 position = split.consumed.load();
+        while (position < split.write_position) {
+            position = Execute(split, position, split.write_position);
+        }
+        split.consumed.store(position);
+        GpuSplit::on_back_thread = false;
     }
 };
 
@@ -808,6 +819,25 @@ TEST_CASE("Constant buffer data goes through the bound buffer's translation and 
     recorder.constant_data.clear();
     f.memory.FlushCaching();
     REQUIRE(recorder.constant_data == Ranges{{0x30040, 4}});
+
+    // Data memory already holds stays out of the delta, unless the page may be GPU-written.
+    FastDraw::g_delta = {};
+    call(CbOffset, 0x40);
+    call(CbData, 5);
+    REQUIRE(FastDraw::g_delta.num_writes == 0);
+    REQUIRE(FastDraw::g_delta.num_device_writes == 0);
+    call(CbData, 7);
+    REQUIRE(FastDraw::g_delta.num_device_writes == 1);
+    REQUIRE(FastDraw::g_delta.device_begin[0] == 0x30044);
+    FastDraw::g_delta = {};
+    Tegra::Nx2MarkGpuWritten(0x30040, 4);
+    call(CbOffset, 0x40);
+    call(CbData, 5);
+    Tegra::Nx2ClearGpuWrittenPages();
+    REQUIRE(FastDraw::g_delta.num_device_writes == 1);
+    REQUIRE(FastDraw::g_delta.device_begin[0] == 0x30040);
+    f.memory.FlushCaching();
+    recorder.constant_data.clear();
 
     // A buffer the texture headers lie in takes the general path, which checks each write.
     engine.regs.tex_header.address_high = 0;
@@ -1753,4 +1783,109 @@ TEST_CASE("Split front sends state writes to the back as register blocks that ma
             }
         }
     }
+}
+
+namespace {
+
+/// Records the draws (with the fast draw serial each sees) and counter resets the back runs.
+class QueryOrderRecorder final : public VideoCore::RasterizerInterface {
+public:
+    struct Event {
+        bool reset;
+        u64 serial;
+        bool operator==(const Event&) const = default;
+    };
+
+    void Draw(bool, u32) override {
+        events.push_back({false, VideoCommon::Nx2FastDraw::Serial()});
+    }
+    void DrawTexture() override {}
+    void Clear(u32) override {}
+    void DispatchCompute() override {}
+    void ResetCounter(VideoCommon::QueryType) override {
+        events.push_back({true, 0});
+    }
+    void Query(GPUVAddr, VideoCommon::QueryType, VideoCommon::QueryPropertiesFlags, u32,
+               u32) override {}
+    void BindGraphicsUniformBuffer(size_t, u32, GPUVAddr, u32) override {}
+    void DisableGraphicsUniformBuffer(size_t, u32) override {}
+    void SignalFence(std::function<void()>&& func) override {
+        func();
+    }
+    void SyncOperation(std::function<void()>&& func) override {
+        func();
+    }
+    void SignalSyncPoint(u32) override {}
+    void SignalReference() override {}
+    void ReleaseFences(bool) override {}
+    void FlushAll() override {}
+    void FlushRegion(DAddr, u64, VideoCommon::CacheType) override {}
+    bool MustFlushRegion(DAddr, u64, VideoCommon::CacheType) override {
+        return false;
+    }
+    VideoCore::RasterizerDownloadArea GetFlushArea(DAddr addr, u64 size) override {
+        return {addr, addr + size, false};
+    }
+    void InvalidateRegion(DAddr, u64, VideoCommon::CacheType) override {}
+    void OnCacheInvalidation(DAddr, u64) override {}
+    bool OnCPUWrite(DAddr, u64) override {
+        return false;
+    }
+    void InvalidateGPUCache() override {}
+    void UnmapMemory(DAddr, u64) override {}
+    void ModifyGPUMemory(size_t, GPUVAddr, u64) override {}
+    void FlushAndInvalidateRegion(DAddr, u64, VideoCommon::CacheType) override {}
+    void WaitForIdle() override {}
+    void FragmentBarrier() override {}
+    void TiledCacheBarrier() override {}
+    void FlushCommands() override {}
+    void TickFrame() override {}
+    Tegra::Engines::AccelerateDMAInterface& AccessAccelerateDMA() override {
+        std::terminate();
+    }
+    void AccelerateInlineToMemory(GPUVAddr, size_t, std::span<const u8>) override {}
+
+    std::vector<Event> events;
+};
+
+} // namespace
+
+TEST_CASE("Split back runs counter resets and render enable modes in order within draw reuse",
+          "[video_core][fast_draw]") {
+    using Access = VideoCommon::GpuSplitTestAccess;
+    using Event = QueryOrderRecorder::Event;
+    using Mode = Maxwell3D::Regs::RenderEnable::Mode;
+    const auto fixture = std::make_unique<Fixture>();
+    Fixture& f = *fixture;
+    const auto split_owner = std::make_unique<VideoCommon::GpuSplit>(); // Too big for the stack
+    VideoCommon::GpuSplit& split = *split_owner;
+    Access::Initialize(split, f.system);
+    QueryOrderRecorder recorder;
+    auto& engine = f.fast;
+    engine.BindRasterizer(&recorder);
+    const auto front = [&](u32 method, u32 argument) {
+        engine.FrontCallMethod(f.system, split, method, argument, true);
+    };
+    const auto draw = [&] {
+        front(MAXWELL3D_REG_INDEX(vertex_buffer.first), 0);
+        front(MAXWELL3D_REG_INDEX(vertex_buffer.count), 3);
+        front(DrawBegin, 0x4);
+        front(DrawEnd, 0);
+    };
+    constexpr u32 mode = MAXWELL3D_REG_INDEX(render_enable.mode);
+    front(mode, static_cast<u32>(Mode::True));
+    draw();
+    front(MAXWELL3D_REG_INDEX(clear_report_value),
+          static_cast<u32>(Maxwell3D::Regs::ClearReport::ZPassPixelCount));
+    draw();
+    front(mode, static_cast<u32>(Mode::False));
+    draw(); // Not drawn: the back ran the mode before it.
+    front(mode, static_cast<u32>(Mode::True));
+    draw();
+    REQUIRE(recorder.events.empty()); // All of it runs on the back.
+    Access::RunBack(split);
+    REQUIRE(recorder.events.size() == 4);
+    const u64 serial = recorder.events[0].serial;
+    CHECK(recorder.events ==
+          std::vector<Event>{{false, serial}, {true, 0}, {false, serial}, {false, serial}});
 }

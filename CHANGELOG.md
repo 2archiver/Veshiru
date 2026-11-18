@@ -6,6 +6,65 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-18
+
+### Mario Kart World & Switch 2 Frame-Time Improvements
+
+- **Cyclic GPU-to-CPU readback tracking and coalescing**: Expanded learned readback page tracking
+  from 512 to 4,096 pages (up to 24 MiB/frame) so multi-thousand-page Switch 2 compute culling and
+  visibility rings remain warm across wrap-arounds instead of dropping back to synchronous CPU
+  readback flushes. Contiguous early-download pages are merged into single copy spans, same-buffer
+  readback copies batch into one download call, and speculative `cpu_read_ranges` prefetching is
+  bounded to a forward-biased 2 MiB window so isolated 4 KiB reads do not stall on multi-megabyte
+  buffers.
+- **Present fence pacing on Mario Kart World**: Adaptive `nx2:vi2` presentation now skips the
+  blocked 3–4 ms current-frame suspension probe when Mario Kart World's current frame fence is
+  still waiting on a post-present CPU semaphore release, pacing directly against the previous
+  frame's fence while keeping immediate pass-through when the current fence is already signaled.
+- **Unreported occlusion query suppression**: When a guest leaves Z-pass pixel counting enabled past
+  the 1,024-slot overflow guard without resetting or reporting, host Vulkan occlusion queries now
+  stay paused until the next guest reset or report instead of repeatedly cycling query pools.
+- **Parallel read-only Windows VFS I/O**: Read-only `RealVfsFile` reads on Windows now run through
+  cached, reference-counted overlapped file handles (up to 4,096 open handles independent of the C
+  runtime `FILE*` cap) without holding `RealVfsFilesystem::list_lock` across disk I/O, allowing
+  concurrent multi-core RomFS, audio, and video streaming while cleanly releasing cached handles on
+  file and directory mutations.
+
+### Vulkan Renderer, Memory & Cache Efficiency
+
+- **Shader stage translation cache**: Added a thread-safe `StageCache` with RAM-tiered capacity
+  that deduplicates translated IR and zstd-compressed emitted SPIR-V across pipelines sharing stage
+  programs and constant/resource reads, accelerating shader compilation and cold pipeline builds.
+- **Vulkan descriptor, layout & render-pass overhead reductions**: Added cached `VkPipelineLayout`
+  reuse, tighter fast-draw uniform and storage buffer pathways, render-pass retention across safe
+  state transitions, and async draw/dispatch discard policy for unbuilt Switch 2 compute dispatches
+  whose output buffers already hold GPU data and color draws targeting historical render targets.
+- **Texture, ASTC & low-VRAM management**: Improved 4 GB and tight-VRAM buffer/texture garbage
+  collection guards so device-pressure collection avoids stalling on live GPU-written working sets,
+  offloaded deferred Vulkan memory frees to a background worker, tracked stale render targets and
+  superseded images safely, checked resolution-scaled image fit before allocation, and optimized
+  ASTC upload and opaque-alpha handling.
+- **DMA copy hazard & shader cache robustness**: Tracked GPU-written destination subranges across
+  buffer `DMACopy` operations so guest memory and texture uploads never read stale bytes, and
+  chunked large shader cache v2 reads cleanly past 2 GiB on Windows.
+
+### Shader Recompiler, CPU JIT & System Services
+
+- **Ampere shader compiler improvements**: Expanded NVIDIA global-memory buffer routing and
+  non-inlined bound-buffer selection helpers, added stage-buffer output (`ISBE`) and additional
+  Ampere instruction lowerings, and reduced redundant pass overhead during shader translation.
+- **CPU, host memory & NX2 services**: Added shared x86-64 Dynarmic JIT cache reuse, guest memory
+  prefaulting and faster Windows memory/zero-page queries, GPU-only region tracking, VP9 range
+  encoder fixes, and `nx2:gsv` service stability improvements.
+
+### Tests
+
+- Added and expanded Catch2 test coverage for large cyclic readback rings and forward-windowed
+  speculative downloads, `nx2:vi2` present fence planning, concurrent Windows `RealVfsFile` reads
+  and filesystem mutations, `StageCache` translation reuse, `PipelineLayoutCache`, stale render
+  targets, superseded images, scaled image sizing, ASTC opacity, Ampere stage-buffer outputs, async
+  draw/dispatch policy, VP9 range encoding, GPU-only regions, and shared x64 JIT caches.
+
 ## [1.7.0] - 2026-11-18
 
 ### Native Windows diagnostics

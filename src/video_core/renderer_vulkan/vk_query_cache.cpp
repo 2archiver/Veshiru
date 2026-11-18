@@ -202,7 +202,7 @@ public:
     ~SamplesStreamer() = default;
 
     void StartCounter() override {
-        if (has_started) {
+        if (has_started || counter_abandoned) {
             return;
         }
 
@@ -231,18 +231,8 @@ public:
     }
 
     void ResetCounter() override {
-        if (has_started) {
-            PauseCounter();
-        }
-        AbandonCurrentQuery();
-        std::function<void()> func([this] {
-            amend_value = 0;
-            accumulation_value = 0;
-        });
-        rasterizer->SyncOperation(std::move(func));
-        accumulation_since_last_sync = false;
-        first_accumulation_checkpoint = (std::min)(first_accumulation_checkpoint, num_slots_used);
-        last_accumulation_checkpoint = (std::max)(last_accumulation_checkpoint, num_slots_used);
+        counter_abandoned = false;
+        DropRunningCounter();
     }
 
     // Called at each submission. The running query carries the count across it: a guest's
@@ -253,7 +243,10 @@ public:
         // submission and render pass, and the query keeps every bank it touches alive. Ocarina of
         // Time's title screen and file select reached 16,384 slots over 64 banks, while gameplay
         // windows in Hyrule Field, Kakariko Village, and the Shooting Gallery reach up to 346
-        // slots across two banks. Past 4 banks (1,024 slots), drop the count as a reset would.
+        // slots across two banks. Past 4 banks (1,024 slots), drop the count and stop opening
+        // host queries until the guest actually resets or reports the counter, so titles such as
+        // Mario Kart World that leave Z-pass counting enabled across gameplay never cycle through
+        // useless query pools every few frames.
         static constexpr size_t MaxRunningQuerySlots = 4 * SamplesQueryBank::BANK_SIZE;
         if (current_query && current_query->size_slots > MaxRunningQuerySlots) {
             // It drops a real count. Logged on the 1st, 2nd, 4th, 8th... drop, so a window this
@@ -262,10 +255,11 @@ public:
             if ((bank_bound_resets & (bank_bound_resets - 1)) == 0) {
                 LOG_WARNING(Render_Vulkan,
                             "Samples query ran {} slots with no reset or report, dropped its "
-                            "count (drop {})",
+                            "count and suspended counting until next reset or report (drop {})",
                             current_query->size_slots, bank_bound_resets);
             }
-            ResetCounter();
+            DropRunningCounter();
+            counter_abandoned = true;
         }
     }
 
@@ -432,6 +426,7 @@ public:
     size_t WriteCounter(DAddr address, bool has_timestamp, u32 value,
                         [[maybe_unused]] std::optional<u32> subreport) override {
         PauseCounter();
+        counter_abandoned = false;
         auto index = BuildQuery();
         auto* new_query = GetQuery(index);
         new_query->guest_address = address;
@@ -724,6 +719,21 @@ private:
     static constexpr size_t MaxSpareFlushQueries = 16;
     std::vector<std::vector<size_t>> spare_flush_queries; ///< Guarded by flush_guard
 
+    void DropRunningCounter() {
+        if (has_started) {
+            PauseCounter();
+        }
+        AbandonCurrentQuery();
+        std::function<void()> func([this] {
+            amend_value = 0;
+            accumulation_value = 0;
+        });
+        rasterizer->SyncOperation(std::move(func));
+        accumulation_since_last_sync = false;
+        first_accumulation_checkpoint = (std::min)(first_accumulation_checkpoint, num_slots_used);
+        last_accumulation_checkpoint = (std::max)(last_accumulation_checkpoint, num_slots_used);
+    }
+
     // State Machine
     size_t current_bank_slot;
     size_t current_bank_id;
@@ -736,6 +746,7 @@ private:
     bool accumulation_since_last_sync{};
     VideoCommon::HostQueryBase* current_query;
     bool has_started{};
+    bool counter_abandoned{}; ///< Suppresses host queries after an unreported overflow until reset/report.
     u64 bank_bound_resets{}; ///< Counts CloseCounter dropped once a query outgrew the bank bound.
     std::mutex flush_guard;
     std::optional<QueriesPrefixScanPass> queries_prefix_scan_pass;

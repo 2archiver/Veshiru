@@ -216,6 +216,10 @@ public:
      */
     void InitializeDebugger();
 
+    /// Initialize kernel, Host1x, and GPU without launching a full application image.
+    [[nodiscard]] SystemResultStatus InitializeForGpuReplay(Frontend::EmuWindow& emu_window,
+                                                            u64 program_id);
+
     /**
      * Load an executable application.
      * @param emu_window Reference to the host-system window used for video output and keyboard

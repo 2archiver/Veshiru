@@ -161,6 +161,18 @@ TEST_CASE("A device allocation larger than the space fails after kept blocks are
     REQUIRE(device_memory.Allocate(1ULL << 30) == first);
 }
 
+TEST_CASE("Device ranges are backed only where every page is mapped or kept", "[memory_manager]") {
+    Core::DeviceMemory physical;
+    Tegra::MaxwellDeviceMemoryManager device_memory{physical};
+    constexpr DAddr address = 0x10000;
+    REQUIRE_FALSE(device_memory.IsBacked(address, 0x2000));
+    // A Switch 2 sparse block waiting for memory keeps the writes, so a download lands there.
+    device_memory.KeepWrites(address, 0x2000);
+    REQUIRE(device_memory.IsBacked(address, 0x2000));
+    REQUIRE_FALSE(device_memory.IsBacked(address, 0x3000));
+    REQUIRE_FALSE(device_memory.IsBacked(address - 0x1000, 0x2000));
+}
+
 TEST_CASE("MaxContinuousRange and submapped ranges from the mapping runs match the page walk",
           "[memory_manager]") {
     const u64 big_page_bits = GENERATE(16ULL, 17ULL);

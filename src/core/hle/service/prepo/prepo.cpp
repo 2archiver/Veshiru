@@ -34,6 +34,7 @@ public:
             {10200, &PlayReport::RequestImmediateTransmission, "RequestImmediateTransmission"},
             {10300, &PlayReport::GetTransmissionStatus, "GetTransmissionStatus"},
             {10400, &PlayReport::GetSystemSessionId, "GetSystemSessionId"},
+            {10500, &PlayReport::Unknown10500, "Unknown10500"},
             {20100, &PlayReport::SaveSystemReportOld, "SaveSystemReport"},
             {20101, &PlayReport::SaveSystemReportWithUserOld, "SaveSystemReportWithUser"},
             {20102, &PlayReport::SaveSystemReport, "SaveSystemReport"},
@@ -128,6 +129,16 @@ private:
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
         rb.Push(system_session_id);
+    }
+
+    // Called by Switch 2 titles (Ocarina of Time 0400486024DEC000) when they save a report. The
+    // request carries a process id, one copy handle and an X buffer; its exact layout is not
+    // known, so it is acknowledged without being parsed. A play report has no effect on the game.
+    void Unknown10500(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_PREPO, "(STUBBED) called");
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
     }
 
     void SaveSystemReportOld(HLERequestContext& ctx) {

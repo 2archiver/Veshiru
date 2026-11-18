@@ -64,6 +64,9 @@ enum class ImageFlagBits : u32 {
     /// back to the zeroed one and the tiles mapped then are loaded again (TextureCache::
     /// RefreshUnmappedSparseTiles), instead of deleting and re-creating the image.
     SparseTilesUnmapped = 1 << 24,
+    RenderTargetOrigin = 1 << 25, ///< Created for a render-target binding.
+    ContentsDefined = 1 << 26,    ///< Initialized by an upload, whole-image copy or zero clear.
+    PendingTransfer = 1 << 27,    ///< transfer_tick identifies the last recorded transfer.
 };
 DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
 
@@ -120,6 +123,7 @@ struct ImageBase {
     /// CpuModified. Empty while CpuModified means all of it that can hold data.
     std::vector<std::pair<u64, u64>> dirty_ranges;
     u64 scale_tick = 0;
+    u64 transfer_tick = 0;
     bool has_scaled = false;
 
     /// The channel and GPU address space whose page table RegisterImage put the image in.
@@ -134,11 +138,18 @@ struct ImageBase {
 
     /// Set through SetModificationTick.
     u64 modification_tick = 0;
-    /// First frame (frame_tick + 1) the GPU modified this image; 0 until written.
+    /// frame_tick + 1 of the first frame a render pass other than a clear wrote it, or 0.
     u64 first_written_frame = 0;
+    /// Levels whose every layer a shader last wrote through a storage view. Any other GPU write
+    /// (render pass, clear, copy, alias copy) and an upload from guest memory clear them.
+    u32 storage_written_levels = 0;
     /// At least the newest modification_tick among aliased_images (raised when an alias's tick is
     /// set or an alias is added): SynchronizeAliases has nothing to do while it is not newer.
     u64 newest_alias_tick = 0;
+    /// modification_tick of the latest GPU write that covered the whole image (a clear).
+    u64 full_write_tick = 0;
+    /// Last frame the image was prepared for use in (TextureCache::PrepareImage), 0 before.
+    u64 last_use_frame = 0;
     size_t lru_index = SIZE_MAX;
 
     std::array<u32, MAX_MIP_LEVELS> mip_level_offsets{};
@@ -181,6 +192,14 @@ struct ImageAllocBase {
 };
 
 bool AddImageAlias(ImageBase& lhs, ImageBase& rhs, ImageId lhs_id, ImageId rhs_id);
+
+/// Records a shader's storage write through `range`, given the levels written before it: a write
+/// over every layer adds its levels, a partial one keeps what the other layers held.
+void NoteStorageWrite(ImageBase& image, u32 levels_before, const SubresourceRange& range) noexcept;
+
+/// Whether every level `range` covers holds a shader's storage writes and nothing newer.
+[[nodiscard]] bool HoldsStorageWrites(const ImageBase& image,
+                                      const SubresourceRange& range) noexcept;
 
 /// Sets an image's modification tick and raises its aliases' newest_alias_tick to it.
 template <typename Images>

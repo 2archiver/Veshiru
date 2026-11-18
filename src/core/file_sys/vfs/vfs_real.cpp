@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <iterator>
+#include <limits>
 #include <utility>
 #include "common/assert.h"
 #include "common/fs/file.h"
@@ -19,7 +20,19 @@
 #include <sys/stat.h>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <cstdio> // _getmaxstdio
+#include <windows.h>
+#undef CreateFile
+#undef CopyFile
+#undef MoveFile
+#undef DeleteFile
+#undef CreateDirectory
 #else
 #include <sys/resource.h> // getrlimit
 #endif
@@ -36,7 +49,107 @@ namespace FileSys {
 
 namespace FS = Common::FS;
 
+#ifdef _WIN32
+struct NativeReadHandle {
+    HANDLE handle{INVALID_HANDLE_VALUE};
+
+    explicit NativeReadHandle(HANDLE handle_) noexcept : handle{handle_} {}
+    NativeReadHandle(const NativeReadHandle&) = delete;
+    NativeReadHandle& operator=(const NativeReadHandle&) = delete;
+
+    ~NativeReadHandle() {
+        if (handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(handle);
+        }
+    }
+};
+#endif
+
 namespace {
+
+#ifdef _WIN32
+// Kernel file handles on Windows are not subject to the C runtime's _getmaxstdio() cap, so a
+// multi-thousand read-only cache keeps active RomFS archives and stream packs warm without
+// touching CRT FILE* slots.
+constexpr size_t MaxOpenReadHandles = 4096;
+
+struct ThreadOverlappedEvent {
+    HANDLE handle{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+
+    ThreadOverlappedEvent() = default;
+    ThreadOverlappedEvent(const ThreadOverlappedEvent&) = delete;
+    ThreadOverlappedEvent& operator=(const ThreadOverlappedEvent&) = delete;
+
+    ~ThreadOverlappedEvent() {
+        if (handle != nullptr) {
+            CloseHandle(handle);
+        }
+    }
+};
+
+std::shared_ptr<NativeReadHandle> OpenNativeReadHandle(const std::string& path) {
+    const std::filesystem::path wide_path{FS::ToU8String(path)};
+    const HANDLE handle =
+        CreateFileW(wide_path.c_str(), GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return nullptr;
+    }
+    if (GetFileType(handle) != FILE_TYPE_DISK) {
+        CloseHandle(handle);
+        return nullptr;
+    }
+    return std::make_shared<NativeReadHandle>(handle);
+}
+
+std::size_t ReadNativeOverlapped(HANDLE handle, u8* data, std::size_t length, std::size_t offset) {
+    if (length == 0) {
+        return 0;
+    }
+    thread_local ThreadOverlappedEvent tls_event{};
+    if (tls_event.handle == nullptr) {
+        return 0;
+    }
+
+    constexpr std::size_t MaxChunkSize = std::size_t{1} << 30;
+    std::size_t total_read = 0;
+    u64 current_offset = offset;
+    while (total_read < length) {
+        const DWORD to_read = static_cast<DWORD>((std::min)(length - total_read, MaxChunkSize));
+        OVERLAPPED overlapped{};
+        overlapped.Offset = static_cast<DWORD>(current_offset & 0xFFFF'FFFFULL);
+        overlapped.OffsetHigh = static_cast<DWORD>(current_offset >> 32);
+        overlapped.hEvent = tls_event.handle;
+
+        DWORD bytes_read = 0;
+        if (!ReadFile(handle, data + total_read, to_read, &bytes_read, &overlapped)) {
+            const DWORD err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                if (!GetOverlappedResult(handle, &overlapped, &bytes_read, TRUE)) {
+                    if (GetLastError() == ERROR_HANDLE_EOF) {
+                        total_read += bytes_read;
+                    }
+                    break;
+                }
+            } else {
+                if (err == ERROR_HANDLE_EOF) {
+                    total_read += bytes_read;
+                }
+                break;
+            }
+        }
+
+        total_read += bytes_read;
+        if (bytes_read < to_read ||
+            current_offset > (std::numeric_limits<u64>::max)() - bytes_read) {
+            break;
+        }
+        current_offset += bytes_read;
+    }
+    return total_read;
+}
+#endif
 
 // Files the cache keeps open. It has to stay below the process's open-file limit (the C runtime's
 // on Windows, RLIMIT_NOFILE elsewhere) with room to spare: at the limit every other open fails
@@ -144,7 +257,7 @@ VirtualFile RealVfsFilesystem::CreateFile(std::string_view path_, OpenMode perms
     const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
     {
         std::scoped_lock lk{list_lock};
-        cache.erase(path);
+        UncacheFileLocked(path);
     }
 
     // Current usages of CreateFile expect to delete the contents of an existing file.
@@ -177,8 +290,8 @@ VirtualFile RealVfsFilesystem::MoveFile(std::string_view old_path_, std::string_
     const auto new_path = FS::SanitizePath(new_path_, FS::DirectorySeparator::PlatformDefault);
     {
         std::scoped_lock lk{list_lock};
-        cache.erase(old_path);
-        cache.erase(new_path);
+        UncacheFileLocked(old_path);
+        UncacheFileLocked(new_path);
     }
     if (!FS::RenameFile(old_path, new_path)) {
         return nullptr;
@@ -190,7 +303,7 @@ bool RealVfsFilesystem::DeleteFile(std::string_view path_) {
     const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
     {
         std::scoped_lock lk{list_lock};
-        cache.erase(path);
+        UncacheFileLocked(path);
     }
     return FS::RemoveFile(path);
 }
@@ -218,6 +331,11 @@ VirtualDir RealVfsFilesystem::MoveDirectory(std::string_view old_path_,
                                             std::string_view new_path_) {
     const auto old_path = FS::SanitizePath(old_path_, FS::DirectorySeparator::PlatformDefault);
     const auto new_path = FS::SanitizePath(new_path_, FS::DirectorySeparator::PlatformDefault);
+    {
+        std::scoped_lock lk{list_lock};
+        UncacheDirectoryLocked(old_path);
+        UncacheDirectoryLocked(new_path);
+    }
 
     if (!FS::RenameDir(old_path, new_path)) {
         return nullptr;
@@ -227,6 +345,10 @@ VirtualDir RealVfsFilesystem::MoveDirectory(std::string_view old_path_,
 
 bool RealVfsFilesystem::DeleteDirectory(std::string_view path_) {
     const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
+    {
+        std::scoped_lock lk{list_lock};
+        UncacheDirectoryLocked(path);
+    }
     return FS::RemoveDirRecursively(path);
 }
 
@@ -237,6 +359,13 @@ std::unique_lock<std::mutex> RealVfsFilesystem::RefreshReference(const std::stri
 
     // Temporarily remove from list.
     this->RemoveReferenceFromListLocked(reference);
+
+#ifdef _WIN32
+    if (reference.read_handle) {
+        reference.read_handle.reset();
+        num_open_read_handles--;
+    }
+#endif
 
     // Restore file if needed.
     if (!reference.file) {
@@ -254,6 +383,33 @@ std::unique_lock<std::mutex> RealVfsFilesystem::RefreshReference(const std::stri
 
     return lk;
 }
+
+#ifdef _WIN32
+std::shared_ptr<NativeReadHandle> RealVfsFilesystem::AcquireReadHandle(const std::string& path,
+                                                                       FileReference& reference) {
+    std::scoped_lock lk{list_lock};
+
+    this->RemoveReferenceFromListLocked(reference);
+
+    if (reference.file) {
+        reference.file.reset();
+        num_open_files--;
+    }
+
+    if (!reference.read_handle) {
+        this->EvictSingleReadReferenceLocked();
+
+        reference.read_handle = OpenNativeReadHandle(path);
+        if (reference.read_handle) {
+            num_open_read_handles++;
+        }
+    }
+
+    this->InsertReferenceIntoListLocked(reference);
+
+    return reference.read_handle;
+}
+#endif
 
 void RealVfsFilesystem::DropReference(std::unique_ptr<FileReference>&& reference,
                                       const std::string& path) {
@@ -275,6 +431,12 @@ void RealVfsFilesystem::DropReference(std::unique_ptr<FileReference>&& reference
         reference->file.reset();
         num_open_files--;
     }
+#ifdef _WIN32
+    if (reference->read_handle) {
+        reference->read_handle.reset();
+        num_open_read_handles--;
+    }
+#endif
 }
 
 void RealVfsFilesystem::EvictSingleReferenceLocked() {
@@ -296,20 +458,92 @@ void RealVfsFilesystem::EvictSingleReferenceLocked() {
     this->InsertReferenceIntoListLocked(reference);
 }
 
+#ifdef _WIN32
+void RealVfsFilesystem::EvictSingleReadReferenceLocked() {
+    if (num_open_read_handles < MaxOpenReadHandles || open_read_references.empty()) {
+        return;
+    }
+
+    auto& reference = open_read_references.back();
+    this->RemoveReferenceFromListLocked(reference);
+
+    if (reference.read_handle) {
+        reference.read_handle.reset();
+        num_open_read_handles--;
+    }
+
+    this->InsertReferenceIntoListLocked(reference);
+}
+#endif
+
+void RealVfsFilesystem::CloseReferenceLocked(FileReference& reference) {
+    this->RemoveReferenceFromListLocked(reference);
+    if (reference.file) {
+        reference.file.reset();
+        num_open_files--;
+    }
+#ifdef _WIN32
+    if (reference.read_handle) {
+        reference.read_handle.reset();
+        num_open_read_handles--;
+    }
+#endif
+    this->InsertReferenceIntoListLocked(reference);
+}
+
+void RealVfsFilesystem::UncacheFileLocked(const std::string& path) {
+    const auto it = cache.find(path);
+    if (it == cache.end()) {
+        return;
+    }
+    if (const auto cached = std::static_pointer_cast<RealVfsFile>(it->second.lock())) {
+        CloseReferenceLocked(*cached->reference);
+    }
+    cache.erase(it);
+}
+
+void RealVfsFilesystem::UncacheDirectoryLocked(std::string_view dir_path) {
+    for (auto it = cache.lower_bound(dir_path); it != cache.end();) {
+        if (!it->first.starts_with(dir_path)) {
+            break;
+        }
+        if (IsWithinRoot(dir_path, it->first)) {
+            if (const auto cached = std::static_pointer_cast<RealVfsFile>(it->second.lock())) {
+                CloseReferenceLocked(*cached->reference);
+            }
+            it = cache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void RealVfsFilesystem::InsertReferenceIntoListLocked(FileReference& reference) {
     if (reference.file) {
         open_references.push_front(reference);
-    } else {
-        closed_references.push_front(reference);
+        return;
     }
+#ifdef _WIN32
+    if (reference.read_handle) {
+        open_read_references.push_front(reference);
+        return;
+    }
+#endif
+    closed_references.push_front(reference);
 }
 
 void RealVfsFilesystem::RemoveReferenceFromListLocked(FileReference& reference) {
     if (reference.file) {
         open_references.erase(open_references.iterator_to(reference));
-    } else {
-        closed_references.erase(closed_references.iterator_to(reference));
+        return;
     }
+#ifdef _WIN32
+    if (reference.read_handle) {
+        open_read_references.erase(open_read_references.iterator_to(reference));
+        return;
+    }
+#endif
+    closed_references.erase(closed_references.iterator_to(reference));
 }
 
 RealVfsFile::RealVfsFile(RealVfsFilesystem& base_, std::unique_ptr<FileReference> reference_,
@@ -340,6 +574,16 @@ std::size_t RealVfsFile::GetSize() const {
     if (size) {
         return *size;
     }
+#ifdef _WIN32
+    if (perms == OpenMode::Read) {
+        const auto handle = base.AcquireReadHandle(path, *reference);
+        LARGE_INTEGER file_size{};
+        if (!handle || !GetFileSizeEx(handle->handle, &file_size) || file_size.QuadPart < 0) {
+            return 0;
+        }
+        return static_cast<std::size_t>(file_size.QuadPart);
+    }
+#endif
     auto lk = base.RefreshReference(path, perms, *reference);
     return reference->file ? reference->file->GetSize() : 0;
 }
@@ -363,6 +607,18 @@ bool RealVfsFile::IsReadable() const {
 }
 
 std::size_t RealVfsFile::Read(u8* data, std::size_t length, std::size_t offset) const {
+#ifdef _WIN32
+    if (perms == OpenMode::Read) {
+        if (length == 0) {
+            return 0;
+        }
+        const auto handle = base.AcquireReadHandle(path, *reference);
+        if (!handle) {
+            return 0;
+        }
+        return ReadNativeOverlapped(handle->handle, data, length, offset);
+    }
+#endif
     auto lk = base.RefreshReference(path, perms, *reference);
     if (!reference->file || !reference->file->Seek(static_cast<s64>(offset))) {
         return 0;
@@ -482,7 +738,7 @@ VirtualDir RealVfsDirectory::CreateDirectoryRelative(std::string_view relative_p
 
 bool RealVfsDirectory::DeleteSubdirectoryRecursive(std::string_view name) {
     const auto full_path = FS::SanitizePath(this->path + '/' + std::string(name));
-    return FS::RemoveDirRecursively(full_path);
+    return base.DeleteDirectory(full_path);
 }
 
 std::vector<VirtualFile> RealVfsDirectory::GetFiles() const {
