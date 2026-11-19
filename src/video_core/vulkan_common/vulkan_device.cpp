@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bitset>
 #include <chrono>
 #include <condition_variable>
@@ -26,10 +27,12 @@
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/literals.h"
+#include "common/memory_detect.h"
 #include <ranges>
 #include "common/settings.h"
 #include "common/settings_enums.h"
 #include "video_core/nx2_stutter_trace.h"
+#include "video_core/texture_cache/memory_limits.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
 #include "video_core/vulkan_common/vma.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -445,20 +448,55 @@ VKAPI_ATTR VkResult VKAPI_CALL TimedAllocateMemory(VkDevice device,
     return g_vma_allocate_memory(device, allocate_info, allocator, memory);
 }
 
+struct PendingFreeMetadata {
+    VkDeviceMemory memory{VK_NULL_HANDLE};
+    u32 heap_index{VK_MAX_MEMORY_HEAPS};
+    u64 size{};
+};
+
+thread_local PendingFreeMetadata g_pending_free_metadata{};
+
 // vkFreeMemory takes 5-14 ms per dedicated allocation on NVIDIA's Linux driver, and the texture
-// cache frees dozens of them per frame when an area streams in. VMA already forgot the memory, so
-// a worker frees it. Device destruction drains the queue before the logical device goes.
+// cache frees dozens of them per frame when an area streams in. VMA already dropped these blocks
+// from its statistics, so track pending bytes per heap so GetDeviceMemoryUsage() and WITHIN_BUDGET
+// image allocations never mistake in-flight frees for live VRAM pressure.
 class MemoryFreeWorker {
 public:
-    void Push(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks* allocator) {
+    void Push(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks* allocator,
+              u32 heap_index, u64 size) {
+        if (heap_index < VK_MAX_MEMORY_HEAPS && size != 0) {
+            pending_heap_bytes[heap_index].fetch_add(size, std::memory_order_relaxed);
+        } else {
+            heap_index = VK_MAX_MEMORY_HEAPS;
+            size = 0;
+        }
+        pending_count.fetch_add(1, std::memory_order_release);
         {
             std::scoped_lock lock{mutex};
-            queue.push_back({device, memory, allocator});
+            queue.push_back({device, memory, allocator, heap_index, size});
             if (!thread.joinable()) {
                 thread = std::jthread([this](std::stop_token token) { Run(token); });
             }
         }
         work.notify_one();
+    }
+
+    [[nodiscard]] bool HasPending() const noexcept {
+        return pending_count.load(std::memory_order_acquire) != 0;
+    }
+
+    [[nodiscard]] u64 PendingHeapBytes(size_t heap_index) const noexcept {
+        return heap_index < VK_MAX_MEMORY_HEAPS
+                   ? pending_heap_bytes[heap_index].load(std::memory_order_relaxed)
+                   : 0;
+    }
+
+    void WaitIdle() {
+        if (!HasPending()) {
+            return;
+        }
+        std::unique_lock lock{mutex};
+        idle.wait(lock, [this] { return queue.empty() && !busy; });
     }
 
     void AddDevice() {
@@ -492,20 +530,30 @@ private:
         VkDevice device;
         VkDeviceMemory memory;
         const VkAllocationCallbacks* allocator;
+        u32 heap_index;
+        u64 size;
     };
 
     void Run(std::stop_token token) {
+        std::deque<Entry> batch;
         std::unique_lock lock{mutex};
         while (work.wait(lock, token, [this] { return !queue.empty(); })) {
-            const Entry entry = queue.front();
-            queue.pop_front();
+            batch.swap(queue);
             busy = true;
             lock.unlock();
-            {
-                using namespace VideoCommon::StutterTrace;
-                const SiteScope site{Site::MemoryFree};
-                g_vma_free_memory(entry.device, entry.memory, entry.allocator);
+            for (const Entry& entry : batch) {
+                {
+                    using namespace VideoCommon::StutterTrace;
+                    const SiteScope site{Site::MemoryFree};
+                    g_vma_free_memory(entry.device, entry.memory, entry.allocator);
+                }
+                if (entry.heap_index < VK_MAX_MEMORY_HEAPS && entry.size != 0) {
+                    pending_heap_bytes[entry.heap_index].fetch_sub(entry.size,
+                                                                   std::memory_order_relaxed);
+                }
+                pending_count.fetch_sub(1, std::memory_order_release);
             }
+            batch.clear();
             lock.lock();
             busy = false;
             if (queue.empty()) {
@@ -518,6 +566,8 @@ private:
     std::condition_variable_any work;
     std::condition_variable_any idle;
     std::deque<Entry> queue;
+    std::array<std::atomic<u64>, VK_MAX_MEMORY_HEAPS> pending_heap_bytes{};
+    std::atomic<size_t> pending_count{0};
     u32 live_devices = 0;
     bool busy = false;
     std::jthread thread;
@@ -525,9 +575,31 @@ private:
 
 MemoryFreeWorker g_memory_free_worker;
 
+VKAPI_ATTR void VKAPI_CALL OnVmaFreeDeviceMemory(VmaAllocator, uint32_t memory_type,
+                                                 VkDeviceMemory memory, VkDeviceSize size,
+                                                 void* user_data) {
+    const auto* const device = static_cast<const Device*>(user_data);
+    g_pending_free_metadata = PendingFreeMetadata{
+        .memory = memory,
+        .heap_index = device != nullptr ? device->GetHeapIndexForMemoryType(memory_type)
+                                        : u32{VK_MAX_MEMORY_HEAPS},
+        .size = static_cast<u64>(size),
+    };
+}
+
 VKAPI_ATTR void VKAPI_CALL TimedFreeMemory(VkDevice device, VkDeviceMemory memory,
                                            const VkAllocationCallbacks* allocator) {
-    g_memory_free_worker.Push(device, memory, allocator);
+    u32 heap_index = VK_MAX_MEMORY_HEAPS;
+    u64 size = 0;
+    if (memory != VK_NULL_HANDLE && g_pending_free_metadata.memory == memory) {
+        heap_index = g_pending_free_metadata.heap_index;
+        size = g_pending_free_metadata.size;
+    }
+    g_pending_free_metadata = {};
+    if (memory == VK_NULL_HANDLE) {
+        return;
+    }
+    g_memory_free_worker.Push(device, memory, allocator, heap_index, size);
 }
 
 } // Anonymous namespace
@@ -1033,6 +1105,11 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             }
         }
     }
+    const VmaDeviceMemoryCallbacks memory_callbacks{
+            .pfnAllocate = nullptr,
+            .pfnFree = OnVmaFreeDeviceMemory,
+            .pUserData = this,
+    };
     const VmaAllocatorCreateInfo allocator_info{
             .flags = flags,
             .physicalDevice = physical,
@@ -1046,7 +1123,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             // block (8 MiB) their own memory, which goes back to the driver when they are freed.
             .preferredLargeHeapBlockSize = 16u * 1024u * 1024u,
             .pAllocationCallbacks = nullptr,
-            .pDeviceMemoryCallbacks = nullptr,
+            .pDeviceMemoryCallbacks = &memory_callbacks,
             .pHeapSizeLimit = heap_size_limit != 0 ? heap_size_limits.data() : nullptr,
             .pVulkanFunctions = &functions,
             .instance = instance,
@@ -1229,6 +1306,13 @@ void Device::SaveStaticPipelineCache() const {
     }
     std::error_code error;
     std::filesystem::rename(temporary, filename, error);
+    if (error) {
+        // On Windows std::filesystem::rename can fail when replacing an existing target with
+        // transient sharing/attribute state; remove the old cache and retry once.
+        Common::FS::RemoveFile(filename);
+        error.clear();
+        std::filesystem::rename(temporary, filename, error);
+    }
     if (error) {
         LOG_ERROR(Render_Vulkan, "Couldn't replace the static pipeline cache: {}", error.message());
         Common::FS::RemoveFile(temporary);
@@ -2004,6 +2088,20 @@ void Device::RemoveUnsuitableExtensions() {
         LOG_WARNING(Render_Vulkan, "EDEN_NX2_FORCE_MESH_FALLBACK: VK_EXT_mesh_shader disabled");
         extensions.mesh_shader = false;
     }
+    // AMD runs task shaders on a compute queue ganged with the graphics queue. With the guest's
+    // task programs that hangs the GPU (RDNA2 on RADV 26.2: gfx ring timeout, device lost),
+    // while the compute fallback runs the same draws fine. NVIDIA and Intel have task and mesh
+    // stages in the graphics pipe. EDEN_NX2_NATIVE_MESH=1 keeps the extension for testing.
+    const VkDriverId mesh_driver{properties.driver.driverID};
+    const bool amd_task_on_compute_queue{mesh_driver == VK_DRIVER_ID_MESA_RADV ||
+                                         mesh_driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                                         mesh_driver == VK_DRIVER_ID_AMD_OPEN_SOURCE};
+    if (extensions.mesh_shader && amd_task_on_compute_queue &&
+        std::getenv("EDEN_NX2_NATIVE_MESH") == nullptr) {
+        LOG_INFO(Render_Vulkan, "AMD driver: VK_EXT_mesh_shader disabled, task/mesh draws use the "
+                                "compute fallback (EDEN_NX2_NATIVE_MESH=1 keeps it)");
+        extensions.mesh_shader = false;
+    }
     RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
@@ -2263,7 +2361,9 @@ u64 Device::GetDeviceMemoryUsage() const {
     }
     u64 result{};
     for (const size_t heap : valid_heap_memory) {
-        result += AllocatedUsage(budget.heapUsage[heap], heap_budgets[heap]);
+        const u64 allocated = AllocatedUsage(budget.heapUsage[heap], heap_budgets[heap]);
+        const u64 pending_free = g_memory_free_worker.PendingHeapBytes(heap);
+        result += allocated - (std::min)(allocated, pending_free);
     }
     return result;
 }
@@ -2274,8 +2374,25 @@ u64 Device::GetDeviceMemorySlack() const {
     }
     std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> heap_budgets{};
     vmaGetHeapBudgets(allocator, heap_budgets.data());
-    const VmaStatistics& statistics = heap_budgets[main_heap].statistics;
-    return statistics.blockBytes - (std::min)(statistics.blockBytes, statistics.allocationBytes);
+    const auto heap_slack = [&heap_budgets](size_t heap) -> u64 {
+        const VmaStatistics& statistics = heap_budgets[heap].statistics;
+        return statistics.blockBytes - (std::min)(statistics.blockBytes, statistics.allocationBytes);
+    };
+    u64 slack = heap_slack(main_heap);
+    if (is_integrated) {
+        for (const size_t heap : shared_heap_memory) {
+            slack += heap_slack(heap);
+        }
+    }
+    return slack;
+}
+
+bool Device::HasPendingMemoryFrees() const noexcept {
+    return g_memory_free_worker.HasPending();
+}
+
+void Device::FlushPendingMemoryFrees() const {
+    g_memory_free_worker.WaitIdle();
 }
 
 u64 Device::GetDeviceMemoryBudget() const {
@@ -2289,25 +2406,36 @@ u64 Device::GetDeviceMemoryBudget() const {
     if (allocator != nullptr) {
         vmaGetHeapBudgets(allocator, heap_budgets.data());
     }
-    // Only the main heap's budget: summing every heap's counted VRAM twice on AMD (an 8 GB card
-    // reported 8.5 GB) and kept the collector's thresholds above the heap the images fill. What
-    // the other heaps use is added the way GetDeviceMemoryUsage() counts it, so the usage reaches
-    // this when the main heap's does its budget.
+    const auto adjusted_usage = [&budget, &heap_budgets](size_t heap) -> u64 {
+        const u64 allocated = AllocatedUsage(budget.heapUsage[heap], heap_budgets[heap]);
+        const u64 pending_free = g_memory_free_worker.PendingHeapBytes(heap);
+        return allocated - (std::min)(allocated, pending_free);
+    };
+    // On discrete GPUs use only the main device-local heap's budget (summing every device-local
+    // heap counted VRAM twice on AMD) plus the other heaps' live usage so GetDeviceMemoryUsage()
+    // crosses this right when main_heap hits its budget. On integrated/unified GPUs, also include
+    // disjoint non-DEVICE_LOCAL shared system heap budgets so Windows WDDM APUs with a small 512
+    // or 2048 MiB BIOS UMA carveout are never trapped at the carveout's size.
     u64 result = budget.heapBudget[main_heap];
     if (heap_size_limit != 0) {
         result = (std::min)(result, heap_size_limit);
     }
     for (const size_t heap : valid_heap_memory) {
-        if (heap != main_heap) {
-            result += AllocatedUsage(budget.heapUsage[heap], heap_budgets[heap]);
+        if (heap == main_heap) {
+            continue;
         }
+        const bool is_shared_unified =
+            is_integrated && std::ranges::find(shared_heap_memory, heap) != shared_heap_memory.end();
+        const u64 add = is_shared_unified ? static_cast<u64>(budget.heapBudget[heap])
+                                          : adjusted_usage(heap);
+        result = result <= ~u64{0} - add ? result + add : ~u64{0};
     }
-    if (is_integrated && !IsMoltenVK()) {
-        // An integrated GPU's device-local heap is system memory (a Radeon 780M reported a 21 GB
-        // budget): following it let the texture cache fill that much RAM before collecting, and
-        // kept ASTC uncompressed. Its budget is at most the share CollectPhysicalMemoryInfo
-        // gives it (4 GiB, 6 GiB with aggressive VRAM use).
-        result = (std::min)(result, device_access_memory);
+    if (is_integrated) {
+        const u32 explicit_limit_mib = Settings::values.texture_cache_memory_limit.GetValue();
+        const u64 reserve = Settings::GetVramReserve(
+            (std::max)(device_access_memory, integrated_max_memory));
+        result = VideoCommon::TextureCacheMemory::ClampIntegratedGpuBudget(
+            result, device_access_memory, integrated_max_memory, explicit_limit_mib, reserve);
     }
     return result;
 }
@@ -2319,10 +2447,16 @@ void Device::CollectPhysicalMemoryInfo() {
     const auto mem_info =
         physical.GetMemoryProperties(extensions.memory_budget ? &budget : nullptr);
     const auto& mem_properties = mem_info.memoryProperties;
+    memory_type_count = (std::min<u32>)(mem_properties.memoryTypeCount, VK_MAX_MEMORY_TYPES);
+    for (u32 type = 0; type < memory_type_count; ++type) {
+        memory_type_heaps[type] = mem_properties.memoryTypes[type].heapIndex;
+    }
     const size_t num_properties = mem_properties.memoryHeapCount;
     device_access_memory = 0;
-    u64 device_initial_usage = 0;
-    u64 local_memory = 0;
+    integrated_max_memory = 0;
+    shared_heap_memory.clear();
+    u64 shared_heap_bytes = 0;
+    u64 shared_usable_bytes = 0;
     // EDEN_NX2_VRAM_LIMIT_MIB=<n>: treat every device-local heap as n MiB (small card tests).
     if (const char* value = std::getenv("EDEN_NX2_VRAM_LIMIT_MIB")) {
         heap_size_limit = std::strtoull(value, nullptr, 10) << 20;
@@ -2351,10 +2485,18 @@ void Device::CollectPhysicalMemoryInfo() {
                 main_heap = element;
             }
             heap_size = limit(heap_size);
-            local_memory += heap_size;
+        } else {
+            shared_heap_memory.push_back(element);
+            shared_heap_bytes += heap_size;
+            if (extensions.memory_budget) {
+                const u64 b = budget.heapBudget[element];
+                const u64 u = budget.heapUsage[element];
+                shared_usable_bytes += b > u ? (b - u) : 0;
+            } else {
+                shared_usable_bytes += heap_size;
+            }
         }
         if (extensions.memory_budget) {
-            device_initial_usage += budget.heapUsage[element];
             device_access_memory += is_heap_local ? limit(budget.heapBudget[element])
                                                   : budget.heapBudget[element];
             continue;
@@ -2363,11 +2505,27 @@ void Device::CollectPhysicalMemoryInfo() {
     }
     main_heap_size = limit(mem_properties.memoryHeaps[main_heap].size);
     if (is_integrated) {
-        const s64 available_memory = static_cast<s64>(device_access_memory - device_initial_usage);
-        const u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
-        device_access_memory = static_cast<u64>(std::max<s64>(std::min<s64>(available_memory - 8_GiB, memory_size), std::min<s64>(local_memory, memory_size)));
+        const bool aggressive =
+            Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive;
+        u64 local_usable = main_heap_size;
+        if (extensions.memory_budget) {
+            const u64 main_budget = limit(budget.heapBudget[main_heap]);
+            const u64 main_usage = (std::min<u64>)(budget.heapUsage[main_heap], main_budget);
+            local_usable = main_budget - main_usage;
+        }
+        const u64 usable_pool = local_usable <= ~u64{0} - shared_usable_bytes
+                                    ? local_usable + shared_usable_bytes
+                                    : ~u64{0};
+        const u64 host_ram = heap_size_limit != 0 ? 0 : Common::GetMemInfo().TotalPhysicalMemory;
+        const u64 capped_pool =
+            heap_size_limit != 0 ? (std::min)(usable_pool, heap_size_limit) : usable_pool;
+        const u64 capped_shared = heap_size_limit != 0 ? 0 : shared_heap_bytes;
+        integrated_max_memory = VideoCommon::TextureCacheMemory::ResolveIntegratedGpuMemory(
+            host_ram, main_heap_size, capped_shared, capped_pool, true);
+        device_access_memory = VideoCommon::TextureCacheMemory::ResolveIntegratedGpuMemory(
+            host_ram, main_heap_size, capped_shared, capped_pool, aggressive);
     } else {
-        const u64 reserve_memory = std::min<u64>(device_access_memory / 8, 1_GiB);
+        const u64 reserve_memory = Settings::GetVramReserve(device_access_memory);
         device_access_memory -= reserve_memory;
         if (Settings::values.vram_usage_mode.GetValue() != Settings::VramUsageMode::Aggressive) {
             // Account for resolution scaling in memory limits
@@ -2461,13 +2619,19 @@ void Device::InitializeGPULogging() {
         driver_info += fmt::format("Driver Name: {}\n", properties.driver.driverName);
         driver_info += fmt::format("Driver Info: {}\n", properties.driver.driverInfo);
 
-        // Version information
+        // Version information (NVIDIA uses a 10-8-8-6 bit layout instead of Vulkan's 10-10-12)
         const u32 driver_version = props.driverVersion;
         const u32 api_version = props.apiVersion;
-        driver_info += fmt::format("Driver Version: {}.{}.{}\n",
-            VK_API_VERSION_MAJOR(driver_version),
-            VK_API_VERSION_MINOR(driver_version),
-            VK_API_VERSION_PATCH(driver_version));
+        if (driver_id == VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
+            driver_info += fmt::format("Driver Version: {}.{}.{}.{}\n", driver_version >> 22,
+                                       (driver_version >> 14) & 0xffU,
+                                       (driver_version >> 6) & 0xffU, driver_version & 0x3fU);
+        } else {
+            driver_info += fmt::format("Driver Version: {}.{}.{}\n",
+                                       VK_API_VERSION_MAJOR(driver_version),
+                                       VK_API_VERSION_MINOR(driver_version),
+                                       VK_API_VERSION_PATCH(driver_version));
+        }
         driver_info += fmt::format("Vulkan API Version: {}.{}.{}\n",
             VK_API_VERSION_MAJOR(api_version),
             VK_API_VERSION_MINOR(api_version),

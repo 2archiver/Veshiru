@@ -100,6 +100,9 @@ std::shared_ptr<NativeReadHandle> OpenNativeReadHandle(const std::string& path) 
         CloseHandle(handle);
         return nullptr;
     }
+    // Avoid acquiring the kernel FILE_OBJECT lock to signal the file handle on every synchronous
+    // page-cache hit; async ERROR_IO_PENDING completions still signal OVERLAPPED::hEvent.
+    SetFileCompletionNotificationModes(handle, FILE_SKIP_SET_EVENT_ON_HANDLE);
     return std::make_shared<NativeReadHandle>(handle);
 }
 
@@ -126,8 +129,11 @@ std::size_t ReadNativeOverlapped(HANDLE handle, u8* data, std::size_t length, st
         if (!ReadFile(handle, data + total_read, to_read, &bytes_read, &overlapped)) {
             const DWORD err = GetLastError();
             if (err == ERROR_IO_PENDING) {
-                if (!GetOverlappedResult(handle, &overlapped, &bytes_read, TRUE)) {
-                    if (GetLastError() == ERROR_HANDLE_EOF) {
+                const BOOL ok = GetOverlappedResult(handle, &overlapped, &bytes_read, TRUE);
+                const DWORD wait_err = ok ? ERROR_SUCCESS : GetLastError();
+                ResetEvent(tls_event.handle);
+                if (!ok) {
+                    if (wait_err == ERROR_HANDLE_EOF) {
                         total_read += bytes_read;
                     }
                     break;
@@ -352,9 +358,9 @@ bool RealVfsFilesystem::DeleteDirectory(std::string_view path_) {
     return FS::RemoveDirRecursively(path);
 }
 
-std::unique_lock<std::mutex> RealVfsFilesystem::RefreshReference(const std::string& path,
-                                                                 OpenMode perms,
-                                                                 FileReference& reference) {
+std::unique_lock<std::shared_mutex> RealVfsFilesystem::RefreshReference(const std::string& path,
+                                                                        OpenMode perms,
+                                                                        FileReference& reference) {
     std::unique_lock lk{list_lock};
 
     // Temporarily remove from list.
@@ -387,7 +393,24 @@ std::unique_lock<std::mutex> RealVfsFilesystem::RefreshReference(const std::stri
 #ifdef _WIN32
 std::shared_ptr<NativeReadHandle> RealVfsFilesystem::AcquireReadHandle(const std::string& path,
                                                                        FileReference& reference) {
+    // Fast path: while below the 4,096-handle eviction threshold (or already MRU), concurrent
+    // readers share `list_lock` without serializing or churning the intrusive LRU list on every
+    // small archive/RomFS read.
+    {
+        std::shared_lock lk{list_lock};
+        if (reference.read_handle &&
+            (num_open_read_handles < MaxOpenReadHandles ||
+             (!open_read_references.empty() && &open_read_references.front() == &reference))) {
+            return reference.read_handle;
+        }
+    }
+
     std::scoped_lock lk{list_lock};
+    if (reference.read_handle &&
+        (num_open_read_handles < MaxOpenReadHandles ||
+         (!open_read_references.empty() && &open_read_references.front() == &reference))) {
+        return reference.read_handle;
+    }
 
     this->RemoveReferenceFromListLocked(reference);
 

@@ -14,6 +14,7 @@
 #include <nx_session.hpp>
 #include <zstd.h>
 
+#include "common/artwork_cache.h"
 #include "common/fs/fs.h"
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
@@ -815,7 +816,8 @@ u8 AppLoader_NX::ReadPlatform(const FileSys::VirtualFile& nx_file, u64 program_i
     return found ? found->platform : 0;
 }
 
-void AppLoader_NX::RegisterContent(FileSys::ManualContentProvider& provider) const {
+void AppLoader_NX::RegisterContent(FileSys::ManualContentProvider& provider,
+                                   bool include_application) const {
     if (impl->status != ResultStatus::Success) {
         return;
     }
@@ -824,9 +826,10 @@ void AppLoader_NX::RegisterContent(FileSys::ManualContentProvider& provider) con
     }
     // Add-ons converted from NUP packages and extracted dumps have no NCA: their RomFS is
     // served as one.
-    const auto& owner = impl->Archive().applications()[impl->app];
+    const auto& a = impl->Archive();
+    const auto& owner = a.applications()[impl->app];
     for (u32 si = owner.first_snapshot; si < owner.first_snapshot + owner.snapshot_count; ++si) {
-        const auto title_id = impl->Archive().snapshots()[si].addon_title_id();
+        const auto title_id = a.snapshots()[si].addon_title_id();
         if (!title_id) {
             continue;
         }
@@ -838,6 +841,86 @@ void AppLoader_NX::RegisterContent(FileSys::ManualContentProvider& provider) con
         }
         provider.AddEntry(FileSys::TitleType::AOC, FileSys::ContentRecordType::Data, *title_id,
                           FileSys::BuildAddOnContentNca(*title_id, FileSys::CreateRomFS(romfs)));
+    }
+
+    if (include_application && impl->program_id != 0 && file != nullptr) {
+        const u32 numeric_version = a.snapshots()[impl->selected].numeric_version;
+        const std::string version_str = impl->DisplayVersion(impl->selected);
+
+        std::string title;
+        for (u32 i = owner.first_localized; i < owner.first_localized + owner.localized_count;
+             ++i) {
+            if (a.localized_language(i) == PreferredLanguageTag() &&
+                !a.localized_title(i).empty()) {
+                title = std::string{a.localized_title(i)};
+                break;
+            }
+        }
+        if (title.empty()) {
+            title = std::string{a.title(impl->app)};
+        }
+        if (title.empty()) {
+            title = Common::ArtworkCache::ReadSidecarTitle(impl->program_id);
+        }
+        if (title.empty()) {
+            title = file->GetName();
+            if (const auto dot = title.rfind('.'); dot != std::string::npos && dot > 0) {
+                title.resize(dot);
+            }
+        }
+        const std::string publisher{a.publisher(impl->app)};
+
+        std::vector<u8> icon_bytes;
+        u32 icon_idx = Absent;
+        for (const auto tag : {PreferredLanguageTag(), std::string_view{"en-us"}}) {
+            for (u32 i = owner.first_localized; i < owner.first_localized + owner.localized_count;
+                 ++i) {
+                if (icon_idx == Absent && a.localized_language(i) == tag) {
+                    icon_idx = a.localized_entries()[i].icon_index;
+                }
+            }
+        }
+        if (icon_idx == Absent) {
+            icon_idx = owner.icon_index;
+        }
+        if (icon_idx != Absent) {
+            if (auto bytes = impl->session->media(icon_idx); bytes && bytes.value) {
+                icon_bytes = std::move(*bytes.value);
+            }
+        }
+        if (icon_bytes.empty()) {
+            (void)ReadOriginalIcon(impl->program_id, icon_bytes);
+        }
+        if (icon_bytes.empty()) {
+            icon_bytes = Common::ArtworkCache::ReadCachedArtwork(impl->program_id);
+        }
+
+        const bool had_native_program =
+            provider.HasEntry(impl->program_id, FileSys::ContentRecordType::Program);
+        const bool had_native_control =
+            provider.HasEntry(impl->program_id, FileSys::ContentRecordType::Control);
+        if (!had_native_program || !had_native_control) {
+            const FileSys::RawNACP raw_nacp =
+                impl->nacp != nullptr ? impl->nacp->raw : FileSys::RawNACP{};
+            if (!had_native_program) {
+                provider.AddEntry(FileSys::TitleType::Application,
+                                  FileSys::ContentRecordType::Program, impl->program_id, file);
+            }
+            if (!had_native_control) {
+                if (auto control_nca = FileSys::BuildControlNcaFromMetadata(
+                        impl->program_id, raw_nacp, icon_bytes, title, publisher, version_str);
+                    control_nca != nullptr) {
+                    provider.AddEntry(FileSys::TitleType::Application,
+                                      FileSys::ContentRecordType::Control, impl->program_id,
+                                      std::move(control_nca));
+                }
+            }
+        }
+        provider.SetApplicationInfo(impl->program_id, FileSys::ManualApplicationInfo{
+                                                          .launch_path = file->GetFullPath(),
+                                                          .version = numeric_version,
+                                                          .occupied_size = file->GetSize(),
+                                                      });
     }
 }
 

@@ -301,6 +301,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Selects whether the emulator should prefer to conserve memory or make maximum usage "
               "of available video memory for performance.\nAggressive mode may impact performance "
               "of other applications such as recording software."));
+    INSERT(Settings, vram_reserve_mib, tr("VRAM Reserve:"),
+           tr("Video memory kept free of what the driver allows the emulator, in MiB.\nAuto keeps "
+              "an eighth of the driver budget, at most 1024 MiB. Lower values leave more room for "
+              "textures on 4-8 GiB GPUs, though other programs and the driver may then need to "
+              "page memory."));
     INSERT(Settings, texture_cache_memory_limit, tr("Texture Cache Memory Limit:"),
            tr("The most video memory the texture cache fills before it starts removing textures "
               "that were not used recently.\nAuto uses three quarters of the GPU's memory. A "

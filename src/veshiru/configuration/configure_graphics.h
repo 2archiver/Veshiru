@@ -60,11 +60,12 @@ public:
     void ApplyConfiguration() override;
     void SetConfiguration() override;
 
-    /// Memory of the selected Vulkan device in bytes, 0 with another backend or if unknown.
+    /// Default and maximum selectable memory of the selected Vulkan device in bytes (0 if unknown).
     [[nodiscard]] u64 SelectedDeviceMemory() const;
+    [[nodiscard]] u64 SelectedMaxDeviceMemory() const;
 
 signals:
-    void DeviceMemoryChanged(u64 bytes);
+    void DeviceMemoryChanged(u64 bytes, u64 max_bytes);
 
 private:
     void changeEvent(QEvent* event) override;

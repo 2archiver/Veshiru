@@ -242,9 +242,11 @@ constexpr VkBorderColor ConvertBorderColor(const std::array<float, 4>& color) {
     }
     // RGBA8 is 4-16x the BC size: Ocarina of Time's uneven ASTC 8x8 images took ~3.4 GB instead
     // of ~0.6 GB at area loads on a Steam Deck, where VRAM and system RAM are the same memory and
-    // the load peaks got the emulator killed. Integrated GPUs and cards under 6 GiB keep BC.
+    // the load peaks got the emulator killed. Keep BC on discrete cards under 6 GiB and integrated
+    // GPUs under a 16 GiB unified budget; high-RAM unified systems (64-128 GiB APUs) can keep RGBA8.
     using namespace Common::Literals;
-    if (device.IsIntegrated() || device.GetDeviceLocalHeapSize() < 6_GiB) {
+    if ((device.IsIntegrated() && device.GetDeviceLocalMemory() < 16_GiB) ||
+        (!device.IsIntegrated() && device.GetDeviceLocalHeapSize() < 6_GiB)) {
         return false;
     }
     return HasUnevenBlockMips(info) && !IsHugeAstcArray(device, info);
@@ -1524,6 +1526,15 @@ void TextureCacheRuntime::EraseResolveShadow(VkImage msaa_image) {
 }
 
 void TextureCacheRuntime::BarrierFeedbackLoop() {
+    // The draw samples the bound depth/stencil image: ending the pass makes what earlier draws
+    // of the pass wrote to it visible. If none of them wrote it (particles and other
+    // transparent draws test depth without writing it), there is nothing to make visible.
+    // Ocarina of Time ended 3,500-7,250 render passes a second here. EDEN_NX2_FEEDBACK_ALWAYS=1
+    // ends the pass every time, as before.
+    static const bool always = std::getenv("EDEN_NX2_FEEDBACK_ALWAYS") != nullptr;
+    if (!always && scheduler.IsRenderPassActive() && !scheduler.RenderPassWroteDepthStencil()) {
+        return;
+    }
     scheduler.RequestOutsideRenderPassOperationContext();
 }
 
@@ -3019,6 +3030,20 @@ u64 MaxInFlightTranscodeBytesFor(const Device& device) {
         return u64{256} << 20;
     }
     return u64{512} << 20;
+}
+
+// Cap a single ASTC->BCn RGBA8 decode pass so multi-layer texture arrays (e.g. Ocarina of Time's
+// 90-layer 1365x1365 array = ~993 MiB RGBA8 + 248 MiB BC3 staging) stream a few layers at a time
+// instead of blowing past 4-8 GiB VRAM budgets.
+u64 MaxDecodeChunkBytesFor(const Device& device) {
+    const u64 vram = device.GetDeviceLocalMemory();
+    if (vram > 0 && vram < (u64{5} << 30)) {
+        return u64{32} << 20;
+    }
+    if (vram > 0 && vram < (u64{7} << 30)) {
+        return u64{48} << 20;
+    }
+    return u64{64} << 20;
 }
 
 bool EnvNotZero(const char* name) {
@@ -5380,25 +5405,24 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
     if (recycle_on_lookup) {
         RecycleFinishedTranscodes();
     }
-    const u64 max_in_flight = MaxInFlightTranscodeBytesFor(device);
-    u64 in_flight_bytes{};
-    for (const PendingTranscode& t : pending_transcodes) {
-        in_flight_bytes += TranscodeBytes(t);
+    // Decode large ASTC arrays a few layers at a time so a 90-layer 1365x1365 array allocates a
+    // ~30-60 MiB scratch image instead of a ~990 MiB one that triggers VRAM eviction loops on
+    // 4-8 GiB cards. Single-layer textures and small arrays keep the single-pass path.
+    const u64 max_chunk_bytes = MaxDecodeChunkBytesFor(device);
+    u64 layer_decode_bytes{};
+    for (u32 level = 0; level < levels; ++level) {
+        layer_decode_bytes += u64{(std::max)(scratch_width >> level, 1U)} *
+                              (std::max)(scratch_height >> level, 1U) * 4;
     }
-    while (!pending_transcodes.empty() && in_flight_bytes >= max_in_flight) {
-        const u64 oldest_tick = pending_transcodes.front().tick;
-        scheduler.Wait(oldest_tick);
-        RecycleFinishedTranscodes();
-        in_flight_bytes = 0;
-        for (const PendingTranscode& t : pending_transcodes) {
-            in_flight_bytes += TranscodeBytes(t);
-        }
-        if (!pending_transcodes.empty() && pending_transcodes.front().tick == oldest_tick) {
-            break;
-        }
-    }
+    const u32 chunk_layers =
+        (layers <= 1 || info.layer_stride == 0 || layer_decode_bytes * layers <= max_chunk_bytes)
+            ? layers
+            : static_cast<u32>(
+                  std::clamp<u64>(max_chunk_bytes / (std::max)(layer_decode_bytes, u64{1}), 1,
+                                  layers));
+    const bool chunked = chunk_layers < layers;
     const auto fits = [&](const PendingTranscode& t) {
-        if (t.levels != levels || t.layers != layers) {
+        if (t.levels != levels || t.layers != chunk_layers) {
             return false;
         }
         if (t.width == scratch_width && t.height == scratch_height) {
@@ -5429,7 +5453,7 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
             .format = DecodeFormat,
             .extent = {scratch_width, scratch_height, 1},
             .mipLevels = levels,
-            .arrayLayers = layers,
+            .arrayLayers = chunk_layers,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .tiling = VK_IMAGE_TILING_OPTIMAL,
             .usage = VK_IMAGE_USAGE_STORAGE_BIT,
@@ -5439,18 +5463,31 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
         };
         vk::Image decode = memory_allocator.TryCreateImage(decode_ci, true);
-        if (!decode && !free_transcodes.empty()) {
-            // The GPU is done with these: their memory goes back to the driver now.
+        if (!decode && (!free_transcodes.empty() || !pending_transcodes.empty())) {
+            // Drain already-submitted decode intermediates (strictly older than the current tick so
+            // `map`'s staging buffer is never recycled before this texture's decode reads it).
+            const u64 current_tick = scheduler.CurrentTick();
+            u64 wait_tick = 0;
+            for (const PendingTranscode& t : pending_transcodes) {
+                if (t.tick < current_tick) {
+                    wait_tick = (std::max)(wait_tick, t.tick);
+                }
+            }
+            if (wait_tick != 0) {
+                scheduler.Wait(wait_tick);
+                RecycleFinishedTranscodes();
+            }
             free_transcodes.clear();
+            device.FlushPendingMemoryFrees();
             decode = memory_allocator.TryCreateImage(decode_ci, true);
         }
         if (!decode) {
             static u32 logged{};
             if (logged++ < 32) {
                 LOG_ERROR(Render_Vulkan,
-                          "No memory to decode ASTC image {:#x} ({}x{}, {} levels); uploading it "
-                          "again when it is next used",
-                          image.gpu_addr, width, height, levels);
+                          "No memory to decode ASTC image {:#x} ({}x{}x{}, {} levels); uploading "
+                          "it again when it is next used",
+                          image.gpu_addr, width, height, layers, levels);
             }
             image.flags |= VideoCommon::ImageFlagBits::CpuModified;
             TransitionImageLayout(image);
@@ -5463,77 +5500,152 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
             .width = scratch_width,
             .height = scratch_height,
             .levels = levels,
-            .layers = layers,
+            .layers = chunk_layers,
             .unused_frames = 0,
             .last_use = 0,
+            .layer_views = {},
         };
         for (u32 level = 0; level < levels; ++level) {
             pending.views.push_back(
                 MakeStorageView(device.GetLogical(), level, *pending.image, DecodeFormat));
         }
     }
+    if (chunked && pending.layer_views.empty()) {
+        pending.layer_views.reserve(static_cast<size_t>(levels) * chunk_layers);
+        for (u32 level = 0; level < levels; ++level) {
+            for (u32 layer = 0; layer < chunk_layers; ++layer) {
+                pending.layer_views.push_back(MakeStorageView(
+                    device.GetLogical(), level, *pending.image, DecodeFormat, layer, 1));
+            }
+        }
+    }
     // The decode image is only read by the encode that follows, so the decode needs no submit of
     // its own: both go in the same one. EDEN_NX2_ASTC_ONE_SUBMIT=0 submits after the decode.
     static const bool one_submit = EnvNotZero("EDEN_NX2_ASTC_ONE_SUBMIT");
-    astc_decoder_pass->AssembleInto(
-        info, 0, image.guest_size_bytes,
-        ASTCDecoderPass::Target{
-            .image = *pending.image,
-            .aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .initialized = false,
-            .level_view = [&pending](s32 level) { return *pending.views[level]; },
-            .wait = !one_submit,
-            .levels = levels,
-        },
-        map, swizzles);
-
-    // Encode every level into one buffer, then copy it into the image.
     const bool bc3 = !IsOpaqueBc1Astc(device, info) &&
                      Settings::GetAstcRecompression() != Settings::AstcRecompression::Bc1;
     const u64 block_bytes = bc3 ? 16 : 8;
-    boost::container::small_vector<VideoCommon::BufferImageCopy, 16> copies;
-    u64 total = 0;
-    for (u32 level = 0; level < levels; ++level) {
-        const u32 level_width = (std::max)(width >> level, 1U);
-        const u32 level_height = (std::max)(height >> level, 1U);
-        const u32 blocks_x = Common::DivCeil(level_width, 4U);
-        const u32 blocks_y = Common::DivCeil(level_height, 4U);
-        const u64 size = u64{blocks_x} * blocks_y * layers * block_bytes;
-        copies.push_back({
-            .buffer_offset = total,
-            .buffer_size = size,
-            .buffer_row_length = blocks_x * 4,
-            .buffer_image_height = blocks_y * 4,
-            .image_subresource{
-                .base_level = static_cast<s32>(level),
-                .base_layer = 0,
-                .num_layers = static_cast<s32>(layers),
-            },
-            .image_offset{0, 0, 0},
-            .image_extent{level_width, level_height, 1},
+    const bool low_vram =
+        device.GetDeviceLocalMemory() > 0 && device.GetDeviceLocalMemory() < (u64{5} << 30);
+    boost::container::small_vector<u32, 16> chunk_layer_indices;
+    if (chunked) {
+        chunk_layer_indices.resize(chunk_layers);
+        for (u32 i = 0; i < chunk_layers; ++i) {
+            chunk_layer_indices[i] = i;
+        }
+    }
+    u64 unsubmitted_staging_bytes = 0;
+    for (u32 first_layer = 0; first_layer < layers; first_layer += chunk_layers) {
+        const u32 count = (std::min)(chunk_layers, layers - first_layer);
+        if (chunked) {
+            StagingBufferRef chunk_map = map;
+            chunk_map.offset += VkDeviceSize{first_layer} * info.layer_stride;
+            astc_decoder_pass->AssembleInto(
+                info, 0, image.guest_size_bytes,
+                ASTCDecoderPass::Target{
+                    .image = *pending.image,
+                    .aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .initialized = first_layer != 0,
+                    .level_view = [&pending](s32 level) { return *pending.views[level]; },
+                    .wait = !one_submit,
+                    .layers = std::span<const u32>(chunk_layer_indices.data(), count),
+                    .layer_view =
+                        [&pending, chunk_layers](s32 level, u32 layer) {
+                            return *pending.layer_views[static_cast<size_t>(level) * chunk_layers +
+                                                        layer];
+                        },
+                    .levels = levels,
+                },
+                chunk_map, swizzles);
+        } else {
+            astc_decoder_pass->AssembleInto(
+                info, 0, image.guest_size_bytes,
+                ASTCDecoderPass::Target{
+                    .image = *pending.image,
+                    .aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .initialized = false,
+                    .level_view = [&pending](s32 level) { return *pending.views[level]; },
+                    .wait = !one_submit,
+                    .levels = levels,
+                },
+                map, swizzles);
+        }
+
+        // Encode every level of these layers into one buffer, then copy it into the image.
+        boost::container::small_vector<VideoCommon::BufferImageCopy, 16> copies;
+        u64 total = 0;
+        for (u32 level = 0; level < levels; ++level) {
+            const u32 level_width = (std::max)(width >> level, 1U);
+            const u32 level_height = (std::max)(height >> level, 1U);
+            const u32 blocks_x = Common::DivCeil(level_width, 4U);
+            const u32 blocks_y = Common::DivCeil(level_height, 4U);
+            const u64 size = u64{blocks_x} * blocks_y * count * block_bytes;
+            copies.push_back({
+                .buffer_offset = total,
+                .buffer_size = size,
+                .buffer_row_length = blocks_x * 4,
+                .buffer_image_height = blocks_y * 4,
+                .image_subresource{
+                    .base_level = static_cast<s32>(level),
+                    .base_layer = static_cast<s32>(first_layer),
+                    .num_layers = static_cast<s32>(count),
+                },
+                .image_offset{0, 0, 0},
+                .image_extent{level_width, level_height, 1},
+            });
+            total += size;
+        }
+        if (chunked && low_vram && unsubmitted_staging_bytes > 0 &&
+            unsubmitted_staging_bytes + total > (u64{64} << 20)) {
+            scheduler.Flush();
+            unsubmitted_staging_bytes = 0;
+        }
+        const auto output = staging_buffer_pool.Request(total, MemoryUsage::DeviceLocal);
+        for (u32 level = 0; level < levels; ++level) {
+            bc_encoder_pass->Encode(*pending.views[level], copies[level].image_extent.width,
+                                    copies[level].image_extent.height, count, bc3, output.buffer,
+                                    output.offset, total, copies[level].buffer_offset);
+        }
+        scheduler.Record([](vk::CommandBuffer cmdbuf) {
+            const VkMemoryBarrier barrier{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+            };
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                   VK_PIPELINE_STAGE_TRANSFER_BIT, 0, barrier);
         });
-        total += size;
+        image.UploadMemory(output.buffer, output.offset, copies);
+        unsubmitted_staging_bytes += total;
     }
-    const auto output = staging_buffer_pool.Request(total, MemoryUsage::DeviceLocal);
-    for (u32 level = 0; level < levels; ++level) {
-        bc_encoder_pass->Encode(*pending.views[level], copies[level].image_extent.width,
-                                copies[level].image_extent.height, layers, bc3, output.buffer,
-                                output.offset, total, copies[level].buffer_offset);
-    }
-    scheduler.Record([](vk::CommandBuffer cmdbuf) {
-        const VkMemoryBarrier barrier{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-        };
-        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                               0, barrier);
-    });
-    image.UploadMemory(output.buffer, output.offset, copies);
     pending.tick = scheduler.CurrentTick();
     pending.last_use = ++transcode_use_counter;
     pending_transcodes.push_back(std::move(pending));
+
+    // Throttle in-flight decode scratch AFTER recording this texture's decode and encode: waiting
+    // before recording finished the submission `map` belonged to, letting the staging pool hand it
+    // to the next upload before the decode read it (corrupted textures on cold shader cache, #905).
+    const u64 max_in_flight = MaxInFlightTranscodeBytesFor(device);
+    u64 in_flight_bytes{};
+    for (const PendingTranscode& t : pending_transcodes) {
+        in_flight_bytes += TranscodeBytes(t);
+    }
+    while (pending_transcodes.size() > 1 && in_flight_bytes > max_in_flight) {
+        const u64 oldest_tick = pending_transcodes.front().tick;
+        if (oldest_tick >= scheduler.CurrentTick()) {
+            scheduler.Flush();
+        }
+        scheduler.Wait(oldest_tick);
+        RecycleFinishedTranscodes();
+        in_flight_bytes = 0;
+        for (const PendingTranscode& t : pending_transcodes) {
+            in_flight_bytes += TranscodeBytes(t);
+        }
+        if (!pending_transcodes.empty() && pending_transcodes.front().tick == oldest_tick) {
+            break;
+        }
+    }
 }
 
 bool TextureCacheRuntime::ClearImage(Image& image) {

@@ -151,6 +151,8 @@ struct ImageBase {
     /// Last frame the image was prepared for use in (TextureCache::PrepareImage), 0 before.
     u64 last_use_frame = 0;
     size_t lru_index = SIZE_MAX;
+    /// Index in TextureCache::overlapping_image_ids, or ~0U when not tracked there.
+    u32 overlap_list_index = ~u32{0};
 
     std::array<u32, MAX_MIP_LEVELS> mip_level_offsets{};
 

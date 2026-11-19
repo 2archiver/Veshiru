@@ -213,3 +213,89 @@ TEST_CASE("A route through a pointer array keeps the bound slots past those sear
     CHECK(std::ranges::find(route, std::pair{1U, 0U}) == route.end());
 }
 
+TEST_CASE("Multi-buffer global memory helpers stay out-of-line outside Task and Mesh stages",
+          "[shader][global_memory_routes]") {
+    static constexpr u32 op_function{54};
+    static constexpr u32 dont_inline_mask{2};
+    const auto count_dont_inline = [](const std::vector<u32>& code) {
+        size_t count{};
+        for (size_t i = 5; i < code.size();) {
+            const u32 words{code[i] >> 16};
+            REQUIRE(words > 0);
+            if ((code[i] & 0xffff) == op_function && words >= 4 &&
+                (code[i + 3] & dont_inline_mask) != 0) {
+                ++count;
+            }
+            i += words;
+        }
+        return count;
+    };
+
+    const auto emit_for_stage = [](Stage stage, size_t buffer_count, bool select = false,
+                                   bool mesh_as_compute = false) {
+        ObjectPool<IR::Inst> inst_pool;
+        IR::Block block{inst_pool};
+        IR::IREmitter ir{block};
+        const IR::U64 addr{ir.PackUint2x32(
+            ir.CompositeConstruct(ir.GetCbuf(ir.Imm32(0), ir.Imm32(0x40)), ir.Imm32(0)))};
+        ir.WriteGlobal32(addr, ir.LoadGlobal32(addr));
+
+        IR::Program program;
+        program.stage = stage;
+        program.workgroup_size = {32, 1, 1};
+        program.mesh.payload_words = 32;
+        program.mesh.max_vertices = 3;
+        program.mesh.max_primitives = 1;
+        program.mesh.topology = 4;
+        program.blocks = {&block};
+        program.post_order_blocks = {&block};
+        program.syntax_list = {{{.block = &block}, IR::AbstractSyntaxNode::Type::Block},
+                               {{}, IR::AbstractSyntaxNode::Type::Return}};
+        NativeEnvironment env;
+        Optimization::CollectShaderInfoPass(env, program);
+        program.info.is_task = stage == Stage::Task;
+        program.info.is_mesh = stage == Stage::Mesh;
+        program.info.native_global_bounds = true;
+        program.info.constant_buffer_descriptors = {{0, 1}};
+        program.info.storage_buffers_descriptors.clear();
+        for (size_t i = 0; i < buffer_count; ++i) {
+            program.info.storage_buffers_descriptors.push_back({
+                .cbuf_index = 0,
+                .cbuf_offset = static_cast<u32>(i * 8),
+                .count = 1,
+                .is_written = true,
+            });
+        }
+
+        Profile profile{};
+        profile.supported_spirv = 0x00010500;
+        profile.support_int64 = true;
+        profile.support_descriptor_aliasing = true;
+        profile.unified_descriptor_binding = true;
+        profile.min_ssbo_alignment = 16;
+        profile.select_global_memory_buffer = select;
+        RuntimeInfo runtime_info{};
+        runtime_info.mesh_as_compute = mesh_as_compute;
+        Backend::Bindings binding{};
+        return Backend::SPIRV::EmitSPIRV(profile, runtime_info, program, binding);
+    };
+
+    // Multi-buffer classic graphics helpers (32/64/128-bit load + write) stay out-of-line (#907).
+    CHECK(count_dont_inline(emit_for_stage(Stage::Fragment, 4)) == 6);
+    CHECK(count_dont_inline(emit_for_stage(Stage::VertexB, 4)) == 6);
+    // Single-buffer routes stay inline on both branch-chain and OpSelect compute paths.
+    CHECK(count_dont_inline(emit_for_stage(Stage::Fragment, 1)) == 0);
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 1)) == 0);
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 1, true)) == 0);
+    // Multi-buffer OpSelect compute uses a single DontInline search_function while keeping
+    // load/write helpers themselves inline.
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4, true)) == 1);
+    // Non-select Compute, Task, Mesh, and emulated mesh-as-compute keep helpers inline to avoid
+    // NVIDIA foliage culling and Hyrule Field tree miscompiles in Ocarina of Time.
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4)) == 0);
+    CHECK(count_dont_inline(emit_for_stage(Stage::Task, 4)) == 0);
+    CHECK(count_dont_inline(emit_for_stage(Stage::Mesh, 4)) == 0);
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4, false, true)) == 0);
+}
+
+

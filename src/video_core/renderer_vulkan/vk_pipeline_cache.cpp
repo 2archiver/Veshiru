@@ -2507,6 +2507,8 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
     const bool depth_tested =
         native ? mode != NativePendingMode::Wait && regs.zeta_enable != 0 &&
                      regs.depth_test_enable != 0 && !regs.IsMeshEnabled() &&
+                     regs.zpass_pixel_count_enable == 0 && !pipeline->WritesStorage() &&
+                     !pipeline->WritesImages() &&
                      ColorWritesHaveHistory(
                          (std::min<u32>)(regs.rt_control.count,
                                          static_cast<u32>(Maxwell::NumRenderTargets)),
@@ -2515,10 +2517,13 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
                              return texture_cache.ColorTargetWrittenBeforeThisFrame(rt_index);
                          })
                : regs.zeta_enable != 0;
-    // Native draws are judged by the heuristic only when a mode other than Wait is chosen.
-    const bool can_discard = CanDiscardPendingDraw(
-        native, depth_tested, draw_state.draw_element_count, draw_state.draw_element_count,
-        native && mode != NativePendingMode::Wait);
+    // Native draws must satisfy the full depth/history/non-writer/non-mesh predicate above:
+    // passing raw vertex counts here previously allowed depthless post-process, exposure/bloom,
+    // first-write RT, occlusion-query, and mesh draws with > 6 elements to bypass that guard.
+    const u32 discard_elements = native ? 0U : draw_state.draw_element_count;
+    const bool can_discard =
+        CanDiscardPendingDraw(native, depth_tested, discard_elements, discard_elements,
+                              native && mode != NativePendingMode::Wait);
     bool discard = can_discard;
     if (native) {
         switch (DecideNativePending(mode, can_discard, native_wait_budget_us)) {

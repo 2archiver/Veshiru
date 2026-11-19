@@ -140,7 +140,7 @@ struct SharedCodeCache final {
 
     void Leave(UserConfig::Counters* counters) {
         active_runs.fetch_sub(1);
-        if (pending_clear.load()) {
+        if (pending_clear.load(std::memory_order_acquire)) {
             TryClear(counters);
         }
     }
@@ -152,7 +152,7 @@ struct SharedCodeCache final {
 
     /// Blocks are gone: Jits must drop their RSB and fast dispatch entries.
     void DroppedBlocksLocked() {
-        epoch.fetch_add(1);
+        epoch.fetch_add(1, std::memory_order_release);
         HaltAllLocked();
     }
 
@@ -161,12 +161,14 @@ struct SharedCodeCache final {
     /// code stays until a full clear, so a Jit still in it finishes as before the invalidation.
     void ApplyRangesLocked() {
         if (pending_ranges.empty()) {
+            has_pending_ranges.store(false, std::memory_order_release);
             return;
         }
         if (emitter->InvalidateCacheRanges(pending_ranges)) {
             DroppedBlocksLocked();
         }
         pending_ranges.clear();
+        has_pending_ranges.store(false, std::memory_order_release);
     }
 
     void HaltAllLocked() {
@@ -186,6 +188,7 @@ struct SharedCodeCache final {
     std::atomic<u64> invalidations{0};
     std::atomic<u32> active_runs{0};
     std::atomic<bool> pending_clear{false};
+    std::atomic<bool> has_pending_ranges{false};
     boost::icl::interval_set<u64> pending_ranges;
 
 private:
@@ -206,7 +209,8 @@ public:
         block_of_code->ClearCache();
         emitter->ClearCache();
         pending_ranges.clear();
-        epoch.fetch_add(1);
+        has_pending_ranges.store(false, std::memory_order_release);
+        epoch.fetch_add(1, std::memory_order_release);
         pending_clear.store(false);
     }
 };
@@ -268,10 +272,22 @@ public:
     }
 
     void InvalidateCacheRange(u64 start_address, size_t length) {
+        if (length == 0) {
+            return;
+        }
         std::unique_lock lock{cache->mutex};
         const auto end_address = static_cast<u64>(start_address + length - 1);
         cache->pending_ranges.add(boost::icl::discrete_interval<u64>::closed(start_address, end_address));
-        cache->invalidations.fetch_add(1);
+        cache->invalidations.fetch_add(1, std::memory_order_release);
+        if (!is_executing) {
+            // Apply immediately while this core is outside JIT code: invalidating data or
+            // uncompiled NRO pages clears pending_ranges without halting running cores or flushing
+            // any fast_dispatch_table, while dropping a real compiled block still halts all cores
+            // and advances epoch via DroppedBlocksLocked().
+            cache->ApplyRangesLocked();
+            return;
+        }
+        cache->has_pending_ranges.store(true, std::memory_order_release);
         cache->HaltAllLocked();
     }
 
@@ -389,14 +405,17 @@ private:
     /// Waits out a full clear and drops the RSB and fast dispatch entries of dropped blocks.
     void Enter() {
         // Cleared first: a clear or invalidation requested after this halts the Jit again.
-        ClearHalt(HaltReason::CacheInvalidation);
+        if ((jit_state.halt_reason & static_cast<u32>(HaltReason::CacheInvalidation)) != 0)
+            [[unlikely]] {
+            ClearHalt(HaltReason::CacheInvalidation);
+        }
         cache->Enter(conf.counters);
-        if (cache->invalidations.load() != applied_invalidations) {
+        if (cache->has_pending_ranges.load(std::memory_order_acquire)) [[unlikely]] {
             std::unique_lock lock{cache->mutex};
             cache->ApplyRangesLocked();
-            applied_invalidations = cache->invalidations.load();
         }
-        if (const u64 now = cache->epoch.load(); now != epoch) {
+        if (const u64 now = cache->epoch.load(std::memory_order_acquire); now != epoch)
+            [[unlikely]] {
             epoch = now;
             jit_state.ResetRSB();
             std::fill(fast_dispatch_table.begin(), fast_dispatch_table.end(), A64EmitX64::FastDispatchEntry{});
@@ -447,7 +466,7 @@ private:
 
         while (true) {
             // Translated without the lock; an invalidation meanwhile may have changed the code.
-            const u64 invalidations = cache->invalidations.load();
+            const u64 invalidations = cache->invalidations.load(std::memory_order_acquire);
             const auto get_code = [this](u64 vaddr) { return conf.callbacks->MemoryReadCode(vaddr); };
             // LocationDescriptor ctor() does important ops (like tflags) do not skip
             auto const arch_descriptor = A64::LocationDescriptor{descriptor};
@@ -459,7 +478,7 @@ private:
             cache->ApplyRangesLocked();
             if (auto block = cache->emitter->GetBasicBlock(descriptor))
                 return block->entrypoint;
-            if (invalidations != cache->invalidations.load())
+            if (invalidations != cache->invalidations.load(std::memory_order_relaxed))
                 continue;
 
             constexpr size_t MINIMUM_REMAINING_CODESIZE = 1 * 1024 * 1024;
@@ -491,8 +510,6 @@ private:
     std::vector<A64EmitX64::FastDispatchEntry> fast_dispatch_table;
     /// The cache's epoch this Jit's RSB and fast dispatch table are valid for.
     u64 epoch = 0;
-    /// The cache's invalidations this Jit has seen applied.
-    u64 applied_invalidations = 0;
     bool is_executing = false;
 };
 

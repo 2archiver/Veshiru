@@ -465,6 +465,15 @@ public:
     void RegisterApplicationChangedCallback(ApplicationChangedCallback&& callback);
     void NotifyApplicationChanged(u64 program_id);
 
+    /// Callback invoked when a system applet (qlaunch) launches a full application session.
+    /// `preselected_user_bytes` holds a 16-byte raw UUID when selected, or is empty otherwise.
+    using LaunchApplicationCallback = std::function<void(
+        u64 program_id, std::string filepath, std::vector<u8> preselected_user_bytes)>;
+    void RegisterLaunchApplicationCallback(LaunchApplicationCallback&& callback);
+    [[nodiscard]] bool HasLaunchApplicationCallback() const;
+    bool RequestLaunchApplication(u64 program_id, std::string filepath,
+                                  std::vector<u8> preselected_user_bytes = {});
+
     /// Applies any changes to settings to this core instance.
     void ApplySettings();
 

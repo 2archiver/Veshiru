@@ -145,21 +145,45 @@ TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManag
 }
 
 template <class P>
+void TextureCache<P>::TrackOverlappingImage(ImageId image_id, ImageBase& image) {
+    if (image.overlap_list_index == ~u32{0}) {
+        image.overlap_list_index = static_cast<u32>(overlapping_image_ids.size());
+        overlapping_image_ids.push_back(image_id);
+    }
+}
+
+template <class P>
+void TextureCache<P>::UntrackOverlappingImage(ImageBase& image) {
+    const u32 index = image.overlap_list_index;
+    if (index == ~u32{0}) {
+        return;
+    }
+    const ImageId back_id = overlapping_image_ids.back();
+    overlapping_image_ids[index] = back_id;
+    slot_images[back_id].overlap_list_index = index;
+    overlapping_image_ids.pop_back();
+    image.overlap_list_index = ~u32{0};
+}
+
+template <class P>
 void TextureCache<P>::DeleteSupersededImages() {
     // Ocarina of Time moves its render targets within a memory pool every frame while the camera
     // moves (about 45 images a frame in the Castle Town guard house), far more than the
     // collector removes. Once the memory of an image belongs entirely to newer images (see
     // ClassifySuperseded for what that has to prove) nothing can read it any more.
+    // Scan only registered images with active overlaps rather than walking the full texture LRU.
     static constexpr u64 MinFramesUnused = 2;
-    if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed) || frame_tick <= MinFramesUnused ||
-        frame_tick - superseded_activity_frame > MinFramesUnused + 1) {
+    if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed) || overlapping_image_ids.empty() ||
+        frame_tick <= MinFramesUnused || frame_tick - superseded_activity_frame > MinFramesUnused + 1) {
         return;
     }
+    const u64 cutoff = frame_tick - MinFramesUnused;
     superseded_ids.clear();
-    lru_cache.ForEachItemBelow(frame_tick - MinFramesUnused, [this](ImageId image_id) {
+    for (const ImageId image_id : overlapping_image_ids) {
         const Image& image = slot_images[image_id];
-        if (image.overlapping_images.empty()) {
-            return false;
+        if (image.overlapping_images.empty() || image.lru_index == SIZE_MAX ||
+            static_cast<s64>(cutoff) - static_cast<s64>(lru_cache.GetTick(image.lru_index)) < 0) {
+            continue;
         }
         switch (ClassifySuperseded(slot_images, image)) {
         case Supersession::Clean:
@@ -172,8 +196,7 @@ void TextureCache<P>::DeleteSupersededImages() {
         case Supersession::None:
             break;
         }
-        return false;
-    });
+    }
     for (const ImageId image_id : superseded_ids) {
         Image& image = slot_images[image_id];
         ++(image.IsSafeGpuCopy() ? superseded_rewritten_deletes : superseded_clean_deletes);
@@ -375,10 +398,47 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
     };
     Configure(false);
     // Images newer ones partly overwrote (BadOverlap: their bytes belong to the newer images, so
-    // they are dropped without a download) get the mode's age, not the retention floor. Ocarina
-    // allocates each frame's render targets at shifting offsets of a transient heap: in the
-    // Skulltula House about 9 a frame, kept 150 frames, filled 16 GB of a 24 GB card (#1755).
-    if (ticks_to_destroy > mode_age) {
+    // they are dropped without a download) can be collected once idle for 30 frames, up to 64 per
+    // frame. Ocarina allocates ~9-11 render targets a frame at shifting offsets of a transient
+    // heap, which outpaced the normal 10-image pass and filled 4-8 GB cards.
+    static const u64 stale_age = [] {
+        const char* const value = std::getenv("EDEN_NX2_TC_STALE_AGE");
+        return value != nullptr ? std::strtoull(value, nullptr, 10) : 30ULL;
+    }();
+    if (stale_age != 0 && frame_tick > stale_age && !overlapping_image_ids.empty()) {
+        const u64 cutoff = frame_tick - stale_age;
+        boost::container::small_vector<ImageId, 64> stale_candidates;
+        for (const ImageId image_id : overlapping_image_ids) {
+            const Image& image = slot_images[image_id];
+            if (False(image.flags & ImageFlagBits::BadOverlap) ||
+                True(image.flags & ImageFlagBits::CostlyLoad) || image.lru_index == SIZE_MAX ||
+                static_cast<s64>(cutoff) -
+                        static_cast<s64>(lru_cache.GetTick(image.lru_index)) <
+                    0) {
+                continue;
+            }
+            stale_candidates.push_back(image_id);
+        }
+        if (!stale_candidates.empty()) {
+            const size_t saved_iterations = num_iterations;
+            num_iterations = (std::max)(num_iterations, size_t{64});
+            for (const ImageId image_id : stale_candidates) {
+                if (!slot_images.contains(image_id)) {
+                    continue;
+                }
+                const Image& image = slot_images[image_id];
+                if (False(image.flags & ImageFlagBits::Registered) ||
+                    False(image.flags & ImageFlagBits::BadOverlap)) {
+                    continue;
+                }
+                if (Cleanup(image_id)) {
+                    break;
+                }
+            }
+            num_iterations = saved_iterations;
+        }
+    }
+    if (ticks_to_destroy > mode_age && !overlapping_image_ids.empty()) {
         evict_bad_overlaps = true;
         Collect(mode_age);
         evict_bad_overlaps = false;
@@ -458,7 +518,8 @@ void TextureCache<P>::MarkStaleTransfer(ImageBase& image) {
 
 template <class P>
 void TextureCache<P>::RetireStaleTargets() {
-    if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed) || frame_tick <= STALE_TARGET_AGE) {
+    if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed) || overlapping_image_ids.empty() ||
+        frame_tick <= STALE_TARGET_AGE) {
         return;
     }
     // Bad-overlap targets can fill the cache before collection starts. Retire them at the
@@ -498,18 +559,16 @@ void TextureCache<P>::RetireStaleTargets() {
     };
     boost::container::small_vector<ImageId, 64> aged;
     bool references_collected = false;
-    const size_t resume_from = stale_retire_resume;
-    size_t matched = 0;
+    const size_t total_overlaps = overlapping_image_ids.size();
+    const size_t start = stale_retire_resume % total_overlaps;
     size_t examined = 0;
-    bool stopped = false;
-    lru_cache.ForEachItemBelow(cutoff, [&](ImageId image_id) {
+    size_t offset = 0;
+    for (; offset < total_overlaps; ++offset) {
+        const ImageId image_id = overlapping_image_ids[(start + offset) % total_overlaps];
         const Image& image = slot_images[image_id];
-        if (False(image.flags & ImageFlagBits::BadOverlap) || !GpuWrittenRenderTarget(image) ||
-            !StaleMarkerCovers(image)) {
-            return false;
-        }
-        if (matched++ < resume_from) {
-            return false; // Examined by an earlier scan of this round.
+        if (False(image.flags & ImageFlagBits::BadOverlap) || !unused(image_id) ||
+            !GpuWrittenRenderTarget(image) || !StaleMarkerCovers(image)) {
+            continue;
         }
         if (!references_collected) {
             CollectStaleReferences();
@@ -519,11 +578,12 @@ void TextureCache<P>::RetireStaleTargets() {
         if (!kept(image_id, image)) {
             aged.push_back(image_id);
         }
-        stopped = aged.size() >= MaxPerFrame || examined >= MaxExaminedPerFrame;
-        return stopped;
-    });
-    // A scan that reaches the end of the old candidates starts the next round at the oldest.
-    stale_retire_resume = stopped ? resume_from + examined : 0;
+        if (aged.size() >= MaxPerFrame || examined >= MaxExaminedPerFrame) {
+            ++offset;
+            break;
+        }
+    }
+    stale_retire_resume = offset < total_overlaps ? (start + offset) % total_overlaps : 0;
     if (aged.empty()) {
         return;
     }
@@ -546,10 +606,14 @@ void TextureCache<P>::RetireStaleTargets() {
         if (remaining == 0) {
             break;
         }
+        if (!slot_images.contains(image_id)) {
+            continue;
+        }
         const Image& image = slot_images[image_id];
         // Retiring the images before this one only removes partners and overlaps, so it cannot
         // make this one kept; it can clear its BadOverlap once no overlap is left.
-        if (False(image.flags & ImageFlagBits::BadOverlap)) {
+        if (False(image.flags & ImageFlagBits::Registered) ||
+            False(image.flags & ImageFlagBits::BadOverlap)) {
             continue;
         }
         // A sampled twin with no other aliases goes with its target when both are unused.
@@ -568,9 +632,6 @@ void TextureCache<P>::RetireStaleTargets() {
         }
         if (retire(image_id)) {
             --remaining;
-            if (stopped) {
-                --stale_retire_resume; // Left the LRU: no longer in front of the resume point.
-            }
             for (const ImageId partner_id : partners) {
                 if (retire(partner_id)) {
                     --remaining;
@@ -631,7 +692,7 @@ template <class P>
 u64 TextureCache<P>::QueryDeviceMemory() {
     if constexpr (requires { runtime.GetDeviceMemoryBudget(); }) {
         const u64 budget = runtime.GetDeviceMemoryBudget();
-        if (budget > 2_GiB) {
+        if (budget >= TextureCacheMemory::MinTrackedDeviceBudget) {
             return budget;
         }
     }
@@ -748,7 +809,7 @@ void TextureCache<P>::TickFrame() {
                 retention_limit = 0;
                 if (budget >= TextureCacheMemory::MinTrackedDeviceBudget) {
                     device_memory_total = budget;
-                    const u64 margin = (std::min)(budget / 8, 1_GiB);
+                    const u64 margin = Settings::GetVramReserve(budget);
                     if constexpr (requires { runtime.GetDeviceMemorySlack(); }) {
                         // The usage counted here leaves out the unused part of the allocator's
                         // blocks, which the driver counts and a full heap cannot hand to a new
@@ -1150,7 +1211,8 @@ void TextureCache<P>::MemoizeTextures(SampledTextureMemo& memo,
     }
     const bool via_header_index =
         maxwell3d->regs.sampler_binding == Tegra::Engines::Maxwell3D::Regs::SamplerBinding::ViaHeaderBinding;
-    const bool native_tiling = gpu_memory->UsesNativeTiling();
+    const bool byte_offset_handles =
+        Tegra::Texture::UsesHeaderByteOffsetHandles(gpu_memory->UsesNativeTiling());
     // The descriptors are read through one host page each (see DescriptorTable::Read).
     const auto host_of = [&](GPUVAddr address, size_t size) -> const u8* {
         if ((address & Core::Memory::VESHIRU_PAGEMASK) + size > Core::Memory::VESHIRU_PAGESIZE) {
@@ -1161,7 +1223,7 @@ void TextureCache<P>::MemoizeTextures(SampledTextureMemo& memo,
     for (size_t i = 0; i < reads.size(); ++i) {
         const auto [view_index, sampler_index] = Tegra::Texture::TexturePair(reads[i].raw, via_header_index);
         const u32 tic_index =
-            Tegra::Texture::TextureHeaderIndex(view_index, image_table.current_limit, native_tiling);
+            Tegra::Texture::TextureHeaderIndex(view_index, image_table.current_limit, byte_offset_handles);
         if (!views[i].id || !samplers[i] || tic_index > image_table.current_limit ||
             sampler_index > sampler_table.current_limit) {
             return;
@@ -1313,7 +1375,7 @@ SamplerId TextureCache<P>::GetSamplerId(u32 index, bool compute) {
         LOG_TRACE(HW_GPU, "Invalid sampler index={}", index);
         return NULL_SAMPLER_ID;
     }
-    auto const [descriptor, is_new] = table.Read(*gpu_memory, index);
+    auto const [descriptor, is_new] = table.ReadReference(*gpu_memory, index, !compute);
     if (is_new) {
         auto const id = FindSampler(descriptor, compute);
         table.bound_ids[index] = id;
@@ -1598,13 +1660,14 @@ bool TextureCache<P>::ColorTargetWrittenBeforeThisFrame(u32 index) noexcept {
 template <class P>
 ImageViewId TextureCache<P>::VisitImageView(u32 index, bool compute) {
     auto& table = compute ? channel_state->compute_image_table : channel_state->graphics_image_table;
-    index = Tegra::Texture::TextureHeaderIndex(index, table.current_limit,
-                                               gpu_memory->UsesNativeTiling());
+    index = Tegra::Texture::TextureHeaderIndex(
+        index, table.current_limit,
+        Tegra::Texture::UsesHeaderByteOffsetHandles(gpu_memory->UsesNativeTiling()));
     if (index > table.current_limit) {
         LOG_TRACE(HW_GPU, "Invalid image view index={}", index);
         return NULL_IMAGE_VIEW_ID;
     }
-    auto const [descriptor, is_new] = table.Read(*gpu_memory, index);
+    auto const [descriptor, is_new] = table.ReadReference(*gpu_memory, index, !compute);
     if (is_new) {
         if (IsValidEntry(*gpu_memory, descriptor)) {
             const auto [pair, is_new_tc] = channel_state->image_views.try_emplace(descriptor);
@@ -3672,7 +3735,9 @@ void TextureCache<P>::NoteWholeClears() {
         if (ClearOverwritesWhole(image.info, image.gpu_addr) &&
             slot_image_views[view_id].size == image.info.size) {
             image.full_write_tick = image.modification_tick;
-            superseded_activity_frame = frame_tick;
+            if (!image.overlapping_images.empty()) {
+                superseded_activity_frame = frame_tick;
+            }
         }
     };
     for (const ImageViewId view_id : render_targets.color_buffer_ids) {
@@ -3893,6 +3958,9 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         ImageBase& aliased = slot_images[aliased_id];
         aliased.overlapping_images.push_back(new_image_id);
         new_image.overlapping_images.push_back(aliased_id);
+        if (True(aliased.flags & ImageFlagBits::Registered)) {
+            TrackOverlappingImage(aliased_id, aliased);
+        }
         if (aliased.info.resources.levels == 1 && aliased.info.block.depth == 0 &&
             aliased.overlapping_images.size() > 1) {
             aliased.flags |= ImageFlagBits::BadOverlap;
@@ -3955,11 +4023,50 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         }
         copied_whole = std::ranges::all_of(written, [](u8 whole) { return whole != 0; });
     }
+    // Skip uploading stale guest bytes for a brand-new single-level 2D render target whose entire
+    // guest span is covered by older GPU-written, non-CPU-modified BadOverlap images (Ocarina of
+    // Time allocates ~10 MB/frame of transient render targets at shifting heap offsets right
+    // before rendering over them). EDEN_NX2_TC_SKIP_STALE_UPLOAD=0 restores the upload.
+    const auto stale_guest_bytes = [&] {
+        static const bool enabled = [] {
+            const char* const value = std::getenv("EDEN_NX2_TC_SKIP_STALE_UPLOAD");
+            return value == nullptr || value[0] != '0';
+        }();
+        if (!enabled || !render_target || !join_copies_to_do.empty() ||
+            new_info.type != ImageType::e2D || new_info.resources.levels != 1 ||
+            new_info.resources.layers != 1 || join_bad_overlap_ids.empty()) {
+            return false;
+        }
+        const DAddr begin = new_image.cpu_addr;
+        const DAddr end = begin + new_image.guest_size_bytes;
+        boost::container::small_vector<std::pair<DAddr, DAddr>, 16> ranges;
+        for (const ImageId overlap_id : join_bad_overlap_ids) {
+            const ImageBase& overlap = slot_images[overlap_id];
+            if (False(overlap.flags & ImageFlagBits::GpuModified) ||
+                True(overlap.flags & ImageFlagBits::CpuModified)) {
+                continue;
+            }
+            ranges.emplace_back((std::max)(overlap.cpu_addr, begin),
+                                (std::min)(overlap.cpu_addr_end, end));
+        }
+        if (ranges.empty()) {
+            return false;
+        }
+        std::ranges::sort(ranges);
+        DAddr covered = begin;
+        for (const auto& [range_begin, range_end] : ranges) {
+            if (range_begin > covered) {
+                return false;
+            }
+            covered = (std::max)(covered, range_end);
+        }
+        return covered >= end;
+    };
     if (overwritten_by_clear()) {
         // Stays CpuModified: UpdateRenderTargets' PrepareImage drops the upload only when
         // IsFullClear agrees the clear covers the whole image, and uploads it otherwise.
         runtime.TransitionImageLayout(new_image);
-    } else if (copied_whole) {
+    } else if (copied_whole || stale_guest_bytes()) {
         // What RefreshContents does, without the upload.
         new_image.flags |= ImageFlagBits::ContentsDefined;
         new_image.flags &= ~ImageFlagBits::CpuModified;
@@ -4474,6 +4581,9 @@ void TextureCache<P>::RegisterImage(ImageId image_id) {
     image.address_space = current_address_space;
     total_used_memory += ImageMemoryBytes(slot_images[image_id]);
     image.lru_index = lru_cache.Insert(image_id, frame_tick);
+    if (!image.overlapping_images.empty()) {
+        TrackOverlappingImage(image_id, image);
+    }
 
     ForEachGPUPage(image.gpu_addr, image.guest_size_bytes, [this, image_id](u64 page) {
         (*channel_state->gpu_page_table)[page].push_back(image_id);
@@ -4540,6 +4650,7 @@ void TextureCache<P>::UnregisterImage(ImageId image_id) {
                "Trying to unregister an already registered image");
     image.flags &= ~ImageFlagBits::Registered;
     image.flags &= ~ImageFlagBits::BadOverlap;
+    UntrackOverlappingImage(image);
     lru_cache.Free(image.lru_index);
     const std::optional<size_t> storage_id = getStorageID(image.address_space);
     ASSERT(storage_id);
@@ -4747,12 +4858,16 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
         ASSERT_MSG(num_removed_aliases == 1, "Invalid number of removed aliases: {}",
                    num_removed_aliases);
     }
+    UntrackOverlappingImage(image);
     for (const ImageId overlap_id : image.overlapping_images) {
         ImageBase& other_image = slot_images[overlap_id];
         [[maybe_unused]] const size_t num_removed_overlaps = std::erase_if(
             other_image.overlapping_images,
             [image_id](const ImageId other_overlap_id) { return other_overlap_id == image_id; });
         other_image.CheckBadOverlapState();
+        if (other_image.overlapping_images.empty()) {
+            UntrackOverlappingImage(other_image);
+        }
         ASSERT_MSG(num_removed_overlaps == 1, "Invalid number of removed overlapps: {}",
                    num_removed_overlaps);
     }
@@ -4924,6 +5039,17 @@ void TextureCache<P>::PrepareImage(ImageId image_id, bool is_modification, bool 
     Image& image = slot_images[image_id];
     if (True(image.flags & ImageFlagBits::SparseTilesUnmapped)) [[unlikely]] {
         RefreshUnmappedSparseTiles(image, image_id);
+    }
+    if (!is_modification && !invalidate &&
+        (static_cast<u32>(image.flags) &
+         static_cast<u32>(ImageFlagBits::CpuModified | ImageFlagBits::Alias |
+                          ImageFlagBits::SparseTiles)) == 0 &&
+        image.aliased_images.empty()) [[likely]] {
+        if (image.last_use_frame != frame_tick || frame_tick == 0) {
+            lru_cache.Touch(image.lru_index, frame_tick);
+            image.last_use_frame = frame_tick;
+        }
+        return;
     }
     if (invalidate) {
         image.flags &= ~(ImageFlagBits::CpuModified | ImageFlagBits::GpuModified);

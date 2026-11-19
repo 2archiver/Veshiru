@@ -13,9 +13,11 @@
 #include "common/string_util.h"
 #include "core/core.h"
 #include "core/file_sys/common_funcs.h"
-#include "core/file_sys/nup_container.h"
 #include "core/file_sys/control_metadata.h"
+#include "core/file_sys/decrypted_nca.h"
+#include "core/file_sys/nup_container.h"
 #include "core/file_sys/patch_manager.h"
+#include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/romfs_factory.h"
 #include "core/file_sys/vfs/vfs_vector.h"
@@ -257,12 +259,15 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
 
     if (update_index) {
         const auto& update = nup->GetPackages()[*update_index];
+        effective_version = update.version;
         display_version = update.display_version.empty() ? DecodeVersion(update.version)
                                                          : update.display_version;
     } else {
+        effective_version = program.version;
         display_version = program.display_version.empty() ? DecodeVersion(program.version)
                                                           : program.display_version;
     }
+    display_publisher = meta.publisher;
     nacp_file = BuildNacp(meta, display_version);
     if (!meta.icon.empty()) {
         icon_file = std::make_shared<FileSys::VectorVfsFile>(meta.icon, "icon.dat");
@@ -325,6 +330,112 @@ ResultStatus AppLoader_NUP::VerifyIntegrity(
         return nup->GetStatus();
     }
     return nup->VerifyIntegrity(std::move(progress_callback));
+}
+
+bool AppLoader_NUP::RegisterContent(FileSys::ManualContentProvider& provider, bool only_content,
+                                    std::optional<u64> base_program_id) const {
+    if (nup == nullptr || nup->GetStatus() != ResultStatus::Success) {
+        return false;
+    }
+
+    bool added = false;
+    const auto& packages = nup->GetPackages();
+    std::map<u64, std::size_t> newest_addons;
+    for (std::size_t i = 0; i < packages.size(); ++i) {
+        const auto& package = packages[i];
+        if (package.kind != NupContainer::PackageKind::Addon ||
+            (base_program_id &&
+             FileSys::GetBaseTitleID(package.title_id) != *base_program_id)) {
+            continue;
+        }
+        const auto [it, inserted] = newest_addons.try_emplace(package.title_id, i);
+        if (!inserted && package.version > packages[it->second].version) {
+            it->second = i;
+        }
+    }
+    for (const auto& [title_id, index] : newest_addons) {
+        const auto romfs_dir = nup->GetRomFSDir(index);
+        const auto romfs = romfs_dir != nullptr ? FileSys::CreateRomFS(romfs_dir) : nullptr;
+        if (romfs == nullptr) {
+            LOG_WARNING(Loader, "NUP add-on {:016X} has no RomFS", title_id);
+            continue;
+        }
+        if (auto nca = FileSys::BuildAddOnContentNca(title_id, romfs); nca != nullptr) {
+            provider.AddEntry(FileSys::TitleType::AOC, FileSys::ContentRecordType::Data, title_id,
+                              std::move(nca));
+            added = true;
+        }
+    }
+
+    // Skip application registration for DLC-only containers, standalone patch files whose base
+    // .nup is already exposed independently, or unbootable incomplete patch-only dumps.
+    if (!only_content && !base_program_id.has_value() && has_program &&
+        secondary_loader != nullptr && base_title_id != 0 && file != nullptr && !IsUpdateOnly()) {
+        std::vector<u8> icon_bytes;
+        if (icon_file != nullptr && icon_file->GetSize() > 0) {
+            icon_bytes = icon_file->ReadAllBytes();
+        }
+        if (icon_bytes.empty()) {
+            icon_bytes = Common::ArtworkCache::ReadCachedArtwork(base_title_id);
+        }
+
+        std::string fallback_title = display_title;
+        if (fallback_title.empty()) {
+            fallback_title = Common::ArtworkCache::ReadSidecarTitle(base_title_id);
+        }
+        if (fallback_title.empty()) {
+            std::string stem = file->GetName();
+            if (const auto dot = stem.rfind('.'); dot != std::string::npos && dot > 0) {
+                stem.resize(dot);
+            }
+            fallback_title = std::move(stem);
+        }
+
+        const FileSys::RawNACP raw_nacp = nacp_file != nullptr ? nacp_file->raw : FileSys::RawNACP{};
+        provider.RegisterApplicationEntry(base_title_id, file, raw_nacp, icon_bytes, fallback_title,
+                                          display_publisher, display_version, effective_version,
+                                          file->GetFullPath(), file->GetSize());
+        added = true;
+    }
+
+    // If this is a standalone update-only .nup paired with a companion base .nup in the same
+    // directory, upgrade the base application's launch path/version/control metadata when no base
+    // update was bundled inside the base container itself.
+    if (!only_content && !base_program_id.has_value() && has_program &&
+        secondary_loader != nullptr && base_title_id != 0 && file != nullptr && IsUpdateOnly() &&
+        base_nup != nullptr) {
+        const auto existing = provider.GetApplicationInfo(base_title_id);
+        if (!existing.has_value() || effective_version >= existing->version) {
+            std::vector<u8> icon_bytes;
+            if (icon_file != nullptr && icon_file->GetSize() > 0) {
+                icon_bytes = icon_file->ReadAllBytes();
+            }
+            if (icon_bytes.empty()) {
+                icon_bytes = Common::ArtworkCache::ReadCachedArtwork(base_title_id);
+            }
+            std::string fallback_title = display_title;
+            if (fallback_title.empty()) {
+                fallback_title = Common::ArtworkCache::ReadSidecarTitle(base_title_id);
+            }
+            if (fallback_title.empty()) {
+                std::string stem = file->GetName();
+                if (const auto dot = stem.rfind('.'); dot != std::string::npos && dot > 0) {
+                    stem.resize(dot);
+                }
+                fallback_title = std::move(stem);
+            }
+            const FileSys::RawNACP raw_nacp =
+                nacp_file != nullptr ? nacp_file->raw : FileSys::RawNACP{};
+            const u64 total_size =
+                file->GetSize() + (existing.has_value() ? existing->occupied_size : 0);
+            provider.RegisterApplicationEntry(base_title_id, file, raw_nacp, icon_bytes,
+                                              fallback_title, display_publisher, display_version,
+                                              effective_version, file->GetFullPath(), total_size);
+            added = true;
+        }
+    }
+
+    return added;
 }
 
 std::vector<FileSys::Patch> AppLoader_NUP::GetCarriedPatches() const {

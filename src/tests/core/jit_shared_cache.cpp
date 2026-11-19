@@ -254,3 +254,36 @@ TEST_CASE("Jits on one code cache run while others compile, invalidate and clear
     CHECK(rewrites > 0);
     CHECK(clears > 0);
 }
+
+TEST_CASE("Invalidating uncompiled ranges skips halting other shared-cache cores",
+          "[jit_shared_cache]") {
+    Guest guest;
+    ExclusiveMonitor monitor{2};
+    const auto cache = A64::MakeSharedCodeCache();
+    Env env0{guest};
+    Env env1{guest};
+    A64::Jit jit0{Config(env0, monitor, cache, 0)};
+    A64::Jit jit1{Config(env1, monitor, cache, 1)};
+    env0.jit = &jit0;
+    env1.jit = &jit1;
+
+    // Compile MutableBase on core 0.
+    guest.version.store(7);
+    jit0.SetPC(WriterBase);
+    RunToSvc(jit0, env0);
+    REQUIRE(jit0.GetRegister(5) == 7);
+
+    // Invalidating an uncompiled address range leaves core 1 unhalted.
+    constexpr u64 UncompiledBase = 0x9000'0000ULL;
+    jit0.InvalidateCacheRange(UncompiledBase, 0x1000);
+    jit1.SetPC(WriterBase);
+    CHECK_FALSE(Dynarmic::Has(jit1.Run(), Dynarmic::HaltReason::CacheInvalidation));
+    CHECK(jit1.GetRegister(5) == 7);
+
+    // Invalidating the compiled MutableBase immediately replaces the block for both cores.
+    guest.version.store(42);
+    jit0.InvalidateCacheRange(MutableBase, 8);
+    jit1.SetPC(WriterBase);
+    RunToSvc(jit1, env1);
+    CHECK(jit1.GetRegister(5) == 42);
+}

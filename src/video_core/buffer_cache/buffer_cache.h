@@ -634,22 +634,20 @@ void BufferCache<P>::DownloadMemoryForRead(DAddr device_addr, u64 size) {
             const DAddr window_begin = device_addr > BackWindow ? device_addr - BackWindow : 0;
             const DAddr window_end =
                 own_end <= ~DAddr{0} - AheadWindow ? own_end + AheadWindow : ~DAddr{0};
-            cpu_read_ranges.ForEachInRange(
-                window_begin, window_end - window_begin, [&](DAddr lower, DAddr upper) {
-                    gpu_modified_ranges.ForEachInRange(lower, upper - lower, add_speculative);
-                });
-            if (window_end < ~DAddr{0} &&
-                (speculative_bytes < MaxSpeculativeReadBytes || !download_cpu_read_ranges)) {
-                cpu_read_ranges.ForEachInRange(
-                    window_end, ~DAddr{0} - window_end, [&](DAddr lower, DAddr upper) {
-                        gpu_modified_ranges.ForEachInRange(lower, upper - lower, add_speculative);
-                    });
+            const auto visit_read_range = [&](DAddr lower, DAddr upper) {
+                if (download_cpu_read_ranges) {
+                    return;
+                }
+                gpu_modified_ranges.ForEachInRange(lower, upper - lower, add_speculative);
+            };
+            cpu_read_ranges.ForEachInRange(window_begin, window_end - window_begin,
+                                           visit_read_range);
+            if (window_end < ~DAddr{0} && !download_cpu_read_ranges) {
+                cpu_read_ranges.ForEachInRange(window_end, ~DAddr{0} - window_end,
+                                               visit_read_range);
             }
-            if (window_begin > 0 &&
-                (speculative_bytes < MaxSpeculativeReadBytes || !download_cpu_read_ranges)) {
-                cpu_read_ranges.ForEachInRange(0, window_begin, [&](DAddr lower, DAddr upper) {
-                    gpu_modified_ranges.ForEachInRange(lower, upper - lower, add_speculative);
-                });
+            if (window_begin > 0 && !download_cpu_read_ranges) {
+                cpu_read_ranges.ForEachInRange(0, window_begin, visit_read_range);
             }
         }
         const std::array own{std::pair<DAddr, u64>{device_addr, size}};
@@ -1017,6 +1015,35 @@ void BufferCache<P>::NoteReadBack(DAddr begin, DAddr end, bool gpu_modified) {
             it->unread_writes = 0;
             it->reads = (std::min)(static_cast<u16>(it->reads + 1), EarlyAfterReads);
             it->last_read = ++read_back_reads;
+            const bool proven_ring = it != read_back_pages.begin() &&
+                                     it->reads >= EarlyAfterReads &&
+                                     std::prev(it)->page + DEVICE_PAGESIZE == page &&
+                                     std::prev(it)->reads >= EarlyAfterReads;
+            if (proven_ring && page + 2 * DEVICE_PAGESIZE >= end) {
+                // Once two adjacent pages are established as recurring GPU-to-CPU readbacks,
+                // pre-arm up to two unseen frontier pages ahead of the cursor so Switch 2 cyclic
+                // compute/query readback rings schedule early downloads on first write instead of
+                // stalling the guest CPU on every new slot.
+                const u64 seed_read = it->last_read;
+                for (u32 step = 1; step <= 2; ++step) {
+                    const DAddr next_page = page + step * DEVICE_PAGESIZE;
+                    if (next_page < page || read_back_pages.size() >= MaxReadBackPages) {
+                        break;
+                    }
+                    auto next_it =
+                        std::ranges::lower_bound(read_back_pages, next_page, {}, &ReadBackPage::page);
+                    if (next_it == read_back_pages.end() || next_it->page != next_page) {
+                        read_back_pages.insert(
+                            next_it, ReadBackPage{
+                                         .page = next_page,
+                                         .last_read = seed_read,
+                                         .reads = EarlyAfterReads,
+                                     });
+                    }
+                }
+                read_back_first.store(read_back_pages.front().page, std::memory_order_release);
+                read_back_last.store(read_back_pages.back().page, std::memory_order_release);
+            }
         }
     }
 }

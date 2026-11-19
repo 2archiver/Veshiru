@@ -299,6 +299,15 @@ void SetAstcRecompressionOverride(std::optional<AstcRecompression> recompression
     astc_recompression_override = recompression;
 }
 
+u64 GetVramReserve(u64 budget) {
+    const int mib = values.vram_reserve_mib.GetValue();
+    if (mib < 0) {
+        return budget / 8 < (u64{1} << 30) ? budget / 8 : (u64{1} << 30);
+    }
+    const u64 reserve = static_cast<u64>(mib) << 20;
+    return reserve < budget ? reserve : budget;
+}
+
 bool IsDockedMode() {
     return values.use_docked_mode.GetValue() == Settings::ConsoleMode::Docked;
 }

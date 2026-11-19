@@ -83,6 +83,9 @@ private:
 
     struct StagingBuffers {
         std::vector<StagingBuffer> entries;
+        /// entries[i].tick, or numeric_limits<u64>::max() while entries[i] is deferred: scanning
+        /// for a free buffer touches only this compact array.
+        std::vector<u64> free_ticks;
         size_t delete_index = 0;
         size_t iterate_index = 0;
     };

@@ -9,7 +9,9 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "common/container/unordered_map.h"
 #include <boost/container/flat_map.hpp>
@@ -20,6 +22,7 @@
 
 namespace FileSys {
 class ExternalContentProvider;
+class ManualContentProvider;
 class CNMT;
 class NCA;
 class NSP;
@@ -243,6 +246,7 @@ public:
         std::optional<u64> title_id) const override;
 
     const ExternalContentProvider* GetExternalProvider() const;
+    [[nodiscard]] const ManualContentProvider* GetManualProvider() const;
     [[nodiscard]] inline const ContentProvider* GetSlotProvider(ContentProviderUnionSlot slot) const {
         return providers[size_t(slot)];
     }
@@ -257,6 +261,14 @@ private:
     std::array<ContentProvider*, size_t(ContentProviderUnionSlot::Count)> providers;
 };
 
+struct RawNACP;
+
+struct ManualApplicationInfo {
+    std::string launch_path;
+    u32 version{};
+    u64 occupied_size{};
+};
+
 class ManualContentProvider : public ContentProvider {
 public:
     ~ManualContentProvider() override;
@@ -265,6 +277,14 @@ public:
                   VirtualFile file);
     void AddEntryWithVersion(TitleType title_type, ContentRecordType content_type, u64 title_id,
                              u32 version, const std::string& version_string, VirtualFile file);
+    void RegisterApplicationEntry(u64 title_id, VirtualFile program_file, const RawNACP& nacp,
+                                  std::span<const u8> raw_icon,
+                                  std::string_view fallback_title = {},
+                                  std::string_view fallback_publisher = {},
+                                  std::string_view fallback_version = {}, u32 numeric_version = 0,
+                                  std::string launch_path = {}, u64 occupied_size = 0);
+    void SetApplicationInfo(u64 title_id, ManualApplicationInfo info);
+    [[nodiscard]] std::optional<ManualApplicationInfo> GetApplicationInfo(u64 title_id) const;
     bool AddEntriesFromContainer(VirtualFile file, bool only_content = false,
                                  std::optional<u64> base_program_id = std::nullopt);
     void ClearAllEntries();
@@ -285,6 +305,7 @@ public:
 private:
     std::map<std::tuple<TitleType, ContentRecordType, u64>, VirtualFile> entries;
     std::vector<ExternalUpdateEntry> multi_version_entries;
+    std::map<u64, ManualApplicationInfo> app_info;
 };
 
 class ExternalContentProvider : public ContentProvider {

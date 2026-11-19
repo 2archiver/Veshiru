@@ -8,6 +8,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string_view>
 #include "common/intrusive_list.h"
 #include "core/file_sys/fs_filesystem.h"
@@ -62,7 +63,7 @@ private:
     ReferenceListType open_read_references;
 #endif
     ReferenceListType closed_references;
-    std::mutex list_lock;
+    std::shared_mutex list_lock;
     size_t num_open_files{};
 #ifdef _WIN32
     size_t num_open_read_handles{};
@@ -72,8 +73,8 @@ private:
 
 private:
     friend class RealVfsFile;
-    std::unique_lock<std::mutex> RefreshReference(const std::string& path, OpenMode perms,
-                                                  FileReference& reference);
+    std::unique_lock<std::shared_mutex> RefreshReference(const std::string& path, OpenMode perms,
+                                                         FileReference& reference);
 #ifdef _WIN32
     std::shared_ptr<NativeReadHandle> AcquireReadHandle(const std::string& path,
                                                         FileReference& reference);

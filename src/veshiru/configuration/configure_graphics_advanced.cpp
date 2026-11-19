@@ -44,8 +44,9 @@ void ConfigureGraphicsAdvanced::Setup(const ConfigurationShared::Builder& builde
     for (auto setting :
          Settings::values.linkage.by_category[Settings::Category::RendererAdvanced]) {
         const bool is_memory_limit = setting->Id() == Settings::values.texture_cache_memory_limit.Id();
+        const bool is_vram_reserve = setting->Id() == Settings::values.vram_reserve_mib.Id();
         ConfigurationShared::Widget* widget =
-            is_memory_limit
+            (is_memory_limit || is_vram_reserve)
                 ? builder.BuildWidget(setting, apply_funcs, ConfigurationShared::RequestType::Default,
                                       true, 1.0f, nullptr, tr(" MiB"))
                 : builder.BuildWidget(setting, apply_funcs);
@@ -61,6 +62,11 @@ void ConfigureGraphicsAdvanced::Setup(const ConfigurationShared::Builder& builde
         const auto id = setting->Id();
 
         normal_hold.emplace(id, widget);
+
+        if (is_vram_reserve && widget->spinbox != nullptr) {
+            widget->spinbox->setSpecialValueText(tr("Auto"));
+            widget->spinbox->setSingleStep(64);
+        }
 
         if (is_memory_limit && widget->spinbox != nullptr) {
             memory_limit_widget = widget;
@@ -88,8 +94,9 @@ void ConfigureGraphicsAdvanced::Setup(const ConfigurationShared::Builder& builde
     UpdateMemoryLimit();
 }
 
-void ConfigureGraphicsAdvanced::SetDeviceMemory(u64 bytes) {
+void ConfigureGraphicsAdvanced::SetDeviceMemory(u64 bytes, u64 max_bytes) {
     device_memory = bytes;
+    max_device_memory = max_bytes != 0 ? (std::max)(bytes, max_bytes) : bytes;
     UpdateMemoryLimit();
 }
 
@@ -99,23 +106,34 @@ void ConfigureGraphicsAdvanced::UpdateMemoryLimit() {
     }
     QSpinBox* const spinbox = memory_limit_widget->spinbox;
     if (device_memory == 0) {
+        spinbox->setMaximum(1048576);
         memory_limit_note->hide();
         return;
     }
+    const u64 ceiling = (std::max)(device_memory, max_device_memory);
     const int device_mib = static_cast<int>((std::min<u64>)(device_memory >> 20, 1048576));
+    const int max_mib = static_cast<int>((std::min<u64>)(ceiling >> 20, 1048576));
     const int recommended_mib =
         static_cast<int>(VideoCommon::TextureCacheMemory::RecommendedLimit(device_memory) >> 20);
-    // The spinbox keeps the setting's range until a device is known; then the GPU is the ceiling.
-    spinbox->setMaximum(device_mib);
+    // Keep any higher saved value intact, and let integrated/unified GPUs select up to their full
+    // unified memory ceiling rather than locking the spinbox to a small UMA carveout.
+    spinbox->setMaximum((std::max)(max_mib, spinbox->value()));
 
     const int value = spinbox->value();
     const QString below =
         tr("<span style=\"color:#d29922\">&#9888;</span> Below the recommended %1 MiB for this "
            "GPU: textures may be removed and loaded again, which can cause stutter.")
             .arg(recommended_mib);
-    const QString auto_note = tr("Auto uses %1 MiB (three quarters of this GPU's %2 MiB).")
-                                  .arg(recommended_mib)
-                                  .arg(device_mib);
+    const QString auto_note =
+        max_mib > device_mib
+            ? tr("Auto uses %1 MiB (three quarters of this GPU's %2 MiB budget; up to %3 MiB "
+                 "unified memory selectable).")
+                  .arg(recommended_mib)
+                  .arg(device_mib)
+                  .arg(max_mib)
+            : tr("Auto uses %1 MiB (three quarters of this GPU's %2 MiB).")
+                  .arg(recommended_mib)
+                  .arg(device_mib);
     const QString low_note = tr("Values under 1024 MiB are raised to 1024 MiB.");
     if (value == 0) {
         memory_limit_note->setText(auto_note);

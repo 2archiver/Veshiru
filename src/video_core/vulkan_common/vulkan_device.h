@@ -291,9 +291,10 @@ public:
         Count,
     };
     static constexpr VkDeviceSize SeparatePoolBlockSize = 16ULL << 20;
-    /// DeviceBuffers: buffer cache buffers live a few per block, so 16 MiB blocks stayed pinned
-    /// mostly empty.
-    static constexpr VkDeviceSize DeviceBufferBlockSize = 4ULL << 20;
+    /// DeviceBuffers: 8 MiB blocks keep <= 4 MiB guest vertex/index/uniform/storage buffers pooled
+    /// instead of falling back to per-buffer dedicated WDDM/driver allocations while still keeping
+    /// half-empty block slack small.
+    static constexpr VkDeviceSize DeviceBufferBlockSize = 8ULL << 20;
 
     /// The pool of that kind for a memory type, created on first use unless !create (null if
     /// that failed or it doesn't exist).
@@ -1135,10 +1136,23 @@ FN_MAX_LIMIT_LIST
     /// subtracted: see GetDeviceMemorySlack().
     u64 GetDeviceMemoryBudget() const;
 
-    /// Memory the allocator holds from the driver in the main device-local heap but has no
-    /// allocation in (the unused part of its blocks). GetDeviceMemoryUsage() does not count it,
-    /// yet the driver does: with the heap at its budget it is not available to new images.
+    /// Memory the allocator holds from the driver in active heaps but has no allocation in (the
+    /// unused part of its blocks). GetDeviceMemoryUsage() does not count it, yet the driver does:
+    /// with the heap at its budget it is not available to new images.
     u64 GetDeviceMemorySlack() const;
+
+    /// True if any background vkFreeMemory calls are still queued or running.
+    bool HasPendingMemoryFrees() const noexcept;
+
+    /// Waits for all queued background vkFreeMemory calls to finish so driver budget queries see
+    /// the reclaimed VRAM before spilling over budget or triggering cache-pressure backoff.
+    void FlushPendingMemoryFrees() const;
+
+    /// Returns the Vulkan heap index for `memory_type`, or VK_MAX_MEMORY_HEAPS if out of range.
+    u32 GetHeapIndexForMemoryType(u32 memory_type) const noexcept {
+        return memory_type < memory_type_count ? memory_type_heaps[memory_type]
+                                               : u32{VK_MAX_MEMORY_HEAPS};
+    }
 
     u32 GetSetsPerPool() const {
         return sets_per_pool;
@@ -1455,7 +1469,8 @@ private:
     bool dynamic_state3_alpha_to_one{};
     bool supports_conditional_barriers{};      ///< Allows barriers in conditional control flow.
     mutable std::atomic<size_t> custom_border_color_samplers_used{};
-    u64 device_access_memory{};                ///< Total size of device local memory in bytes.
+    u64 device_access_memory{};                ///< Effective GPU memory budget in bytes.
+    u64 integrated_max_memory{};               ///< Maximum unified-RAM GPU ceiling on iGPUs.
     u32 sets_per_pool{};                       ///< Sets per Description Pool
     NvidiaArchitecture nvidia_arch{NvidiaArchitecture::Arch_AmpereOrNewer};
 
@@ -1465,6 +1480,9 @@ private:
     bool streamline_extensions{}; ///< NVIDIA DLSS's extensions are loaded.
     bool streamline_attached{};   ///< Streamline has this device.
     std::vector<size_t> valid_heap_memory;                   ///< Heaps used.
+    std::vector<size_t> shared_heap_memory;                  ///< Non-DEVICE_LOCAL unified heaps.
+    std::array<u32, VK_MAX_MEMORY_TYPES> memory_type_heaps{};
+    u32 memory_type_count{};
     size_t main_heap{};       ///< Largest device-local heap, where images live.
     u64 heap_size_limit{};    ///< EDEN_NX2_VRAM_LIMIT_MIB for device-local heaps, 0 if unset.
     u64 main_heap_size{};     ///< Size of main_heap, with heap_size_limit applied.

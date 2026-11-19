@@ -44,6 +44,17 @@
 #include "video_core/textures/unswizzle_worker.h"
 #include "video_core/textures/workers.h"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+#endif
+
 namespace VideoCommon {
 
 namespace {
@@ -857,67 +868,122 @@ bool IsValidEntry(const Tegra::MemoryManager& gpu_memory, const TICEntry& config
 }
 
 void PrefaultGuestMemory(Tegra::MemoryManager& gpu_memory, GPUVAddr gpu_addr, size_t size) {
-    using namespace Common::Literals;
-    // Guest memory is one section mapped twice, and Windows faults once per 4 KiB the first time
-    // these reads go through the backing to a page the guest wrote through its own view, or one
-    // trimmed or hinted cold since: 1.3-1.8 us a page, so Star Fox's cutscene bursts untiled at
-    // 1.7 GB/s. Faults on several threads resolve in parallel (1.6-1.75x on 3 threads). Linux maps
-    // 16 pages per such fault, where touching them first gained nothing.
 #ifdef _WIN32
-    constexpr bool PrefaultPays = true;
-#else
-    constexpr bool PrefaultPays = false;
-#endif
+    using namespace Common::Literals;
+    // Guest memory is one section mapped twice, and Windows soft-faults once per 4 KiB the first
+    // time reads hit a cold page in the secondary view. Skip small (< 4 MiB) and already-resident
+    // uploads so normal gameplay never pays per-upload vector allocations or GPU-thread latch
+    // synchronization against background worker threads.
     constexpr size_t PageSize = 4_KiB;
-    constexpr size_t MinBytes = 1_MiB;
-    if (!PrefaultPays || size < MinBytes) {
+    constexpr size_t MinBytes = 4_MiB;
+    constexpr size_t Batch = 128;
+    constexpr size_t MaxHelpers = 4;
+    if (size < MinBytes) {
         return;
     }
-    std::vector<const u8*> pages;
+    const auto all_samples_resident = [](std::span<const u8* const> samples) noexcept {
+        std::array<PSAPI_WORKING_SET_EX_INFORMATION, 5> info{};
+        const size_t count = (std::min)(samples.size(), info.size());
+        for (size_t i = 0; i < count; ++i) {
+            info[i].VirtualAddress = const_cast<u8*>(samples[i]);
+        }
+        if (!K32QueryWorkingSetEx(
+                GetCurrentProcess(), info.data(),
+                static_cast<DWORD>(count * sizeof(PSAPI_WORKING_SET_EX_INFORMATION)))) {
+            return false;
+        }
+        for (size_t i = 0; i < count; ++i) {
+            // Bit 0 of VirtualAttributes.Flags is PSAPI_WORKING_SET_EX_BLOCK::Valid.
+            if ((info[i].VirtualAttributes.Flags & 1U) == 0) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto run_parallel = [](size_t page_count, auto&& touch_page) {
+        if (page_count == 0) {
+            return;
+        }
+        std::atomic<size_t> cursor{0};
+        const auto touch = [&] {
+            for (;;) {
+                const size_t first = cursor.fetch_add(Batch, std::memory_order_relaxed);
+                if (first >= page_count) {
+                    return;
+                }
+                const size_t last = (std::min)(first + Batch, page_count);
+                for (size_t i = first; i < last; ++i) {
+                    touch_page(i);
+                }
+            }
+        };
+        std::latch helpers{static_cast<std::ptrdiff_t>(MaxHelpers)};
+        size_t queued = 0;
+        auto& workers = Tegra::Texture::GetThreadWorkers();
+        while (queued < MaxHelpers && (queued + 1) * Batch * 4 <= page_count &&
+               workers.TryQueueWork([&] {
+                   touch();
+                   helpers.count_down();
+               })) {
+            ++queued;
+        }
+        helpers.count_down(static_cast<std::ptrdiff_t>(MaxHelpers - queued));
+        touch();
+        if (queued != 0) {
+            helpers.wait();
+        }
+    };
+
     if (const u8* const span = gpu_memory.GetSpan(gpu_addr, size)) {
         const auto begin = Common::AlignDown(reinterpret_cast<uintptr_t>(span), PageSize);
         const auto end = reinterpret_cast<uintptr_t>(span) + size;
-        pages.reserve(Common::DivCeil(end - begin, PageSize));
-        for (uintptr_t page = begin; page < end; page += PageSize) {
-            pages.push_back(reinterpret_cast<const u8*>(page));
+        const size_t page_count = Common::DivCeil(end - begin, PageSize);
+        const auto page_ptr = [begin](size_t index) noexcept {
+            return reinterpret_cast<const u8*>(begin + index * PageSize);
+        };
+        const std::array<const u8*, 5> samples{
+            page_ptr(0),
+            page_ptr(page_count / 4),
+            page_ptr(page_count / 2),
+            page_ptr((page_count * 3) / 4),
+            page_ptr(page_count - 1),
+        };
+        if (all_samples_resident(samples)) {
+            return;
         }
-    } else {
-        pages.reserve(Common::DivCeil(size, PageSize) + 1);
-        for (GPUVAddr page = gpu_addr; page < gpu_addr + size;
-             page = Common::AlignDown(page, PageSize) + PageSize) {
-            if (const u8* const pointer = gpu_memory.GetPointer(page)) {
-                pages.push_back(pointer);
-            }
+        run_parallel(page_count, [page_ptr](size_t i) noexcept {
+            static_cast<void>(*static_cast<const volatile u8*>(page_ptr(i)));
+        });
+        return;
+    }
+
+    std::vector<const u8*> pages;
+    pages.reserve(Common::DivCeil(size, PageSize) + 1);
+    for (GPUVAddr page = gpu_addr; page < gpu_addr + size;
+         page = Common::AlignDown(page, PageSize) + PageSize) {
+        if (const u8* const pointer = gpu_memory.GetPointer(page)) {
+            pages.push_back(pointer);
         }
     }
-    constexpr size_t Batch = 64;
-    constexpr size_t MaxHelpers = 7;
-    std::atomic<size_t> cursor{0};
-    const auto touch = [&] {
-        for (;;) {
-            const size_t first = cursor.fetch_add(Batch, std::memory_order_relaxed);
-            if (first >= pages.size()) {
-                return;
-            }
-            const size_t last = (std::min)(first + Batch, pages.size());
-            for (size_t i = first; i < last; ++i) {
-                static_cast<void>(*static_cast<const volatile u8*>(pages[i]));
-            }
-        }
+    if (pages.empty()) {
+        return;
+    }
+    const size_t n = pages.size();
+    const std::array<const u8*, 5> samples{
+        pages[0], pages[n / 4], pages[n / 2], pages[(n * 3) / 4], pages[n - 1],
     };
-    std::latch helpers{static_cast<std::ptrdiff_t>(MaxHelpers)};
-    size_t queued = 0;
-    auto& workers = Tegra::Texture::GetThreadWorkers();
-    while (queued < MaxHelpers && (queued + 1) * Batch * 2 <= pages.size() &&
-           workers.TryQueueWork([&] {
-               touch();
-               helpers.count_down();
-           })) {
-        ++queued;
+    if (all_samples_resident(samples)) {
+        return;
     }
-    helpers.count_down(static_cast<std::ptrdiff_t>(MaxHelpers - queued));
-    touch();
-    helpers.wait();
+    run_parallel(n, [&pages](size_t i) noexcept {
+        static_cast<void>(*static_cast<const volatile u8*>(pages[i]));
+    });
+#else
+    // Linux faults 16 pages at a time (fault_around_bytes), where prefaulting gained nothing.
+    static_cast<void>(gpu_memory);
+    static_cast<void>(gpu_addr);
+    static_cast<void>(size);
+#endif
 }
 
 boost::container::small_vector<BufferImageCopy, 16> UnswizzleImage(

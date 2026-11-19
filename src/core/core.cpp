@@ -531,7 +531,51 @@ struct System::Impl {
 
         std::string name = "Unknown program";
         if (app_loader->ReadTitle(name) != Loader::ResultStatus::Success) {
-            LOG_ERROR(Core, "Failed to read title for ROM!");
+            const auto applet_title = [](u64 program_id) noexcept -> std::string_view {
+                switch (program_id) {
+                case 0x0100000000001000ULL:
+                    return "HOME Menu";
+                case 0x0100000000001001ULL:
+                    return "Auth Applet";
+                case 0x0100000000001002ULL:
+                    return "Cabinet (amiibo)";
+                case 0x0100000000001003ULL:
+                    return "Controller Applet";
+                case 0x0100000000001004ULL:
+                    return "Data Erase";
+                case 0x0100000000001005ULL:
+                    return "Error Applet";
+                case 0x0100000000001006ULL:
+                    return "NetConnect";
+                case 0x0100000000001007ULL:
+                    return "Player Select";
+                case 0x0100000000001008ULL:
+                    return "Software Keyboard";
+                case 0x0100000000001009ULL:
+                    return "Mii Editor";
+                case 0x010000000000100AULL:
+                    return "Web Applet";
+                case 0x010000000000100BULL:
+                    return "Shop Applet";
+                case 0x010000000000100CULL:
+                    return "Overlay Display";
+                case 0x010000000000100DULL:
+                    return "Album";
+                case 0x0100000000001010ULL:
+                    return "System Settings";
+                case 0x0100000000001012ULL:
+                    return "Starter";
+                case 0x0100000000001013ULL:
+                    return "User Page";
+                default:
+                    return {};
+                }
+            }(params.program_id);
+            if (!applet_title.empty()) {
+                name = std::string{applet_title};
+            } else {
+                LOG_WARNING(Core, "No title metadata for {:016X}", params.program_id);
+            }
         }
 
         LOG_INFO(Core, "Loading {} ({:016X}) ...", name, params.program_id);
@@ -712,6 +756,7 @@ struct System::Impl {
     ExecuteProgramCallback execute_program_callback;
     ExitCallback exit_callback;
     ApplicationChangedCallback application_changed_callback;
+    LaunchApplicationCallback launch_application_callback;
 
     std::optional<Service::Services> services;
     std::optional<Core::Debugger> debugger;
@@ -1240,6 +1285,24 @@ void System::Exit() {
 
 void System::RegisterApplicationChangedCallback(ApplicationChangedCallback&& callback) {
     impl->application_changed_callback = std::move(callback);
+}
+
+void System::RegisterLaunchApplicationCallback(LaunchApplicationCallback&& callback) {
+    impl->launch_application_callback = std::move(callback);
+}
+
+bool System::HasLaunchApplicationCallback() const {
+    return static_cast<bool>(impl->launch_application_callback);
+}
+
+bool System::RequestLaunchApplication(u64 program_id, std::string filepath,
+                                      std::vector<u8> preselected_user_bytes) {
+    if (!impl->launch_application_callback || filepath.empty()) {
+        return false;
+    }
+    impl->launch_application_callback(program_id, std::move(filepath),
+                                      std::move(preselected_user_bytes));
+    return true;
 }
 
 void System::NotifyApplicationChanged(u64 program_id) {

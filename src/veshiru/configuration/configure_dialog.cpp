@@ -73,7 +73,8 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
 
     connect(graphics_tab.get(), &ConfigureGraphics::DeviceMemoryChanged,
             graphics_advanced_tab.get(), &ConfigureGraphicsAdvanced::SetDeviceMemory);
-    graphics_advanced_tab->SetDeviceMemory(graphics_tab->SelectedDeviceMemory());
+    graphics_advanced_tab->SetDeviceMemory(graphics_tab->SelectedDeviceMemory(),
+                                           graphics_tab->SelectedMaxDeviceMemory());
 
     ui->tabWidget->addTab(applets_tab.get(), tr("Applets"));
     ui->tabWidget->addTab(audio_tab.get(), tr("Audio"));

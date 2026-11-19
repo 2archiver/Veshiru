@@ -14,6 +14,7 @@
 #include "core/loader/loader.h"
 
 namespace FileSys {
+class ManualContentProvider;
 class NACP;
 class NupContainer;
 } // namespace FileSys
@@ -57,6 +58,11 @@ public:
     ResultStatus ReadAddOnRomFS(u64 title_id, FileSys::VirtualFile& out_file) override;
     ResultStatus ReadCarriedPatches(std::vector<FileSys::Patch>& out_patches) const override;
 
+    /// Registers carried add-ons, and when !only_content && !base_program_id also registers the
+    /// bootable application Program and a synthesized Control NCA for HOME Menu discovery.
+    bool RegisterContent(FileSys::ManualContentProvider& provider, bool only_content = false,
+                         std::optional<u64> base_program_id = std::nullopt) const;
+
     /// The update and add-ons carried by this file, using the existing add-on disable keys.
     std::vector<FileSys::Patch> GetCarriedPatches() const;
 
@@ -76,7 +82,9 @@ private:
     std::unique_ptr<FileSys::NACP> nacp_file;
     FileSys::VirtualFile icon_file;
     u64 base_title_id{};
+    u32 effective_version{};
     std::string display_title;
+    std::string display_publisher;
     std::string display_version;
     bool has_program{};
     // Filesystem service threads may request different carried add-ons concurrently.

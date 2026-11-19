@@ -276,6 +276,15 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
         : !dedicated && CreateImageInSeparatePool(ci, alloc_ci, handle, allocation, alloc_info)
             ? VK_SUCCESS
             : vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge && device.HasPendingMemoryFrees()) {
+        // Background vkFreeMemory calls may still hold VRAM the caches already evicted this frame;
+        // drain them before declaring budget pressure or spilling an image into host memory.
+        device.FlushPendingMemoryFrees();
+        result = !dedicated && CreateImageInSeparatePool(ci, alloc_ci, handle, allocation,
+                                                         alloc_info)
+                     ? VK_SUCCESS
+                     : vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
+    }
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge) {
         // Over the device memory budget (Switch 2 titles fill 8 GB cards): let the driver page
         // it out rather than failing the draw and aborting.
@@ -287,7 +296,11 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
                         ci.extent.width, ci.extent.height, ci.extent.depth, ci.mipLevels,
                         ci.arrayLayers, static_cast<u32>(ci.format));
         }
-        pressure_events.fetch_add(1, std::memory_order_relaxed);
+        // Short-lived dedicated scratch images (e.g. ASTC->BCn RGBA8 decode intermediates) return
+        // their memory immediately after use and must not trigger permanent cache-eviction cascades.
+        if (!dedicated) {
+            pressure_events.fetch_add(1, std::memory_order_relaxed);
+        }
         VmaAllocationCreateInfo relaxed = alloc_ci;
         relaxed.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
         result = vmaCreateImage(allocator, &ci, &relaxed, &handle, &allocation, &alloc_info);
@@ -297,7 +310,7 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
             result = vmaCreateImage(allocator, &ci, &relaxed, &handle, &allocation, &alloc_info);
         }
     }
-    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge) {
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge && !dedicated) {
         pressure_events.fetch_add(1, std::memory_order_relaxed);
     }
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && ci.imageType != VK_IMAGE_TYPE_1D &&
@@ -433,22 +446,34 @@ bool MemoryAllocator::CreateImageInSeparatePool(const VkImageCreateInfo& ci,
     }
     const VkMemoryRequirements requirements = device.GetLogical().GetImageMemoryRequirements(image);
     u32 memory_type{};
-    if (requirements.size <= Device::SeparatePoolBlockSize / 2 &&
-        vmaFindMemoryTypeIndexForImageInfo(allocator, &ci, &alloc_ci, &memory_type) == VK_SUCCESS) {
-        if (const VmaPool pool =
-                device.GetSeparatePool(Device::SeparatePool::RenderTargets, memory_type)) {
-            VmaAllocationCreateInfo pool_ci = alloc_ci;
-            pool_ci.pool = pool;
-            if (vmaAllocateMemoryForImage(allocator, image, &pool_ci, &allocation, &alloc_info) ==
-                VK_SUCCESS) {
-                if (vmaBindImageMemory(allocator, allocation, image) == VK_SUCCESS) {
-                    handle = image;
-                    return true;
+    if (requirements.size <= Device::SeparatePoolBlockSize / 2) {
+        if (vmaFindMemoryTypeIndex(allocator, requirements.memoryTypeBits, &alloc_ci,
+                                   &memory_type) == VK_SUCCESS) {
+            if (const VmaPool pool =
+                    device.GetSeparatePool(Device::SeparatePool::RenderTargets, memory_type)) {
+                VmaAllocationCreateInfo pool_ci = alloc_ci;
+                pool_ci.pool = pool;
+                if (vmaAllocateMemoryForImage(allocator, image, &pool_ci, &allocation,
+                                              &alloc_info) == VK_SUCCESS) {
+                    if (vmaBindImageMemory(allocator, allocation, image) == VK_SUCCESS) {
+                        handle = image;
+                        return true;
+                    }
+                    vmaFreeMemory(allocator, allocation);
+                    allocation = VK_NULL_HANDLE;
                 }
-                vmaFreeMemory(allocator, allocation);
-                allocation = VK_NULL_HANDLE;
             }
         }
+    } else if (vmaAllocateMemoryForImage(allocator, image, &alloc_ci, &allocation, &alloc_info) ==
+               VK_SUCCESS) {
+        // Reuse the VkImage already created above instead of destroying it and creating an
+        // identical second VkImage in vmaCreateImage for every > 8 MiB target/storage image.
+        if (vmaBindImageMemory(allocator, allocation, image) == VK_SUCCESS) {
+            handle = image;
+            return true;
+        }
+        vmaFreeMemory(allocator, allocation);
+        allocation = VK_NULL_HANDLE;
     }
     dld.vkDestroyImage(logical, image, nullptr);
     return false;

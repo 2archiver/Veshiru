@@ -852,6 +852,7 @@ add_library(core STATIC
     hle/service/ns/ns_types.h
     hle/service/ns/font_merge.cpp
     hle/service/ns/font_merge.h
+    hle/service/ns/home_menu_alias.h
     hle/service/ns/platform_service_manager.cpp
     hle/service/ns/platform_service_manager.h
     hle/service/ns/query_service.cpp

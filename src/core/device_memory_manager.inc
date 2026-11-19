@@ -162,10 +162,17 @@ inline void ReportUnmappedRead(DAddr first_unmapped, DAddr address, size_t size,
         const size_t parent = file.find_last_of("/\\", slash - 1);
         file.remove_prefix(parent == std::string_view::npos ? 0 : parent + 1);
     }
-    LOG_ERROR(HW_Memory,
-              "Unmapped Device ReadBlock @ {:#016x} (start address = {:#016x}, size = {}, {} "
-              "bytes unmapped) from {}:{}",
-              first_unmapped, address, size, unmapped_bytes, file, caller.line());
+    if (trace) {
+        LOG_ERROR(HW_Memory,
+                  "Unmapped Device ReadBlock @ {:#016x} (start address = {:#016x}, size = {}, {} "
+                  "bytes unmapped) from {}:{}",
+                  first_unmapped, address, size, unmapped_bytes, file, caller.line());
+    } else {
+        LOG_DEBUG(HW_Memory,
+                  "Unmapped Device ReadBlock @ {:#016x} (start address = {:#016x}, size = {}, {} "
+                  "bytes unmapped) from {}:{}",
+                  first_unmapped, address, size, unmapped_bytes, file, caller.line());
+    }
 }
 
 template <typename DTraits>

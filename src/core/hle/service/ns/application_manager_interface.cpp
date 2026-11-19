@@ -11,8 +11,10 @@
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/ns/application_manager_interface.h"
 
+#include "core/file_sys/common_funcs.h"
 #include "core/file_sys/content_archive.h"
 #include "core/hle/service/ns/content_management_interface.h"
+#include "core/hle/service/ns/home_menu_alias.h"
 #include "core/hle/service/ns/read_only_application_control_data_interface.h"
 #include "core/file_sys/patch_manager.h"
 #include "frontend_common/firmware_manager.h"
@@ -20,6 +22,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <vector>
 
 namespace Service::NS {
@@ -36,14 +39,14 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {0, D<&IApplicationManagerInterface::ListApplicationRecord>, "ListApplicationRecord"},
         {1, nullptr, "GenerateApplicationRecordCount"},
         {2, D<&IApplicationManagerInterface::GetApplicationRecordUpdateSystemEvent>, "GetApplicationRecordUpdateSystemEvent"},
-        {3, nullptr, "GetApplicationViewDeprecated"},
+        {3, D<&IApplicationManagerInterface::GetApplicationViewDeprecated>, "GetApplicationViewDeprecated"},
         {4, D<&IApplicationManagerInterface::DeleteApplicationEntity>, "DeleteApplicationEntity"},
         {5, D<&IApplicationManagerInterface::DeleteApplicationCompletely>, "DeleteApplicationCompletely"},
         {6, nullptr, "IsAnyApplicationEntityRedundant"},
         {7, nullptr, "DeleteRedundantApplicationEntity"},
         {8, nullptr, "IsApplicationEntityMovable"},
         {9, nullptr, "MoveApplicationEntity"},
-        {11, nullptr, "CalculateApplicationOccupiedSize"},
+        {11, D<&IApplicationManagerInterface::CalculateApplicationOccupiedSize>, "CalculateApplicationOccupiedSize"},
         {16, &IApplicationManagerInterface::PushApplicationRecord, "PushApplicationRecord"},
         {17, nullptr, "ListApplicationRecordContentMeta"},
         {19, nullptr, "LaunchApplicationOld"},
@@ -60,24 +63,24 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {36, nullptr, "PushLaunchVersion"},
         {37, nullptr, "ListRequiredVersion"},
         {38, D<&IApplicationManagerInterface::CheckApplicationLaunchVersion>, "CheckApplicationLaunchVersion"},
-        {39, nullptr, "CheckApplicationLaunchRights"},
+        {39, D<&IApplicationManagerInterface::CheckApplicationLaunchRights>, "CheckApplicationLaunchRights"},
         {40, D<&IApplicationManagerInterface::GetApplicationLogoData>, "GetApplicationLogoData"},
         {41, nullptr, "CalculateApplicationDownloadRequiredSize"},
         {42, nullptr, "CleanupSdCard"},
         {43, D<&IApplicationManagerInterface::CheckSdCardMountStatus>, "CheckSdCardMountStatus"},
         {44, D<&IApplicationManagerInterface::GetSdCardMountStatusChangedEvent>, "GetSdCardMountStatusChangedEvent"},
-        {45, nullptr, "GetGameCardAttachmentEvent"},
+        {45, D<&IApplicationManagerInterface::GetGameCardAttachmentEvent>, "GetGameCardAttachmentEvent"},
         {46, nullptr, "GetGameCardAttachmentInfo"},
         {47, D<&IApplicationManagerInterface::GetTotalSpaceSize>, "GetTotalSpaceSize"},
         {48, D<&IApplicationManagerInterface::GetFreeSpaceSize>, "GetFreeSpaceSize"},
-        {49, nullptr, "GetSdCardRemovedEvent"},
+        {49, D<&IApplicationManagerInterface::GetSdCardRemovedEvent>, "GetSdCardRemovedEvent"},
         {52, D<&IApplicationManagerInterface::GetGameCardUpdateDetectionEvent>, "GetGameCardUpdateDetectionEvent"},
         {53, nullptr, "DisableApplicationAutoDelete"},
         {54, nullptr, "EnableApplicationAutoDelete"},
         {55, D<&IApplicationManagerInterface::GetApplicationDesiredLanguage>, "GetApplicationDesiredLanguage"},
         {56, nullptr, "SetApplicationTerminateResult"},
         {57, nullptr, "ClearApplicationTerminateResult"},
-        {58, nullptr, "GetLastSdCardMountUnexpectedResult"},
+        {58, D<&IApplicationManagerInterface::GetLastSdCardMountUnexpectedResult>, "GetLastSdCardMountUnexpectedResult"},
         {59, D<&IApplicationManagerInterface::ConvertApplicationLanguageToLanguageCode>, "ConvertApplicationLanguageToLanguageCode"},
         {60, nullptr, "ConvertLanguageCodeToApplicationLanguage"},
         {61, nullptr, "GetBackgroundDownloadStressTaskInfo"},
@@ -94,7 +97,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {80, nullptr, "RequestDownloadApplication"},
         {81, nullptr, "RequestDownloadAddOnContent"},
         {82, nullptr, "DownloadApplication"},
-        {83, nullptr, "CheckApplicationResumeRights"},
+        {83, D<&IApplicationManagerInterface::CheckApplicationLaunchRights>, "CheckApplicationResumeRights"},
         {84, nullptr, "GetDynamicCommitEvent"},
         {85, nullptr, "RequestUpdateApplication2"},
         {86, nullptr, "EnableApplicationCrashReport"},
@@ -136,7 +139,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {403, nullptr, "GetMaxApplicationControlCacheCount"},
         {404, nullptr, "InvalidateApplicationControlCache"},
         {405, nullptr, "ListApplicationControlCacheEntryInfo"},
-        {406, nullptr, "GetApplicationControlProperty"},
+        {406, D<&IApplicationManagerInterface::GetApplicationControlProperty>, "GetApplicationControlProperty"},
         {407, &IApplicationManagerInterface::ListApplicationTitle, "ListApplicationTitle"},
         {408, &IApplicationManagerInterface::ListApplicationIcon, "ListApplicationIcon"},
         {411, nullptr, "Unknown411"}, //19.0.0+
@@ -163,10 +166,10 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {503, nullptr, "RequestGameCardRegistrationGoldPoint"},
         {504, nullptr, "RequestRegisterGameCard"},
         {505, D<&IApplicationManagerInterface::GetGameCardMountFailureEvent>, "GetGameCardMountFailureEvent"},
-        {506, nullptr, "IsGameCardInserted"},
+        {506, D<&IApplicationManagerInterface::IsGameCardInserted>, "IsGameCardInserted"},
         {507, nullptr, "EnsureGameCardAccess"},
         {508, nullptr, "GetLastGameCardMountFailureResult"},
-        {509, nullptr, "ListApplicationIdOnGameCard"},
+        {509, D<&IApplicationManagerInterface::ListApplicationIdOnGameCard>, "ListApplicationIdOnGameCard"},
         {510, nullptr, "GetGameCardPlatformRegion"},
         {511, D<&IApplicationManagerInterface::GetGameCardWakenReadyEvent>, "GetGameCardWakenReadyEvent"},
         {512, D<&IApplicationManagerInterface::IsGameCardApplicationRunning>, "IsGameCardApplicationRunning"},
@@ -177,7 +180,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {517, nullptr, "Unknown517"}, //21.0.0+
         {518, nullptr, "Unknown518"}, //21.0.0+
         {519, nullptr, "Unknown519"}, //21.0.0+
-        {600, nullptr, "CountApplicationContentMeta"},
+        {600, D<&IApplicationManagerInterface::CountApplicationContentMeta>, "CountApplicationContentMeta"},
         {601, nullptr, "ListApplicationContentMetaStatus"},
         {602, nullptr, "ListAvailableAddOnContent"},
         {603, nullptr, "GetOwnedApplicationContentMetaStatus"},
@@ -197,7 +200,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {800, nullptr, "RequestVersionList"},
         {801, nullptr, "ListVersionList"},
         {802, nullptr, "RequestVersionListData"},
-        {900, nullptr, "GetApplicationRecord"},
+        {900, D<&IApplicationManagerInterface::GetApplicationRecord>, "GetApplicationRecord"},
         {901, nullptr, "GetApplicationRecordProperty"},
         {902, nullptr, "EnableApplicationAutoUpdate"},
         {903, nullptr, "DisableApplicationAutoUpdate"},
@@ -207,10 +210,10 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {907, nullptr, "WithdrawApplicationUpdateRequest"},
         {908, nullptr, "ListApplicationRecordInstalledContentMeta"},
         {909, nullptr, "WithdrawCleanupAddOnContentsWithNoRightsRecommendation"},
-        {910, nullptr, "HasApplicationRecord"},
+        {910, D<&IApplicationManagerInterface::HasApplicationRecord>, "HasApplicationRecord"},
         {911, nullptr, "SetPreInstalledApplication"},
         {912, nullptr, "ClearPreInstalledApplicationFlag"},
-        {913, nullptr, "ListAllApplicationRecord"},
+        {913, D<&IApplicationManagerInterface::ListApplicationRecord>, "ListAllApplicationRecord"},
         {914, nullptr, "HideApplicationRecord"},
         {915, nullptr, "ShowApplicationRecord"},
         {916, nullptr, "IsApplicationAutoDeleteDisabled"},
@@ -492,9 +495,29 @@ Result IApplicationManagerInterface::UnregisterNetworkServiceAccountWithUserSave
     R_SUCCEED();
 }
 
+namespace {
+
+u32 ResolveEffectiveApplicationVersion(const FileSys::ContentProviderUnion& cache,
+                                       u64 real_application_id) {
+    u32 version = 0;
+    if (const auto update_ver =
+            cache.GetEntryVersion(FileSys::GetUpdateTitleID(real_application_id));
+        update_ver.has_value()) {
+        version = (std::max)(version, *update_ver);
+    }
+    if (const auto base_ver = cache.GetEntryVersion(real_application_id); base_ver.has_value()) {
+        version = (std::max)(version, *base_ver);
+    }
+    return version != 0 ? version : 0x10000U;
+}
+
+} // namespace
+
 Result IApplicationManagerInterface::GetApplicationLogoData(
     Out<s64> out_size, OutBuffer<BufferAttr_HipcMapAlias> out_buffer, u64 application_id,
     InBuffer<BufferAttr_HipcMapAlias> logo_path_buffer) {
+    *out_size = 0;
+    const u64 real_app_id = ResolveCallerApplicationId(system, application_id);
     const std::string path_view{reinterpret_cast<const char*>(logo_path_buffer.data()),
                                 logo_path_buffer.size()};
 
@@ -502,13 +525,15 @@ Result IApplicationManagerInterface::GetApplicationLogoData(
     auto null_pos = path_view.find('\0');
     std::string path = (null_pos != std::string::npos) ? path_view.substr(0, null_pos) : path_view;
 
-    LOG_DEBUG(Service_NS, "called, application_id={:016X}, logo_path={}", application_id, path);
+    LOG_DEBUG(Service_NS, "called, application_id={:016X} (resolved={:016X}), logo_path={}",
+              application_id, real_app_id, path);
 
     auto& content_provider = system.GetContentProviderUnion();
 
-    auto program = content_provider.GetEntry(application_id, FileSys::ContentRecordType::Program);
+    auto program = content_provider.GetEntry(real_app_id, FileSys::ContentRecordType::Program);
     if (!program) {
-        LOG_WARNING(Service_NS, "Application program not found for id={:016X}", application_id);
+        LOG_DEBUG(Service_NS, "Application program NCA not available for logo id={:016X}",
+                  real_app_id);
         R_RETURN(ResultUnknown);
     }
 
@@ -565,45 +590,65 @@ Result IApplicationManagerInterface::ListApplicationRecord(
     OutArray<ApplicationRecord, BufferAttr_HipcMapAlias> out_records, Out<s32> out_count,
     s32 offset) {
     const auto limit = out_records.size();
+    const bool menu_caller = IsSystemAppletProcess(system);
 
-    LOG_DEBUG(Service_NS, "called");
     const auto& cache = system.GetContentProviderUnion();
     const auto installed_games = cache.ListEntriesFilterOrigin(
         std::nullopt, FileSys::TitleType::Application, FileSys::ContentRecordType::Program);
 
-    std::vector<ApplicationRecord> records;
-    records.reserve(installed_games.size());
-
+    // Deduplicate entries that exist across multiple providers (e.g. NAND + FrontendManual) and
+    // map Switch 2 0x0400... application IDs onto 0x01F0... aliases for Switch 1 qlaunch.
+    std::map<u64, s64> merged_timestamps;
     for (const auto& [slot, game] : installed_games) {
-         if (game.title_id == 0 || game.title_id < 0x0100000000001FFFull) {
-             continue;
-         }
-         if ((game.title_id & 0xFFF) != 0) {
-             continue; // skip sub-programs (e.g., 001)
-         }
+        (void)slot;
+        if (game.title_id <= 0x0100000000001FFFULL) {
+            continue;
+        }
+        if ((game.title_id & 0xFFFULL) != 0) {
+            continue; // skip sub-programs and patches/add-ons
+        }
+        const u64 exposed_id =
+            menu_caller ? ToHomeMenuApplicationId(game.title_id) : game.title_id;
+        // Never let a Switch 2 alias overwrite an actual 0x01F0... application record.
+        if (exposed_id != game.title_id &&
+            cache.HasEntry(exposed_id, FileSys::ContentRecordType::Program)) {
+            continue;
+        }
+        const s64 ts = (std::max)(Core::LaunchTimestampCache::GetLaunchTimestamp(game.title_id),
+                                  Core::LaunchTimestampCache::GetLaunchTimestamp(exposed_id));
+        auto [it, inserted] = merged_timestamps.try_emplace(exposed_id, ts);
+        if (!inserted && ts > it->second) {
+            it->second = ts;
+        }
+    }
 
-         ApplicationRecord record{};
-         record.application_id = game.title_id;
-         record.last_event = ApplicationEvent::Installed;
-         record.attributes = 0;
-         record.last_updated = Core::LaunchTimestampCache::GetLaunchTimestamp(game.title_id);
+    std::vector<ApplicationRecord> records;
+    records.reserve(merged_timestamps.size());
+    for (const auto& [app_id, last_updated] : merged_timestamps) {
+        ApplicationRecord record{};
+        record.application_id = app_id;
+        record.last_event = ApplicationEvent::Installed;
+        record.attributes = 0;
+        record.last_updated = last_updated;
+        records.push_back(record);
+    }
 
-         records.push_back(record);
-     }
-
-     std::sort(records.begin(), records.end(), [](const ApplicationRecord& lhs, const ApplicationRecord& rhs) {
-         if (lhs.last_updated == rhs.last_updated) {
-             return lhs.application_id < rhs.application_id;
-         }
-         return lhs.last_updated > rhs.last_updated;
-     });
+    std::sort(records.begin(), records.end(),
+              [](const ApplicationRecord& lhs, const ApplicationRecord& rhs) {
+                  if (lhs.last_updated == rhs.last_updated) {
+                      return lhs.application_id < rhs.application_id;
+                  }
+                  return lhs.last_updated > rhs.last_updated;
+              });
 
     size_t i = 0;
-    const size_t start = static_cast<size_t>(std::max(0, offset));
+    const size_t start = static_cast<size_t>((std::max)(0, offset));
     for (size_t idx = start; idx < records.size() && i < limit; ++idx) {
         out_records[i++] = records[idx];
     }
 
+    LOG_DEBUG(Service_NS, "offset={} limit={} total={} returned={}", offset, limit, records.size(),
+              i);
     *out_count = static_cast<s32>(i);
     R_SUCCEED();
 }
@@ -646,21 +691,33 @@ Result IApplicationManagerInterface::Unknown936(Out<u64> out_result) {
 
 Result IApplicationManagerInterface::IsAnyApplicationEntityInstalled(
     Out<bool> out_is_any_application_entity_installed) {
-    LOG_WARNING(Service_NS, "(STUBBED) called");
-    *out_is_any_application_entity_installed = true;
+    const auto& cache = system.GetContentProviderUnion();
+    const auto installed_games = cache.ListEntriesFilterOrigin(
+        std::nullopt, FileSys::TitleType::Application, FileSys::ContentRecordType::Program);
+    bool any = false;
+    for (const auto& [slot, game] : installed_games) {
+        (void)slot;
+        if (game.title_id > 0x0100000000001FFFULL && (game.title_id & 0xFFFULL) == 0) {
+            any = true;
+            break;
+        }
+    }
+    *out_is_any_application_entity_installed = any;
     R_SUCCEED();
 }
 
 Result IApplicationManagerInterface::DeleteApplicationEntity(u64 application_id) {
-    LOG_DEBUG(Service_NS, "called, application_id={:016X}", application_id);
+    const u64 real_id = ResolveCallerApplicationId(system, application_id);
+    LOG_DEBUG(Service_NS, "called, application_id={:016X} (resolved={:016X})", application_id,
+              real_id);
 
     auto& fsc = system.GetFileSystemController();
     if (auto* const user_cache = fsc.GetUserNANDContents(); user_cache != nullptr) {
-        user_cache->RemoveExistingEntry(application_id);
+        user_cache->RemoveExistingEntry(real_id);
         user_cache->Refresh();
     }
     if (auto* const sdmc_cache = fsc.GetSDMCContents(); sdmc_cache != nullptr) {
-        sdmc_cache->RemoveExistingEntry(application_id);
+        sdmc_cache->RemoveExistingEntry(real_id);
         sdmc_cache->Refresh();
     }
 
@@ -676,12 +733,15 @@ Result IApplicationManagerInterface::GetApplicationViewDeprecated(
     OutArray<ApplicationViewV19, BufferAttr_HipcMapAlias> out_application_views,
     InArray<u64, BufferAttr_HipcMapAlias> application_ids) {
     const auto size = (std::min)(out_application_views.size(), application_ids.size());
-    LOG_WARNING(Service_NS, "(STUBBED) called, size={}", application_ids.size());
+    const auto& cache = system.GetContentProviderUnion();
+    LOG_DEBUG(Service_NS, "called, size={}", application_ids.size());
 
     for (size_t i = 0; i < size; i++) {
+        const u64 req_id = application_ids[i];
+        const u64 real_id = ResolveCallerApplicationId(system, req_id);
         ApplicationViewV19 view{};
-        view.application_id = application_ids[i];
-        view.version = 0x70000;
+        view.application_id = req_id;
+        view.version = ResolveEffectiveApplicationVersion(cache, real_id);
         view.flags = 0x401f17;
 
         out_application_views[i] = view;
@@ -691,32 +751,35 @@ Result IApplicationManagerInterface::GetApplicationViewDeprecated(
 }
 
 Result IApplicationManagerInterface::GetApplicationViewWithPromotionInfo(
-    OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
-    Out<u32> out_count,
+    OutBuffer<BufferAttr_HipcMapAlias> out_buffer, Out<u32> out_count,
     InArray<u64, BufferAttr_HipcMapAlias> application_ids) {
     const auto requested = application_ids.size();
-    LOG_WARNING(Service_NS, "called, size={}", requested);
+    const auto& cache = system.GetContentProviderUnion();
+    LOG_DEBUG(Service_NS, "called, size={}", requested);
 
     const auto fw_pair = FirmwareManager::GetFirmwareVersion(system);
     const bool is_fw20 = fw_pair.first.major >= 20;
 
     const size_t per_entry_size = is_fw20 ? (sizeof(ApplicationViewV20) + sizeof(PromotionInfo))
-                                             : (sizeof(ApplicationViewV19) + sizeof(PromotionInfo));
+                                          : (sizeof(ApplicationViewV19) + sizeof(PromotionInfo));
     const size_t capacity_entries = out_buffer.size() / per_entry_size;
     const size_t to_write_entries = (std::min)(requested, capacity_entries);
 
     u8* dst = out_buffer.data();
     for (size_t i = 0; i < to_write_entries; ++i) {
+        const u64 req_id = application_ids[i];
+        const u64 real_id = ResolveCallerApplicationId(system, req_id);
         ApplicationViewWithPromotionData data{};
-        data.view.application_id = application_ids[i];
-        data.view.version = 0x70000;
+        data.view.application_id = req_id;
+        data.view.version = ResolveEffectiveApplicationVersion(cache, real_id);
         data.view.unk = 0;
         data.view.flags = 0x401f17;
         data.view.download_state = {};
         data.view.download_progress = {};
         data.promotion = {};
 
-        const size_t written = WriteApplicationViewWithPromotion(dst, out_buffer.size() - (dst - out_buffer.data()), data, is_fw20);
+        const size_t written = WriteApplicationViewWithPromotion(
+            dst, out_buffer.size() - (dst - out_buffer.data()), data, is_fw20);
         if (written == 0) {
             break;
         }
@@ -731,12 +794,15 @@ Result IApplicationManagerInterface::GetApplicationView(
     OutArray<ApplicationViewV20, BufferAttr_HipcMapAlias> out_application_views,
     InArray<u64, BufferAttr_HipcMapAlias> application_ids) {
     const auto size = (std::min)(out_application_views.size(), application_ids.size());
-    LOG_WARNING(Service_NS, "(STUBBED) called, size={}", application_ids.size());
+    const auto& cache = system.GetContentProviderUnion();
+    LOG_DEBUG(Service_NS, "called, size={}", application_ids.size());
 
     for (size_t i = 0; i < size; i++) {
+        const u64 req_id = application_ids[i];
+        const u64 real_id = ResolveCallerApplicationId(system, req_id);
         ApplicationViewV20 view{};
-        view.application_id = application_ids[i];
-        view.version = 0x70000;
+        view.application_id = req_id;
+        view.version = ResolveEffectiveApplicationVersion(cache, real_id);
         view.unk = 0;
         view.flags = 0x401f17;
 
@@ -818,8 +884,87 @@ Result IApplicationManagerInterface::GetStorageSize(Out<s64> out_total_space_siz
     R_SUCCEED();
 }
 
+Result IApplicationManagerInterface::CalculateApplicationOccupiedSize(
+    Out<ApplicationOccupiedSize> out_size, u64 application_id) {
+    R_RETURN(IContentManagementInterface(system).CalculateApplicationOccupiedSize(out_size,
+                                                                                  application_id));
+}
+
+Result IApplicationManagerInterface::CheckApplicationLaunchRights(u64 application_id) {
+    LOG_DEBUG(Service_NS, "called, application_id={:016X}", application_id);
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::GetApplicationControlProperty(
+    OutBuffer<BufferAttr_HipcMapAlias> out_buffer, u64 application_id) {
+    u32 actual_size = 0;
+    R_RETURN(IReadOnlyApplicationControlDataInterface(system).GetApplicationControlData(
+        out_buffer, &actual_size, ApplicationControlSource::Storage, application_id));
+}
+
+Result IApplicationManagerInterface::IsGameCardInserted(Out<bool> out_is_inserted) {
+    *out_is_inserted = false;
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::ListApplicationIdOnGameCard(
+    OutArray<u64, BufferAttr_HipcMapAlias> out_ids, Out<s32> out_count) {
+    (void)out_ids;
+    *out_count = 0;
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::GetGameCardAttachmentEvent(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    *out_event = gamecard_mount_status_event.GetHandle();
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::GetSdCardRemovedEvent(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    *out_event = sd_card_mount_status_event.GetHandle();
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::GetLastSdCardMountUnexpectedResult() {
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::CountApplicationContentMeta(Out<s32> out_count,
+                                                                 u64 application_id) {
+    R_RETURN(IContentManagementInterface(system).CountApplicationContentMeta(out_count,
+                                                                             application_id));
+}
+
+Result IApplicationManagerInterface::GetApplicationRecord(Out<ApplicationRecord> out_record,
+                                                          u64 application_id) {
+    const u64 real_id = ResolveCallerApplicationId(system, application_id);
+    const auto& cache = system.GetContentProviderUnion();
+    ApplicationRecord record{};
+    record.application_id = application_id;
+    record.last_event = cache.HasEntry(real_id, FileSys::ContentRecordType::Program)
+                            ? ApplicationEvent::Installed
+                            : ApplicationEvent::Archived;
+    record.attributes = 0;
+    record.last_updated = (std::max)(Core::LaunchTimestampCache::GetLaunchTimestamp(real_id),
+                                     Core::LaunchTimestampCache::GetLaunchTimestamp(application_id));
+    *out_record = record;
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::HasApplicationRecord(Out<bool> out_has_record,
+                                                          u64 application_id) {
+    const u64 real_id = ResolveCallerApplicationId(system, application_id);
+    *out_has_record =
+        system.GetContentProviderUnion().HasEntry(real_id, FileSys::ContentRecordType::Program);
+    R_SUCCEED();
+}
+
 Result IApplicationManagerInterface::TouchApplication(u64 application_id) {
-    LOG_WARNING(Service_NS, "(STUBBED) called. application_id={:016X}", application_id);
+    const u64 real_id = ResolveCallerApplicationId(system, application_id);
+    LOG_DEBUG(Service_NS, "called, application_id={:016X} (resolved={:016X})", application_id,
+              real_id);
+    Core::LaunchTimestampCache::SaveLaunchTimestamp(real_id);
     R_SUCCEED();
 }
 

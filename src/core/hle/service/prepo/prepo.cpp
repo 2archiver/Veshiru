@@ -9,14 +9,68 @@
 #include <cstring>
 
 #include "core/core.h"
+#include "core/hle/kernel/k_event.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/ipc_helpers.h"
+#include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/prepo/prepo.h"
 #include "core/hle/service/server_manager.h"
 #include "core/hle/service/service.h"
 #include "core/reporter.h"
 
 namespace Service::PlayReport {
+
+// What Switch 2 titles get back when they save a report (command 10500): their SDK waits on its
+// completion event and reads its result.
+class IAsyncContext final : public ServiceFramework<IAsyncContext> {
+public:
+    explicit IAsyncContext(Core::System& system_)
+        : ServiceFramework{system_, "prepo:IAsyncContext"},
+          service_context{system_, "prepo:IAsyncContext"} {
+        // clang-format off
+        static const FunctionInfo functions[] = {
+            {0, &IAsyncContext::GetSystemEvent, "GetSystemEvent"},
+            {1, &IAsyncContext::Cancel, "Cancel"},
+            {2, &IAsyncContext::Done, "GetResult"},
+            {3, &IAsyncContext::Done, "GetResult"},
+        };
+        // clang-format on
+        RegisterHandlers(functions);
+
+        completion_event = service_context.CreateEvent("prepo:IAsyncContext:CompletionEvent");
+        completion_event->Signal(system.Kernel());
+    }
+
+    ~IAsyncContext() override {
+        service_context.CloseEvent(completion_event);
+    }
+
+private:
+    void GetSystemEvent(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_PREPO, "called");
+        IPC::ResponseBuilder rb{ctx, 2, 1};
+        rb.Push(ResultSuccess);
+        rb.PushCopyObjects(ctx, completion_event->GetReadableEvent());
+    }
+
+    void Cancel(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_PREPO, "called");
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    // Commands 2 and 3 (HasDone and GetResult in the account service's context; the order in
+    // prepo's is not known): success, and done for a caller that reads a flag.
+    void Done(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_PREPO, "called");
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push<u32>(1);
+    }
+
+    KernelHelpers::ServiceContext service_context;
+    Kernel::KEvent* completion_event{};
+};
 
 class PlayReport final : public ServiceFramework<PlayReport> {
 public:
@@ -131,14 +185,16 @@ private:
         rb.Push(system_session_id);
     }
 
-    // Called by Switch 2 titles (Ocarina of Time 0400486024DEC000) when they save a report. The
-    // request carries a process id, one copy handle and an X buffer; its exact layout is not
-    // known, so it is acknowledged without being parsed. A play report has no effect on the game.
+    // Called by Switch 2 titles (Ocarina of Time 0400486024DEC000) when they save a report: a
+    // process id, a transfer memory with the report and an X buffer in, an IAsyncContext out
+    // (without it the title read a garbage object id, asked it for its completion event and its
+    // report thread aborted). Nothing is sent, so the context is complete from the start.
     void Unknown10500(HLERequestContext& ctx) {
         LOG_DEBUG(Service_PREPO, "(STUBBED) called");
 
-        IPC::ResponseBuilder rb{ctx, 2};
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(ResultSuccess);
+        rb.PushIpcInterface<IAsyncContext>(ctx, system);
     }
 
     void SaveSystemReportOld(HLERequestContext& ctx) {
