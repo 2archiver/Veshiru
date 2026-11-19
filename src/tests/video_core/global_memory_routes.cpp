@@ -251,7 +251,6 @@ TEST_CASE("Multi-buffer global memory helpers use DontInline in classic graphics
         program.syntax_list = {{{.block = &block}, IR::AbstractSyntaxNode::Type::Block},
                                {{}, IR::AbstractSyntaxNode::Type::Return}};
         NativeEnvironment env;
-        env.stage = stage;
         Optimization::CollectShaderInfoPass(env, program);
         program.info.is_task = stage == Stage::Task;
         program.info.is_mesh = stage == Stage::Mesh;
