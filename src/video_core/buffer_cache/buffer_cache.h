@@ -1015,17 +1015,17 @@ void BufferCache<P>::NoteReadBack(DAddr begin, DAddr end, bool gpu_modified) {
             }
             it->written = false;
             it->unread_writes = 0;
-            const bool sequential_ring = it != read_back_pages.begin() &&
-                                         std::prev(it)->page + DEVICE_PAGESIZE == page &&
-                                         std::prev(it)->reads > 0;
-            it->reads = sequential_ring
-                            ? EarlyAfterReads
-                            : (std::min)(static_cast<u16>(it->reads + 1), EarlyAfterReads);
+            it->reads = (std::min)(static_cast<u16>(it->reads + 1), EarlyAfterReads);
             it->last_read = ++read_back_reads;
-            if (sequential_ring && page + 2 * DEVICE_PAGESIZE >= end) {
-                // Switch 2 cyclic compute/query readback rings walk forward one page at a time:
-                // pre-arm the next two ring pages so their GPU writes enqueue an early download
-                // immediately instead of stalling the guest CPU on first touch.
+            const bool proven_ring = it != read_back_pages.begin() &&
+                                     it->reads >= EarlyAfterReads &&
+                                     std::prev(it)->page + DEVICE_PAGESIZE == page &&
+                                     std::prev(it)->reads >= EarlyAfterReads;
+            if (proven_ring && page + 2 * DEVICE_PAGESIZE >= end) {
+                // Once two adjacent pages are established as recurring GPU-to-CPU readbacks,
+                // pre-arm up to two unseen frontier pages ahead of the cursor so Switch 2 cyclic
+                // compute/query readback rings schedule early downloads on first write instead of
+                // stalling the guest CPU on every new slot.
                 const u64 seed_read = it->last_read;
                 for (u32 step = 1; step <= 2; ++step) {
                     const DAddr next_page = page + step * DEVICE_PAGESIZE;
@@ -1041,8 +1041,6 @@ void BufferCache<P>::NoteReadBack(DAddr begin, DAddr end, bool gpu_modified) {
                                          .last_read = seed_read,
                                          .reads = EarlyAfterReads,
                                      });
-                    } else if (next_it->reads < EarlyAfterReads) {
-                        next_it->reads = EarlyAfterReads;
                     }
                 }
                 read_back_first.store(read_back_pages.front().page, std::memory_order_release);

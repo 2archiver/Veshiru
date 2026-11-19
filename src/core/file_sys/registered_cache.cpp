@@ -1492,10 +1492,19 @@ std::unique_ptr<NCA> ManualContentProvider::GetEntry(u64 title_id, ContentRecord
     const auto res = GetEntryRaw(title_id, type);
     if (res == nullptr)
         return nullptr;
+    // Program entries registered from non-NCA containers (.nup, .nx, .nro, extracted ExeFS) are
+    // launched via GetEntryRaw/GetApplicationInfo rather than opened as NCAs; skip NCA header
+    // decryption entirely so neither keyed nor keyless hosts see spurious NCA failures, while
+    // preserving genuine Program NCAs and BKTR patch NCAs (ErrorMissingBKTRBaseRomFS).
+    if (type == ContentRecordType::Program) {
+        const auto file_type = Loader::IdentifyFile(res);
+        if (file_type == Loader::FileType::NUP || file_type == Loader::FileType::NX ||
+            file_type == Loader::FileType::NRO || file_type == Loader::FileType::NSO ||
+            file_type == Loader::FileType::DeconstructedRomDirectory) {
+            return nullptr;
+        }
+    }
     auto nca = std::make_unique<NCA>(res);
-    // Program entries registered from loose/archive containers (.nup, .nx, .nro) are launched via
-    // GetEntryRaw/GetApplicationInfo and do not carry an NCA header; return nullptr instead of a
-    // failed NCA while preserving BKTR patch NCAs (ErrorMissingBKTRBaseRomFS).
     if (nca->GetStatus() == Loader::ResultStatus::ErrorBadNCAHeader) {
         return nullptr;
     }

@@ -251,6 +251,10 @@ TEST_CASE("Multi-buffer global memory helpers use DontInline in classic graphics
                                {{}, IR::AbstractSyntaxNode::Type::Return}};
         program.info.uses_global_memory = true;
         program.info.native_global_bounds = true;
+        if (stage == Stage::Task || stage == Stage::Mesh) {
+            program.info.uses_workgroup_id = true;
+            program.info.uses_local_invocation_id = true;
+        }
         program.info.constant_buffer_mask = 1;
         program.info.constant_buffer_used_sizes[0] = 0x100;
         program.info.constant_buffer_descriptors = {{0, 1}};
