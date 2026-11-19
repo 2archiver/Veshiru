@@ -280,18 +280,19 @@ TEST_CASE("Multi-buffer global memory helpers stay out-of-line outside Task and 
         return Backend::SPIRV::EmitSPIRV(profile, runtime_info, program, binding);
     };
 
-    // Multi-buffer fragment, vertex, and non-select compute helpers stay out-of-line (#907).
+    // Multi-buffer classic graphics helpers (32/64/128-bit load + write) stay out-of-line (#907).
     CHECK(count_dont_inline(emit_for_stage(Stage::Fragment, 4)) == 6);
     CHECK(count_dont_inline(emit_for_stage(Stage::VertexB, 4)) == 6);
-    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4)) == 6);
-    // Single-buffer routes stay inline on both branch-chain and select paths.
+    // Single-buffer routes stay inline on both branch-chain and OpSelect compute paths.
     CHECK(count_dont_inline(emit_for_stage(Stage::Fragment, 1)) == 0);
     CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 1)) == 0);
     CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 1, true)) == 0);
-    // Multi-buffer select path uses a single DontInline search_function while keeping load/write
-    // helpers themselves inline.
+    // Multi-buffer OpSelect compute uses a single DontInline search_function while keeping
+    // load/write helpers themselves inline.
     CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4, true)) == 1);
-    // Task, Mesh, and emulated mesh-as-compute stages stay inline to avoid NVIDIA tree-wall bugs.
+    // Non-select Compute, Task, Mesh, and emulated mesh-as-compute keep helpers inline to avoid
+    // NVIDIA foliage culling and Hyrule Field tree miscompiles in Ocarina of Time.
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4)) == 0);
     CHECK(count_dont_inline(emit_for_stage(Stage::Task, 4)) == 0);
     CHECK(count_dont_inline(emit_for_stage(Stage::Mesh, 4)) == 0);
     CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4, false, true)) == 0);

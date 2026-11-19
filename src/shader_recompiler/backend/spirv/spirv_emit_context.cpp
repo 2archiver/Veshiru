@@ -1197,10 +1197,11 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
     // DontInline, and out-of-line branch helpers miscompiled Ocarina of Time's foliage compute
     // culling on NVIDIA); Task and Mesh stages also keep inline emission to avoid NVIDIA
     // mesh-stage call-frame miscompiles in Hyrule Field; single-buffer routes stay inline.
-    // Keep multi-buffer global-memory routing helpers out of line (DontInline) outside Task/Mesh
-    // shaders (upstream #907: inlining multi-buffer chains cut OoT Market from ~58 to ~45 FPS and
-    // quadrupled 30-buffer compute compile times). Task, Mesh, emulated mesh-as-compute, and
-    // single-buffer routes stay inline; select_global_memory_buffer uses search_function instead.
+    // Keep multi-buffer global-memory routing helpers out of line (DontInline) across classic
+    // graphics stages (upstream #907: inlining multi-buffer chains cut OoT Market from ~58 to
+    // ~45 FPS). Compute, Task, Mesh, emulated mesh-as-compute, and single-buffer routes stay
+    // inline to preserve Ocarina of Time foliage culling and Hyrule Field tree accuracy on NVIDIA;
+    // select_global_memory_buffer uses search_function on multi-buffer compute shaders instead.
     // EDEN_NX2_LEAN_SSBO=0 restores unconditional inlining.
     static const bool lean_ssbo_helpers{[] {
         const char* const env = std::getenv("EDEN_NX2_LEAN_SSBO");
@@ -1208,8 +1209,8 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
     }()};
     const auto helper_control{[&]() noexcept {
         if (lean_ssbo_helpers && !profile.select_global_memory_buffer &&
-            !runtime_info.mesh_as_compute && stage != Stage::Task && stage != Stage::Mesh &&
-            buffers.size() > 1) {
+            !runtime_info.mesh_as_compute && stage != Stage::Compute && stage != Stage::Task &&
+            stage != Stage::Mesh && buffers.size() > 1) {
             return spv::FunctionControlMask::DontInline;
         }
         return spv::FunctionControlMask::MaskNone;
