@@ -630,6 +630,16 @@ struct Values {
                                                            "vram_usage_mode",
                                                            Category::RendererAdvanced};
 
+    /// Video memory kept free of the driver's budget, in MiB. -1: automatic (an eighth of the
+    /// budget, at most 1 GiB). Used for the reported VRAM and the texture cache's margin.
+    SwitchableSetting<int, true> vram_reserve_mib{linkage,
+                                                  -1,
+                                                  -1,
+                                                  4096,
+                                                  "vram_reserve_mib",
+                                                  Category::RendererAdvanced,
+                                                  Specialization::Countable};
+
     /// Device memory in MiB the texture cache may fill before it collects in earnest; 0 is Auto.
     SwitchableSetting<u32, true> texture_cache_memory_limit{linkage,
                                                             0,
@@ -1195,6 +1205,10 @@ bool SkipCpuInnerInvalidation();
 // for the running program (the configuration is left as is). The core clears it on load.
 AstcRecompression GetAstcRecompression();
 void SetAstcRecompressionOverride(std::optional<AstcRecompression> recompression);
+
+/// The video memory to keep free of a driver budget: vram_reserve_mib, or with -1 an eighth of
+/// the budget, at most 1 GiB. Never more than the budget.
+u64 GetVramReserve(u64 budget);
 
 bool IsOpenGL();
 

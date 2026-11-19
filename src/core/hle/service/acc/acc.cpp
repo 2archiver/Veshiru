@@ -93,13 +93,13 @@ public:
             {113, nullptr, "GetServiceEntryRequirementCacheForOnlinePlay"}, // 6.1.0+
             {120, nullptr, "GetNintendoAccountId"},
             {121, nullptr, "CalculateNintendoAccountAuthenticationFingerprint"}, // 9.0.0+
-            {130, nullptr, "GetNintendoAccountUserResourceCache"},
+            {130, &IManagerForSystemService::GetNintendoAccountUserResourceCache, "GetNintendoAccountUserResourceCache"},
             {131, nullptr, "RefreshNintendoAccountUserResourceCacheAsync"},
             {132, nullptr, "RefreshNintendoAccountUserResourceCacheAsyncIfSecondsElapsed"},
             {133, nullptr, "GetNintendoAccountVerificationUrlCache"}, // 9.0.0+
             {134, nullptr, "RefreshNintendoAccountVerificationUrlCache"}, // 9.0.0+
             {135, nullptr, "RefreshNintendoAccountVerificationUrlCacheAsyncIfSecondsElapsed"}, // 9.0.0+
-            {136, nullptr, "GetNintendoAccountUserResourceCache"}, // 19.0.0+
+            {136, &IManagerForSystemService::GetNintendoAccountUserResourceCache, "GetNintendoAccountUserResourceCache"}, // 19.0.0+
             {140, nullptr, "GetNetworkServiceLicenseCache"}, // 5.0.0+
             {141, nullptr, "RefreshNetworkServiceLicenseCacheAsync"}, // 5.0.0+
             {142, nullptr, "RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed"}, // 5.0.0+
@@ -135,6 +135,21 @@ private:
     Result LoadIdTokenCache() {
         LOG_WARNING(Service_ACC, "(STUBBED) called");
         R_SUCCEED();
+    }
+
+    void GetNintendoAccountUserResourceCache(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "(STUBBED) called");
+        if (ctx.CanWriteBuffer(0)) {
+            std::vector<u8> cache(ctx.GetWriteBufferSize(0), 0);
+            (void)ctx.WriteBuffer(cache, 0);
+        }
+        if (ctx.CanWriteBuffer(1)) {
+            std::vector<u8> extra(ctx.GetWriteBufferSize(1), 0);
+            (void)ctx.WriteBuffer(extra, 1);
+        }
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push<u64>(0);
     }
 
     Result GetNetworkServiceLicenseCacheEx(Out<u32> out_license, Out<s64> out_expiration) {
@@ -194,12 +209,13 @@ public:
             {113, nullptr, "GetServiceEntryRequirementCacheForOnlinePlay"}, // 6.1.0+
             {120, nullptr, "GetNintendoAccountId"},
             {121, nullptr, "CalculateNintendoAccountAuthenticationFingerprint"}, // 9.0.0+
-            {130, nullptr, "GetNintendoAccountUserResourceCache"},
+            {130, &IAdministrator::GetNintendoAccountUserResourceCache, "GetNintendoAccountUserResourceCache"},
             {131, nullptr, "RefreshNintendoAccountUserResourceCacheAsync"},
             {132, nullptr, "RefreshNintendoAccountUserResourceCacheAsyncIfSecondsElapsed"},
             {133, nullptr, "GetNintendoAccountVerificationUrlCache"}, // 9.0.0+
             {134, nullptr, "RefreshNintendoAccountVerificationUrlCacheAsync"}, // 9.0.0+
             {135, nullptr, "RefreshNintendoAccountVerificationUrlCacheAsyncIfSecondsElapsed"}, // 9.0.0+
+            {136, &IAdministrator::GetNintendoAccountUserResourceCache, "GetNintendoAccountUserResourceCache"}, // 19.0.0+
             {140, nullptr, "GetNetworkServiceLicenseCache"}, // 5.0.0+
             {141, nullptr, "RefreshNetworkServiceLicenseCacheAsync"}, // 5.0.0+
             {142, nullptr, "RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed"}, // 5.0.0+
@@ -239,6 +255,21 @@ public:
     }
 
 private:
+    void GetNintendoAccountUserResourceCache(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "(STUBBED) called");
+        if (ctx.CanWriteBuffer(0)) {
+            std::vector<u8> cache(ctx.GetWriteBufferSize(0), 0);
+            (void)ctx.WriteBuffer(cache, 0);
+        }
+        if (ctx.CanWriteBuffer(1)) {
+            std::vector<u8> extra(ctx.GetWriteBufferSize(1), 0);
+            (void)ctx.WriteBuffer(extra, 1);
+        }
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push<u64>(0);
+    }
+
     void IsLinkedWithNintendoAccount(HLERequestContext& ctx) {
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
@@ -457,11 +488,15 @@ protected:
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
 
-        const Common::FS::IOFile image(GetImagePath(user_id), Common::FS::FileAccessMode::Read,
+        const auto image_path = GetImagePath(user_id);
+        if (!Common::FS::Exists(image_path)) {
+            ctx.WriteBuffer(Core::Constants::ACCOUNT_BACKUP_JPEG);
+            rb.Push(static_cast<u32>(Core::Constants::ACCOUNT_BACKUP_JPEG.size()));
+            return;
+        }
+        const Common::FS::IOFile image(image_path, Common::FS::FileAccessMode::Read,
                                        Common::FS::FileType::BinaryFile);
         if (!image.IsOpen()) {
-            LOG_WARNING(Service_ACC,
-                        "Failed to load user provided image! Falling back to built-in backup...");
             ctx.WriteBuffer(Core::Constants::ACCOUNT_BACKUP_JPEG);
             rb.Push(static_cast<u32>(Core::Constants::ACCOUNT_BACKUP_JPEG.size()));
             return;
@@ -484,12 +519,15 @@ protected:
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
 
-        const Common::FS::IOFile image(GetImagePath(user_id), Common::FS::FileAccessMode::Read,
+        const auto image_path = GetImagePath(user_id);
+        if (!Common::FS::Exists(image_path)) {
+            rb.Push(static_cast<u32>(Core::Constants::ACCOUNT_BACKUP_JPEG.size()));
+            return;
+        }
+        const Common::FS::IOFile image(image_path, Common::FS::FileAccessMode::Read,
                                        Common::FS::FileType::BinaryFile);
 
         if (!image.IsOpen()) {
-            LOG_WARNING(Service_ACC,
-                        "Failed to load user provided image! Falling back to built-in backup...");
             rb.Push(static_cast<u32>(Core::Constants::ACCOUNT_BACKUP_JPEG.size()));
             return;
         }

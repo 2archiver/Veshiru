@@ -61,6 +61,20 @@ public:
     Result DeleteApplicationCompletely(u64 application_id);
     Result GetStorageSize(Out<s64> out_total_space_size, Out<s64> out_free_space_size,
                           FileSys::StorageId storage_id);
+    Result CalculateApplicationOccupiedSize(Out<ApplicationOccupiedSize> out_size,
+                                            u64 application_id);
+    Result CheckApplicationLaunchRights(u64 application_id);
+    Result GetApplicationControlProperty(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
+                                         u64 application_id);
+    Result IsGameCardInserted(Out<bool> out_is_inserted);
+    Result ListApplicationIdOnGameCard(OutArray<u64, BufferAttr_HipcMapAlias> out_ids,
+                                       Out<s32> out_count);
+    Result GetGameCardAttachmentEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result GetSdCardRemovedEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result GetLastSdCardMountUnexpectedResult();
+    Result CountApplicationContentMeta(Out<s32> out_count, u64 application_id);
+    Result GetApplicationRecord(Out<ApplicationRecord> out_record, u64 application_id);
+    Result HasApplicationRecord(Out<bool> out_has_record, u64 application_id);
     Result TouchApplication(u64 application_id);
     Result IsApplicationUpdateRequested(Out<bool> out_update_required, Out<u32> out_update_version,
                                         u64 application_id);

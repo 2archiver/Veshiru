@@ -66,8 +66,11 @@ public:
     ResultStatus ReadPatchedRomFS(FileSys::VirtualFile& out_file);
 
     /// Adds the base, update and add-on NCAs of a native archive to a content provider, so the
-    /// patch manager finds them as it does for a base NSP with separate update files.
-    void RegisterContent(FileSys::ManualContentProvider& provider) const;
+    /// patch manager finds them as it does for a base NSP with separate update files. When
+    /// include_application is true, also registers tree-snapshot programs and synthesized Control
+    /// NCAs so HOME Menu discovers every .nx title (Switch 1 and Switch 2).
+    void RegisterContent(FileSys::ManualContentProvider& provider,
+                         bool include_application = false) const;
 
 private:
     struct Impl;

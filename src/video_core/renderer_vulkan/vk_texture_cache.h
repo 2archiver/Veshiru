@@ -317,6 +317,8 @@ public:
         u32 layers;
         u32 unused_frames;
         u64 last_use;
+        /// Per level and layer (level * layers + layer), for layer-chunked decodes.
+        std::vector<vk::ImageView> layer_views{};
     };
     std::deque<PendingTranscode> pending_transcodes;
     /// Decode images the GPU is done with, for the next texture of the same shape.

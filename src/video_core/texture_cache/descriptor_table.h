@@ -6,8 +6,10 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "common/alignment.h"
@@ -73,6 +75,67 @@ public:
         return result;
     }
 
+    template <class MemoryManager>
+    [[nodiscard]] std::pair<const T&, bool> ReadReference(const MemoryManager& gpu_memory,
+                                                          u32 index, bool graphics) noexcept {
+        static_assert(sizeof(T) == sizeof(std::declval<T>().raw));
+        if (!graphics) {
+            const auto result = Read(gpu_memory, index);
+            return {descriptors[index], result.second};
+        }
+        DEBUG_ASSERT(index <= current_limit);
+        if (invalidated) {
+            ClearReadDescriptors();
+            invalidated = false;
+        }
+        const GPUVAddr gpu_addr = current_gpu_addr + index * sizeof(T);
+        const u64 page_offset = gpu_addr & Core::Memory::VESHIRU_PAGEMASK;
+        const u8* source = nullptr;
+        if (page_offset + sizeof(T) <= Core::Memory::VESHIRU_PAGESIZE) [[likely]] {
+            if constexpr (requires { gpu_memory.GetID(); gpu_memory.HostPointerSerial(); }) {
+                const GPUVAddr page_addr = gpu_addr - page_offset;
+                auto& entry = page_cache[(page_addr >> Core::Memory::VESHIRU_PAGEBITS) &
+                                         (PageCacheSize - 1)];
+                const size_t memory_id = gpu_memory.GetID();
+                const u64 host_serial = gpu_memory.HostPointerSerial();
+                if (entry.page_addr != page_addr || entry.memory_id != memory_id ||
+                    entry.host_serial != host_serial || entry.host_ptr == nullptr) {
+                    entry = {page_addr, memory_id, host_serial, gpu_memory.GetPointer(page_addr)};
+                }
+                if (entry.host_ptr != nullptr) {
+                    source = entry.host_ptr + page_offset;
+                }
+            } else {
+                source = gpu_memory.GetPointer(gpu_addr);
+            }
+        }
+        T fallback;
+        if (source == nullptr) {
+            gpu_memory.ReadBlockUnsafe(gpu_addr, std::addressof(fallback), sizeof(T));
+            source = reinterpret_cast<const u8*>(std::addressof(fallback));
+        }
+        const u64 bit = u64{1} << (index % 64);
+        u64& seen = read_descriptors[index / 64];
+        static_assert(sizeof(T) == 4 * sizeof(u64));
+        std::array<u64, 4> words;
+        std::memcpy(&words[0], source, sizeof(u64));
+        std::memcpy(&words[1], source + sizeof(u64), sizeof(u64));
+        std::memcpy(&words[2], source + 2 * sizeof(u64), sizeof(u64));
+        std::memcpy(&words[3], source + 3 * sizeof(u64), sizeof(u64));
+        T& cached = descriptors[index];
+        const bool changed = (seen & bit) == 0 || words[0] != cached.raw[0] ||
+                             words[1] != cached.raw[1] || words[2] != cached.raw[2] ||
+                             words[3] != cached.raw[3];
+        if (changed) {
+            cached.raw[0] = words[0];
+            cached.raw[1] = words[1];
+            cached.raw[2] = words[2];
+            cached.raw[3] = words[3];
+            seen |= bit;
+        }
+        return {cached, changed};
+    }
+
     void Refresh(GPUVAddr gpu_addr, u32 limit) noexcept {
         current_gpu_addr = gpu_addr;
         current_limit = limit;
@@ -99,6 +162,15 @@ public:
     u64 changes{};
 
 private:
+    static constexpr size_t PageCacheSize = 64;
+    struct PageCacheEntry {
+        GPUVAddr page_addr{~GPUVAddr{0}};
+        size_t memory_id{};
+        u64 host_serial{};
+        const u8* host_ptr{};
+    };
+    std::array<PageCacheEntry, PageCacheSize> page_cache{};
+
     void ClearReadDescriptors() noexcept {
         // Reserved capacity is not addressable. A later limit increase clears its new range.
         const size_t words = (std::min)(read_descriptors.size(), size_t{current_limit} / 64 + 1);

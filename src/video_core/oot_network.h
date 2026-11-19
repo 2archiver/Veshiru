@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdlib>
 #include <mutex>
 
 #include "common/common_types.h"
@@ -65,8 +66,13 @@ struct BypassState {
 };
 
 inline bool BypassEnabled(u64 program_id) {
-    return program_id == ProgramId &&
-           Settings::values.oot_anti_aliasing.GetValue() == Settings::OotAntiAliasing::NoSharpening;
+    if (program_id != ProgramId) {
+        return false;
+    }
+    if (const char* const env = std::getenv("EDEN_NX2_OOT_AA")) {
+        return env[0] == '0';
+    }
+    return Settings::values.oot_anti_aliasing.GetValue() == Settings::OotAntiAliasing::NoSharpening;
 }
 
 } // namespace VideoCommon::OotNetwork

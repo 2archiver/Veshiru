@@ -2004,6 +2004,20 @@ void Device::RemoveUnsuitableExtensions() {
         LOG_WARNING(Render_Vulkan, "EDEN_NX2_FORCE_MESH_FALLBACK: VK_EXT_mesh_shader disabled");
         extensions.mesh_shader = false;
     }
+    // AMD runs task shaders on a compute queue ganged with the graphics queue. With the guest's
+    // task programs that hangs the GPU (RDNA2 on RADV 26.2: gfx ring timeout, device lost),
+    // while the compute fallback runs the same draws fine. NVIDIA and Intel have task and mesh
+    // stages in the graphics pipe. EDEN_NX2_NATIVE_MESH=1 keeps the extension for testing.
+    const VkDriverId mesh_driver{properties.driver.driverID};
+    const bool amd_task_on_compute_queue{mesh_driver == VK_DRIVER_ID_MESA_RADV ||
+                                         mesh_driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                                         mesh_driver == VK_DRIVER_ID_AMD_OPEN_SOURCE};
+    if (extensions.mesh_shader && amd_task_on_compute_queue &&
+        std::getenv("EDEN_NX2_NATIVE_MESH") == nullptr) {
+        LOG_INFO(Render_Vulkan, "AMD driver: VK_EXT_mesh_shader disabled, task/mesh draws use the "
+                                "compute fallback (EDEN_NX2_NATIVE_MESH=1 keeps it)");
+        extensions.mesh_shader = false;
+    }
     RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
@@ -2367,7 +2381,7 @@ void Device::CollectPhysicalMemoryInfo() {
         const u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
         device_access_memory = static_cast<u64>(std::max<s64>(std::min<s64>(available_memory - 8_GiB, memory_size), std::min<s64>(local_memory, memory_size)));
     } else {
-        const u64 reserve_memory = std::min<u64>(device_access_memory / 8, 1_GiB);
+        const u64 reserve_memory = Settings::GetVramReserve(device_access_memory);
         device_access_memory -= reserve_memory;
         if (Settings::values.vram_usage_mode.GetValue() != Settings::VramUsageMode::Aggressive) {
             // Account for resolution scaling in memory limits
@@ -2461,13 +2475,19 @@ void Device::InitializeGPULogging() {
         driver_info += fmt::format("Driver Name: {}\n", properties.driver.driverName);
         driver_info += fmt::format("Driver Info: {}\n", properties.driver.driverInfo);
 
-        // Version information
+        // Version information (NVIDIA uses a 10-8-8-6 bit layout instead of Vulkan's 10-10-12)
         const u32 driver_version = props.driverVersion;
         const u32 api_version = props.apiVersion;
-        driver_info += fmt::format("Driver Version: {}.{}.{}\n",
-            VK_API_VERSION_MAJOR(driver_version),
-            VK_API_VERSION_MINOR(driver_version),
-            VK_API_VERSION_PATCH(driver_version));
+        if (driver_id == VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
+            driver_info += fmt::format("Driver Version: {}.{}.{}.{}\n", driver_version >> 22,
+                                       (driver_version >> 14) & 0xffU,
+                                       (driver_version >> 6) & 0xffU, driver_version & 0x3fU);
+        } else {
+            driver_info += fmt::format("Driver Version: {}.{}.{}\n",
+                                       VK_API_VERSION_MAJOR(driver_version),
+                                       VK_API_VERSION_MINOR(driver_version),
+                                       VK_API_VERSION_PATCH(driver_version));
+        }
         driver_info += fmt::format("Vulkan API Version: {}.{}.{}\n",
             VK_API_VERSION_MAJOR(api_version),
             VK_API_VERSION_MINOR(api_version),

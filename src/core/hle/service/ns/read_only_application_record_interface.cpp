@@ -27,9 +27,9 @@ IReadOnlyApplicationRecordInterface::~IReadOnlyApplicationRecordInterface() = de
 
 Result IReadOnlyApplicationRecordInterface::HasApplicationRecord(
     Out<bool> out_has_application_record, u64 program_id) {
-    LOG_WARNING(Service_NS, "(STUBBED) called, program_id={:016X}", program_id);
-    *out_has_application_record = true;
-    R_SUCCEED();
+    R_RETURN(
+        IApplicationManagerInterface(system).HasApplicationRecord(out_has_application_record,
+                                                                  program_id));
 }
 
 Result IReadOnlyApplicationRecordInterface::IsDataCorruptedResult(

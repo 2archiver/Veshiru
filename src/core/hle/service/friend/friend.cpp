@@ -78,9 +78,9 @@ public:
             {20502, nullptr, "GetProfileExtraListV2"}, // 19.0.0+
             {20600, &IFriendService::GetUserPresenceView, "GetUserPresenceViewV1"},
             {20601, &IFriendService::GetUserPresenceView, "GetUserPresenceViewV2"}, // 19.0.0+
-            {20700, nullptr, "GetPlayHistoryListV1"},
+            {20700, &IFriendService::GetPlayHistoryList, "GetPlayHistoryListV1"},
             {20701, &IFriendService::GetPlayHistoryStatistics, "GetPlayHistoryStatistics"},
-            {20702, nullptr, "GetPlayHistoryListV2"}, // 19.0.0+
+            {20702, &IFriendService::GetPlayHistoryList, "GetPlayHistoryListV2"}, // 19.0.0+
             {20800, &IFriendService::LoadUserSetting, "LoadUserSettingV1"},
             {20801, nullptr, "SyncUserSetting"},
             {20802, &IFriendService::LoadUserSetting, "LoadUserSettingV2"}, // 19.0.0+
@@ -327,11 +327,31 @@ private:
         rb.Push(ResultSuccess);
     }
 
-    void GetPlayHistoryStatistics(HLERequestContext& ctx) {
-        LOG_ERROR(Service_Friend, "(STUBBED) called, check in out");
-
-        IPC::ResponseBuilder rb{ctx, 2};
+    void GetPlayHistoryList(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Friend, "(STUBBED) called");
+        IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
+        rb.Push<s32>(0);
+    }
+
+    void GetPlayHistoryStatistics(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Friend, "(STUBBED) called");
+
+        struct PlayHistoryStatistics {
+            u64 total_key_count{};
+            u64 first_timestamp{};
+        };
+        static_assert(sizeof(PlayHistoryStatistics) == 0x10);
+        constexpr PlayHistoryStatistics stats{};
+        if (ctx.CanWriteBuffer()) {
+            ctx.WriteBuffer(stats);
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ResultSuccess);
+            return;
+        }
+        IPC::ResponseBuilder rb{ctx, 6};
+        rb.Push(ResultSuccess);
+        rb.PushRaw(stats);
     }
 
     void LoadUserSetting(HLERequestContext& ctx) {

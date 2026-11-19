@@ -59,6 +59,12 @@ void ImportDataDir(FrontendCommon::DataManager::DataDir dir, const std::string& 
 // Loader //
 void configureFilesystemProvider(const std::string& filepath);
 
+/// Registers all launchable games across configured game directories (.nup, .nx, .nsp, .nsz,
+/// .xci, .xcz, .nro, .nca, and extracted ExeFS trees) into the frontend ManualContentProvider so
+/// Switch HOME Menu (qlaunch) lists and launches the full library even via CLI -qlaunch or with
+/// ext_content_from_game_dirs disabled.
+void PopulateProviderForHomeMenu();
+
 // Profiles //
 void FixProfiles();
 } // namespace QtCommon::Content

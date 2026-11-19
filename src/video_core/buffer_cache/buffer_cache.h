@@ -1015,8 +1015,39 @@ void BufferCache<P>::NoteReadBack(DAddr begin, DAddr end, bool gpu_modified) {
             }
             it->written = false;
             it->unread_writes = 0;
-            it->reads = (std::min)(static_cast<u16>(it->reads + 1), EarlyAfterReads);
+            const bool sequential_ring = it != read_back_pages.begin() &&
+                                         std::prev(it)->page + DEVICE_PAGESIZE == page &&
+                                         std::prev(it)->reads > 0;
+            it->reads = sequential_ring
+                            ? EarlyAfterReads
+                            : (std::min)(static_cast<u16>(it->reads + 1), EarlyAfterReads);
             it->last_read = ++read_back_reads;
+            if (sequential_ring && page + 2 * DEVICE_PAGESIZE >= end) {
+                // Switch 2 cyclic compute/query readback rings walk forward one page at a time:
+                // pre-arm the next two ring pages so their GPU writes enqueue an early download
+                // immediately instead of stalling the guest CPU on first touch.
+                const u64 seed_read = it->last_read;
+                for (u32 step = 1; step <= 2; ++step) {
+                    const DAddr next_page = page + step * DEVICE_PAGESIZE;
+                    if (next_page < page || read_back_pages.size() >= MaxReadBackPages) {
+                        break;
+                    }
+                    auto next_it =
+                        std::ranges::lower_bound(read_back_pages, next_page, {}, &ReadBackPage::page);
+                    if (next_it == read_back_pages.end() || next_it->page != next_page) {
+                        read_back_pages.insert(
+                            next_it, ReadBackPage{
+                                         .page = next_page,
+                                         .last_read = seed_read,
+                                         .reads = EarlyAfterReads,
+                                     });
+                    } else if (next_it->reads < EarlyAfterReads) {
+                        next_it->reads = EarlyAfterReads;
+                    }
+                }
+                read_back_first.store(read_back_pages.front().page, std::memory_order_release);
+                read_back_last.store(read_back_pages.back().page, std::memory_order_release);
+            }
         }
     }
 }

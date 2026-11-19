@@ -6,6 +6,70 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-18
+
+### The Legend of Zelda: Ocarina of Time & 4–8 GiB GPU Performance
+
+- **Play Report (`prepo`) command `10500` support**: Implemented `SaveReport` command `10500` on
+  `prepo` (eliminating fatal guest IPC panic `1A80A` during Ocarina of Time sessions) and added
+  domain request error naming in `hle_ipc` for clearer diagnostics.
+- **Anti-gloom async pipeline & compute protection**: Stopped asynchronous draw and compute skip
+  policies from dropping unbuilt storage-image-writing graphics draws or image-only tonemapping,
+  auto-exposure, and lighting compute dispatches, preventing temporarily dark or gloomy scene
+  transitions while shaders compile in the background.
+- **4 GiB VRAM ASTC→BCn chunked transcoding & OOM recovery**: Split large multi-layer GPU ASTC→BCn
+  transcodes into VRAM-tiered 32/48/64 MiB layer chunks with flush-aware in-flight throttling,
+  automatic queue-drain retry on transient `VK_ERROR_OUT_OF_DEVICE_MEMORY`, and inter-chunk staging
+  flushes on sub-5 GiB GPUs, while keeping dedicated transient RGBA8 scratch allocations from
+  falsely triggering persistent texture pressure eviction.
+- **Transient render-target & texture cache optimizations**: Added a 30-frame `BadOverlap` sweep
+  for superseded transient render targets, skipped redundant guest uploads for new single-level 2D
+  render targets completely covered by prior GPU-written images, added a fast path with per-frame
+  LRU deduplication in `PrepareImage`, cached graphics descriptor table host page pointers with
+  64-bit word comparison, and enabled depth/stencil-write render-pass tracking to avoid unneeded
+  feedback-loop transitions.
+- **DMA pushbuffer, staging pool & cyclic readback speedups**: Restricted per-entry pushbuffer
+  writer sync waits to titles requiring them, skipped unnecessary dirty checks when record reads
+  are bypassed, switched deferred Vulkan staging buffer reclamation to sorted tick binary search,
+  and pre-armed sequential GPU-to-CPU ring-buffer readback pages on step detection to cut first-hit
+  synchronous CPU readback stalls.
+- **Configurable VRAM Reserve (`vram_reserve_mib`) & Ocarina of Time AA tip**: Added a **VRAM
+  Reserve** setting under *Settings → Graphics → Advanced* (`Auto` default: 1/8 of driver budget
+  up to 1,024 MiB) so 4–8 GiB GPUs can reclaim extra headroom for textures, and added an
+  `EDEN_NX2_OOT_AA=0` override matching *Settings → Graphics → Ocarina of Time anti-aliasing → No
+  sharpening* (recommended on 4–6 GiB GPUs such as GTX 1650 to bypass three post-process compute
+  passes for substantial GPU frame-time savings).
+
+### Vulkan, SPIR-V & Texture Compatibility
+
+- **Lean multi-buffer SPIR-V global-memory helpers**: Marked generated multi-buffer global-memory
+  load, store, atomic, and CAS helper functions `DontInline` outside `Task`/`Mesh` stages to slash
+  SPIR-V module bloat and driver compile times on heavy Switch 2 shaders.
+- **AMD mesh-shader fallback & NVIDIA driver reporting**: Enabled compute mesh-shader fallback
+  properly on AMD hardware where needed, formatted NVIDIA proprietary driver versions using their
+  10-8-8-6 bit scheme, added a quiet `A8B8G8R8_UNORM` fallback for zeroed guest texture headers,
+  and gated byte-offset texture header handles strictly to titles that use them.
+
+### Switch HOME Menu (`qlaunch`) Full Library & `.nup` / `.nx` Integration
+
+- **Full `.nup`, `.nx`, NSP, XCI & NRO discovery on HOME Menu**: Synthesized decrypted Control NCAs
+  with locale-normalized NACP metadata, cached HD artwork fallback, and strict ≤128 KiB baseline
+  JPEG icons (with automatic PNG/JPEG transcoding and procedural fallback tiles) so Switch 1 and
+  Switch 2 `.nup` and `.nx` packages, uninstalled containers, and homebrew appear on HOME Menu with
+  titles, publishers, display versions, real occupied sizes, and artwork — including via `-qlaunch`
+  and regardless of external-content directory settings.
+- **Switch 2 title aliasing & seamless frontend launch handoff**: Deterministically aliased Switch
+  2 `0x0400...` Program IDs onto HOME Menu-compatible IDs exclusively for system applets, fixed a
+  byte-indexing bug in `ListApplicationIcon` and transfer-memory handling in
+  `ListApplicationTitle`, deduplicated multi-source application records, and routed HOME Menu game
+  launches through the frontend with preselected user profile preservation, full per-game settings,
+  and Switch 2 extended DRAM.
+- **HOME Menu, User Page & Power Menu polish**: Implemented missing `ns`, `am`, `acc`, and `friend`
+  calls (`GetNintendoAccountUserResourceCache`, `GetPlayHistoryStatistics`, `IGlobalStateController`
+  sleep/reboot handlers, rights/record/gamecard queries), guarded non-NCA manual provider lookups
+  and embedded `GRenderWindow` handle connections, eliminated duplicate HLE shutdown stops, added
+  friendly log names for firmware applets, and cleaned up false-alarm avatar and network log spam.
+
 ## [1.8.0] - 2026-11-18
 
 ### Mario Kart World & Switch 2 Frame-Time Improvements

@@ -502,13 +502,25 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
                                    program_id, file);
             } else if (file_type == Loader::FileType::NX) {
                 // An archive brings its own updates and add-ons, whatever the setting.
-                static_cast<Loader::AppLoader_NX&>(*loader).RegisterContent(*provider);
+                std::vector<u64> nx_program_ids;
+                if (loader->ReadProgramIds(nx_program_ids) == Loader::ResultStatus::Success &&
+                    nx_program_ids.size() > 1) {
+                    for (const u64 nx_id : nx_program_ids) {
+                        Loader::AppLoader_NX app_loader{system, file, nx_id};
+                        app_loader.RegisterContent(*provider, true);
+                    }
+                } else {
+                    static_cast<Loader::AppLoader_NX&>(*loader).RegisterContent(*provider, true);
+                }
+            } else if (file_type == Loader::FileType::NUP) {
+                // Register bootable .nup titles (Switch 1 & Switch 2) and their carried add-ons so
+                // HOME Menu discovers them alongside native archives regardless of settings.
+                void(provider->AddEntriesFromContainer(file));
             } else if (Settings::values.ext_content_from_game_dirs.GetValue() &&
                        (file_type == Loader::FileType::XCI ||
                         file_type == Loader::FileType::XCZ ||
                         file_type == Loader::FileType::NSP ||
-                        file_type == Loader::FileType::NSZ ||
-                        file_type == Loader::FileType::NUP)) {
+                        file_type == Loader::FileType::NSZ)) {
                 void(provider->AddEntriesFromContainer(file));
             }
         } else {

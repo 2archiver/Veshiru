@@ -498,7 +498,9 @@ bool DmaPusher::Step() {
                         ->FrontTakeIndirectRecord(dma_state.method, dma_state.dma_get)) {
                     skip_record_read = true;
                 }
-                if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+                if (skip_record_read) {
+                    // FrontTakeIndirectRecord already consumed this 5-word indirect record.
+                } else if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
                     // The caches behind IsMemoryDirty belong to the split's back thread.
                     split.Defer([engine_state, memory = &memory_manager, address = GPUVAddr{dma_state.dma_get},
                                  bytes = words * sizeof(u32)] {
@@ -551,7 +553,20 @@ bool DmaPusher::Step() {
         // queued before it. The GPU fetches the list after that work only past a host-level wait
         // (NoteSync): later work is not ordered before the fetch, and the list does not wait for
         // it (nor for draws, which write memory too; draw-written lists wait for the last sync).
-        if (!skip_record_read && !gpu_written && VideoCommon::GpuSplit::Get().Active()) {
+        // Waiting for synced writers before every GP entry stalled the front thread ~7,400 times
+        // a frame in Ocarina of Time's Hyrule Market without finding newly GPU-written words
+        // (49 -> 59 FPS without the waits). Only title 040041E0212AE000 needs the per-entry wait
+        // for compute-written culling arguments; EDEN_NX2_ENTRY_SYNC_WAIT=1 forces it globally.
+        constexpr u64 EntryWriterWaitProgramId = 0x040041E0212AE000ULL;
+        static const bool force_entry_sync_wait = [] {
+            const char* const value = std::getenv("EDEN_NX2_ENTRY_SYNC_WAIT");
+            return value != nullptr && value[0] == '1';
+        }();
+        const bool wait_entry_writers =
+            force_entry_sync_wait ||
+            system.GetApplicationProcessProgramID() == EntryWriterWaitProgramId;
+        if (!skip_record_read && !gpu_written && wait_entry_writers &&
+            VideoCommon::GpuSplit::Get().Active()) {
             VideoCommon::GpuSplit::Get().WaitForSyncedWriters();
             gpu_written =
                 IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));

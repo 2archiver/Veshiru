@@ -130,15 +130,17 @@ StagingBufferRef StagingBufferPool::Request(size_t size, MemoryUsage usage, bool
 }
 
 void StagingBufferPool::FreeDeferred(StagingBufferRef& ref) {
-    auto& entries = GetCache(ref.usage)[ref.log2_level].entries;
-    const auto is_this_one = [&ref](const StagingBuffer& entry) {
-        return entry.index == ref.index;
-    };
-    auto it = std::find_if(entries.begin(), entries.end(), is_this_one);
-    ASSERT(it != entries.end());
+    auto& level = GetCache(ref.usage)[ref.log2_level];
+    auto& entries = level.entries;
+    // Entries are appended with monotonically increasing unique_ids and compacted in order.
+    auto it = std::lower_bound(
+        entries.begin(), entries.end(), ref.index,
+        [](const StagingBuffer& entry, u64 index) { return entry.index < index; });
+    ASSERT(it != entries.end() && it->index == ref.index);
     ASSERT(it->deferred);
     it->tick = scheduler.CurrentTick();
     it->deferred = false;
+    level.free_ticks[static_cast<size_t>(std::distance(entries.begin(), it))] = it->tick;
 }
 
 void StagingBufferPool::TickFrame() {
@@ -205,23 +207,27 @@ std::optional<StagingBufferRef> StagingBufferPool::TryGetReservedBuffer(size_t s
                                                                         bool deferred) {
     StagingBuffers& cache_level = GetCache(usage)[Common::Log2Ceil(size)];
 
-    const auto is_free = [this](const StagingBuffer& entry) {
-        return !entry.deferred && scheduler.IsFree(entry.tick);
-    };
-    auto& entries = cache_level.entries;
-    const auto hint_it = entries.begin() + cache_level.iterate_index;
-    auto it = std::find_if(entries.begin() + cache_level.iterate_index, entries.end(), is_free);
-    if (it == entries.end()) {
-        it = std::find_if(entries.begin(), hint_it, is_free);
-        if (it == hint_it) {
+    // Free: not deferred (free_ticks holds u64 max while deferred) and GPU passed its tick.
+    const u64 gpu_tick = scheduler.GetMasterSemaphore().KnownGpuTick();
+    const auto is_free = [gpu_tick](u64 tick) { return tick <= gpu_tick; };
+    auto& ticks = cache_level.free_ticks;
+    const size_t hint = (std::min)(cache_level.iterate_index, ticks.size());
+    const auto hint_it = ticks.begin() + static_cast<std::ptrdiff_t>(hint);
+    auto tick_it = std::find_if(hint_it, ticks.end(), is_free);
+    if (tick_it == ticks.end()) {
+        tick_it = std::find_if(ticks.begin(), hint_it, is_free);
+        if (tick_it == hint_it) {
             return std::nullopt;
         }
     }
-    cache_level.iterate_index = std::distance(entries.begin(), it) + 1;
-    it->tick = deferred ? (std::numeric_limits<u64>::max)() : scheduler.CurrentTick();
-    ASSERT(!it->deferred);
-    it->deferred = deferred;
-    return it->Ref();
+    const size_t position = static_cast<size_t>(std::distance(ticks.begin(), tick_it));
+    StagingBuffer& entry = cache_level.entries[position];
+    cache_level.iterate_index = position + 1;
+    entry.tick = deferred ? (std::numeric_limits<u64>::max)() : scheduler.CurrentTick();
+    ASSERT(!entry.deferred);
+    entry.deferred = deferred;
+    *tick_it = entry.tick;
+    return entry.Ref();
 }
 
 StagingBufferRef StagingBufferPool::CreateStagingBuffer(size_t size, MemoryUsage usage, bool deferred) {
@@ -298,7 +304,8 @@ StagingBufferRef StagingBufferPool::CreateStagingBuffer(size_t size, MemoryUsage
         device.IsBufferDeviceAddressSupported()
             ? device.GetLogical().GetBufferDeviceAddress(*buffer)
             : VkDeviceAddress{};
-    StagingBuffer& entry = GetCache(usage)[log2_size].entries.emplace_back(StagingBuffer{
+    StagingBuffers& level = GetCache(usage)[log2_size];
+    StagingBuffer& entry = level.entries.emplace_back(StagingBuffer{
         .buffer = std::move(buffer),
         .device_address = buffer_address,
         .mapped_span = mapped_span,
@@ -308,6 +315,7 @@ StagingBufferRef StagingBufferPool::CreateStagingBuffer(size_t size, MemoryUsage
         .tick = deferred ? (std::numeric_limits<u64>::max)() : scheduler.CurrentTick(),
         .deferred = deferred,
     });
+    level.free_ticks.push_back(entry.tick);
     return entry.Ref();
 }
 
@@ -347,9 +355,21 @@ void StagingBufferPool::ReleaseMemory() {
 void StagingBufferPool::ReleaseIdleBuffers() {
     for (StagingBuffersCache* const cache : {&device_local_cache, &upload_cache, &download_cache}) {
         for (StagingBuffers& staging : *cache) {
-            std::erase_if(staging.entries, [this](const StagingBuffer& entry) {
-                return !entry.deferred && scheduler.IsFree(entry.tick);
-            });
+            auto& entries = staging.entries;
+            auto& ticks = staging.free_ticks;
+            size_t out = 0;
+            for (size_t i = 0; i < entries.size(); ++i) {
+                if (!entries[i].deferred && scheduler.IsFree(entries[i].tick)) {
+                    continue;
+                }
+                if (out != i) {
+                    entries[out] = std::move(entries[i]);
+                    ticks[out] = ticks[i];
+                }
+                ++out;
+            }
+            entries.erase(entries.begin() + static_cast<std::ptrdiff_t>(out), entries.end());
+            ticks.erase(ticks.begin() + static_cast<std::ptrdiff_t>(out), ticks.end());
             staging.delete_index = 0;
             staging.iterate_index = 0;
         }
@@ -364,6 +384,7 @@ void StagingBufferPool::ReleaseLevel(StagingBuffersCache& cache, size_t log2) {
     constexpr size_t deletions_per_tick = 16;
     auto& staging = cache[log2];
     auto& entries = staging.entries;
+    auto& ticks = staging.free_ticks;
     const size_t old_size = entries.size();
 
     // Keep two idle upload buffers per level up to 32 MiB (under 128 MiB in all). Each level is
@@ -374,9 +395,19 @@ void StagingBufferPool::ReleaseLevel(StagingBuffersCache& cache, size_t log2) {
     constexpr size_t KeepPerLevel = 2;
     if (&cache == &upload_cache && log2 <= KeepMaxLog2) {
         size_t idle = 0;
-        std::erase_if(entries, [this, &idle](const StagingBuffer& entry) {
-            return scheduler.IsFree(entry.tick) && ++idle > KeepPerLevel;
-        });
+        size_t out = 0;
+        for (size_t i = 0; i < entries.size(); ++i) {
+            if (!entries[i].deferred && scheduler.IsFree(entries[i].tick) && ++idle > KeepPerLevel) {
+                continue;
+            }
+            if (out != i) {
+                entries[out] = std::move(entries[i]);
+                ticks[out] = ticks[i];
+            }
+            ++out;
+        }
+        entries.erase(entries.begin() + static_cast<std::ptrdiff_t>(out), entries.end());
+        ticks.erase(ticks.begin() + static_cast<std::ptrdiff_t>(out), ticks.end());
         staging.delete_index = 0;
         if (staging.iterate_index > entries.size()) {
             staging.iterate_index = 0;
@@ -385,13 +416,25 @@ void StagingBufferPool::ReleaseLevel(StagingBuffersCache& cache, size_t log2) {
     }
 
     const auto is_deletable = [this](const StagingBuffer& entry) {
-        return scheduler.IsFree(entry.tick);
+        return !entry.deferred && scheduler.IsFree(entry.tick);
     };
-    const size_t begin_offset = staging.delete_index;
+    const size_t begin_offset = (std::min)(staging.delete_index, old_size);
     const size_t end_offset = (std::min)(begin_offset + deletions_per_tick, old_size);
-    const auto begin = entries.begin() + begin_offset;
-    const auto end = entries.begin() + end_offset;
-    entries.erase(std::remove_if(begin, end, is_deletable), end);
+    size_t out = begin_offset;
+    for (size_t i = begin_offset; i < end_offset; ++i) {
+        if (is_deletable(entries[i])) {
+            continue;
+        }
+        if (out != i) {
+            entries[out] = std::move(entries[i]);
+            ticks[out] = ticks[i];
+        }
+        ++out;
+    }
+    entries.erase(entries.begin() + static_cast<std::ptrdiff_t>(out),
+                  entries.begin() + static_cast<std::ptrdiff_t>(end_offset));
+    ticks.erase(ticks.begin() + static_cast<std::ptrdiff_t>(out),
+                ticks.begin() + static_cast<std::ptrdiff_t>(end_offset));
 
     const size_t new_size = entries.size();
     staging.delete_index += deletions_per_tick;

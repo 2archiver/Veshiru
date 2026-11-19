@@ -28,6 +28,7 @@
 #include "core/file_sys/submission_package.h"
 #include "core/file_sys/vfs/vfs_concat.h"
 #include "core/loader/loader.h"
+#include "core/loader/nup.h"
 
 namespace FileSys {
 
@@ -1255,6 +1256,11 @@ const ExternalContentProvider* ContentProviderUnion::GetExternalProvider() const
     return static_cast<const ExternalContentProvider*>(providers[size_t(ContentProviderUnionSlot::External)]);
 }
 
+const ManualContentProvider* ContentProviderUnion::GetManualProvider() const {
+    return static_cast<const ManualContentProvider*>(
+        providers[size_t(ContentProviderUnionSlot::FrontendManual)]);
+}
+
 ManualContentProvider::~ManualContentProvider() = default;
 
 void ManualContentProvider::AddEntry(TitleType title_type, ContentRecordType content_type, u64 title_id, VirtualFile file) {
@@ -1302,12 +1308,74 @@ void ManualContentProvider::AddEntryWithVersion(TitleType title_type, ContentRec
     }
 }
 
+void ManualContentProvider::RegisterApplicationEntry(
+    u64 title_id, VirtualFile program_file, const RawNACP& nacp, std::span<const u8> raw_icon,
+    std::string_view fallback_title, std::string_view fallback_publisher,
+    std::string_view fallback_version, u32 numeric_version, std::string launch_path,
+    u64 occupied_size) {
+    if (title_id == 0 || program_file == nullptr) {
+        return;
+    }
+    if (launch_path.empty()) {
+        launch_path = program_file->GetFullPath();
+    }
+    if (occupied_size == 0) {
+        occupied_size = program_file->GetSize();
+    }
+    AddEntry(TitleType::Application, ContentRecordType::Program, title_id, std::move(program_file));
+    if (auto control_nca =
+            BuildControlNcaFromMetadata(title_id, nacp, raw_icon, fallback_title,
+                                        fallback_publisher, fallback_version);
+        control_nca != nullptr) {
+        AddEntry(TitleType::Application, ContentRecordType::Control, title_id,
+                 std::move(control_nca));
+    }
+    SetApplicationInfo(title_id, ManualApplicationInfo{
+                                     .launch_path = std::move(launch_path),
+                                     .version = numeric_version,
+                                     .occupied_size = occupied_size,
+                                 });
+}
+
+void ManualContentProvider::SetApplicationInfo(u64 title_id, ManualApplicationInfo info) {
+    if (title_id == 0) {
+        return;
+    }
+    auto [it, inserted] = app_info.try_emplace(title_id, std::move(info));
+    if (!inserted) {
+        if (!info.launch_path.empty()) {
+            it->second.launch_path = std::move(info.launch_path);
+        }
+        if (info.version > it->second.version) {
+            it->second.version = info.version;
+        }
+        if (info.occupied_size > it->second.occupied_size) {
+            it->second.occupied_size = info.occupied_size;
+        }
+    }
+}
+
+std::optional<ManualApplicationInfo> ManualContentProvider::GetApplicationInfo(u64 title_id) const {
+    const auto it = app_info.find(title_id);
+    if (it == app_info.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
 bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_content,
                                                     std::optional<u64> base_program_id) {
+    if (file == nullptr) {
+        return false;
+    }
     if (NupContainer::IsNupFile(file)) {
-        // A NUP holds loose trees: its add-ons are served as decrypted add-on NCAs, newest
-        // version per title (as in Eglantine-Community/Eglantine#724). Its updates are left to
-        // the NUP loader, which merges them into the program's RomFS.
+        // When only_content or a base_program_id filter is supplied, mount only carried add-on
+        // content (leaving updates to the NUP loader). When registering full containers (e.g. for
+        // HOME Menu), also expose the bootable application Program and a synthesized Control NCA.
+        if (!only_content && !base_program_id.has_value()) {
+            Loader::AppLoader_NUP loader{file};
+            return loader.RegisterContent(*this, false, std::nullopt);
+        }
         NupContainer nup{file};
         if (nup.GetStatus() != Loader::ResultStatus::Success) {
             return false;
@@ -1351,15 +1419,27 @@ bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_
         return false;
     }
 
+    const std::string container_path = file->GetFullPath();
+    const u64 container_size = file->GetSize();
     return ForEachContainerEntry(
         nsp, only_content, base_program_id,
-        [this](TitleType title_type, ContentRecordType content_type, u64 title_id,
-               const VirtualFile& entry_file, u32 version, const std::string& version_string) {
+        [this, &container_path, container_size](TitleType title_type,
+                                                ContentRecordType content_type, u64 title_id,
+                                                const VirtualFile& entry_file, u32 version,
+                                                const std::string& version_string) {
             if (title_type == TitleType::Update) {
                 AddEntryWithVersion(title_type, content_type, title_id, version, version_string,
                                     entry_file);
             } else {
                 AddEntry(title_type, content_type, title_id, entry_file);
+                if (title_type == TitleType::Application &&
+                    content_type == ContentRecordType::Program) {
+                    SetApplicationInfo(title_id, ManualApplicationInfo{
+                                                     .launch_path = container_path,
+                                                     .version = version,
+                                                     .occupied_size = container_size,
+                                                 });
+                }
             }
         });
 }
@@ -1367,6 +1447,7 @@ bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_
 void ManualContentProvider::ClearAllEntries() {
     entries.clear();
     multi_version_entries.clear();
+    app_info.clear();
 }
 
 void ManualContentProvider::Refresh() {}
@@ -1376,7 +1457,19 @@ bool ManualContentProvider::HasEntry(u64 title_id, ContentRecordType type) const
 }
 
 std::optional<u32> ManualContentProvider::GetEntryVersion(u64 title_id) const {
-    return std::nullopt;
+    u32 best_version = 0;
+    bool found = false;
+    if (const auto it = app_info.find(title_id); it != app_info.end()) {
+        best_version = it->second.version;
+        found = true;
+    }
+    for (const auto& entry : multi_version_entries) {
+        if (entry.title_id == title_id && (!found || entry.version > best_version)) {
+            best_version = entry.version;
+            found = true;
+        }
+    }
+    return found ? std::make_optional(best_version) : std::nullopt;
 }
 
 VirtualFile ManualContentProvider::GetEntryUnparsed(u64 title_id, ContentRecordType type) const {
@@ -1399,7 +1492,14 @@ std::unique_ptr<NCA> ManualContentProvider::GetEntry(u64 title_id, ContentRecord
     const auto res = GetEntryRaw(title_id, type);
     if (res == nullptr)
         return nullptr;
-    return std::make_unique<NCA>(res);
+    auto nca = std::make_unique<NCA>(res);
+    // Program entries registered from loose/archive containers (.nup, .nx, .nro) are launched via
+    // GetEntryRaw/GetApplicationInfo and do not carry an NCA header; return nullptr instead of a
+    // failed NCA while preserving BKTR patch NCAs (ErrorMissingBKTRBaseRomFS).
+    if (nca->GetStatus() == Loader::ResultStatus::ErrorBadNCAHeader) {
+        return nullptr;
+    }
+    return nca;
 }
 
 std::vector<ContentProviderEntry> ManualContentProvider::ListEntriesFilter(

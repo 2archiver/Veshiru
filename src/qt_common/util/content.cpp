@@ -5,8 +5,12 @@
 #include "qt_common/util/content.h"
 #include "qt_common/util/game.h"
 
+#include "common/artwork_cache.h"
 #include "common/fs/fs.h"
+#include "core/file_sys/control_metadata.h"
+#include "core/file_sys/registered_cache.h"
 #include "core/hle/service/acc/profile_manager.h"
+#include "core/loader/nx.h"
 #include "frontend_common/content_manager.h"
 #include "frontend_common/data_manager.h"
 #include "frontend_common/firmware_manager.h"
@@ -14,7 +18,12 @@
 #include "compress.h"
 #include "qt_common/abstract/frontend.h"
 #include "qt_common/abstract/progress.h"
+#include "qt_common/config/uisettings.h"
 #include "qt_common/qt_common.h"
+
+#include <QDir>
+#include <QDirIterator>
+#include <QFileInfo>
 
 #include <JlCompress.h>
 #include <QFuture>
@@ -580,6 +589,148 @@ void configureFilesystemProvider(const std::string& filepath) {
                 QtCommon::provider->AddEntry(entry.first.first, entry.first.second, title.first,
                                              entry.second->GetBaseFile());
             }
+        }
+    } else if (file_type == Loader::FileType::NUP) {
+        void(QtCommon::provider->AddEntriesFromContainer(file, true));
+    } else if (file_type == Loader::FileType::NX) {
+        static_cast<Loader::AppLoader_NX&>(*loader).RegisterContent(*QtCommon::provider, false);
+    }
+}
+
+namespace {
+
+bool IsHomeMenuCandidatePath(const QFileInfo& info) {
+    const QString ext = info.suffix().toLower();
+    if (ext == QStringLiteral("nup") || ext == QStringLiteral("nx") ||
+        ext == QStringLiteral("nsp") || ext == QStringLiteral("nsz") ||
+        ext == QStringLiteral("xci") || ext == QStringLiteral("xcz") ||
+        ext == QStringLiteral("nro") || ext == QStringLiteral("nca")) {
+        return true;
+    }
+    return ext.isEmpty() && info.fileName() == QStringLiteral("main");
+}
+
+void RegisterFileForHomeMenu(const QString& qpath) {
+    const std::string filepath = QDir::toNativeSeparators(qpath).toStdString();
+    const auto file = QtCommon::vfs->OpenFile(filepath, FileSys::OpenMode::Read);
+    if (!file) {
+        return;
+    }
+
+    const auto file_type = Loader::IdentifyFile(file);
+    if (file_type == Loader::FileType::Unknown || file_type == Loader::FileType::Error) {
+        return;
+    }
+
+    if (file_type == Loader::FileType::NUP || file_type == Loader::FileType::NSP ||
+        file_type == Loader::FileType::NSZ || file_type == Loader::FileType::XCI ||
+        file_type == Loader::FileType::XCZ) {
+        void(QtCommon::provider->AddEntriesFromContainer(file, false));
+        return;
+    }
+
+    auto loader = Loader::GetLoader(*QtCommon::system, file);
+    if (!loader) {
+        return;
+    }
+
+    if (file_type == Loader::FileType::NX) {
+        std::vector<u64> ids;
+        if (loader->ReadProgramIds(ids) == Loader::ResultStatus::Success && ids.size() > 1) {
+            for (const u64 id : ids) {
+                Loader::AppLoader_NX app_loader{*QtCommon::system, file, id};
+                app_loader.RegisterContent(*QtCommon::provider, true);
+            }
+        } else {
+            static_cast<Loader::AppLoader_NX&>(*loader).RegisterContent(*QtCommon::provider, true);
+        }
+        return;
+    }
+
+    u64 program_id = 0;
+    if (loader->ReadProgramId(program_id) != Loader::ResultStatus::Success ||
+        program_id <= 0x0100000000001FFFULL || (program_id & 0xFFFULL) != 0) {
+        return;
+    }
+
+    if (file_type == Loader::FileType::NCA) {
+        const FileSys::NCA nca{file};
+        if (nca.GetStatus() == Loader::ResultStatus::Success) {
+            QtCommon::provider->AddEntry(FileSys::TitleType::Application,
+                                         FileSys::GetCRTypeFromNCAType(nca.GetType()), program_id,
+                                         file);
+            if (nca.GetType() == FileSys::NCAContentType::Program) {
+                QtCommon::provider->SetApplicationInfo(program_id,
+                                                       FileSys::ManualApplicationInfo{
+                                                           .launch_path = filepath,
+                                                           .version = 0,
+                                                           .occupied_size = file->GetSize(),
+                                                       });
+            }
+        }
+        return;
+    }
+
+    if (file_type == Loader::FileType::NRO ||
+        file_type == Loader::FileType::DeconstructedRomDirectory) {
+        FileSys::NACP nacp{};
+        const bool has_nacp = loader->ReadControlData(nacp) == Loader::ResultStatus::Success;
+        std::string title;
+        if (loader->ReadTitle(title) != Loader::ResultStatus::Success || title.empty()) {
+            title = Common::ArtworkCache::ReadSidecarTitle(program_id);
+        }
+        if (title.empty()) {
+            const QFileInfo info{qpath};
+            if (file_type == Loader::FileType::DeconstructedRomDirectory) {
+                QDir dir = info.dir();
+                if (dir.dirName().compare(QStringLiteral("exefs"), Qt::CaseInsensitive) == 0) {
+                    dir.cdUp();
+                }
+                title = dir.dirName().toStdString();
+            } else {
+                title = info.completeBaseName().toStdString();
+            }
+        }
+        std::string version;
+        (void)loader->ReadDisplayVersion(version);
+        std::vector<u8> icon;
+        if (loader->ReadIcon(icon) != Loader::ResultStatus::Success || icon.empty()) {
+            icon = Common::ArtworkCache::ReadCachedArtwork(program_id);
+        }
+        QtCommon::provider->RegisterApplicationEntry(
+            program_id, file, has_nacp ? nacp.raw : FileSys::RawNACP{}, icon, title, {}, version,
+            0, filepath, file->GetSize());
+    }
+}
+
+} // namespace
+
+void PopulateProviderForHomeMenu() {
+    if (!QtCommon::provider || !QtCommon::vfs || !QtCommon::system) {
+        return;
+    }
+    for (const auto& game_dir : UISettings::values.game_dirs) {
+        if (game_dir.path.empty() || game_dir.path == "SDMC" || game_dir.path == "UserNAND" ||
+            game_dir.path == "SysNAND") {
+            continue;
+        }
+        const QString root = QString::fromStdString(game_dir.path);
+        if (!QDir(root).exists()) {
+            continue;
+        }
+        const auto flags = game_dir.deep_scan ? QDirIterator::Subdirectories
+                                              : QDirIterator::NoIteratorFlags;
+        QDirIterator it(root, QDir::Files | QDir::Readable | QDir::NoDotAndDotDot, flags);
+        QStringList paths;
+        while (it.hasNext()) {
+            const QString next = it.next();
+            if (IsHomeMenuCandidatePath(it.fileInfo())) {
+                paths.push_back(next);
+            }
+        }
+        paths.sort();
+        for (const QString& path : paths) {
+            RegisterFileForHomeMenu(path);
         }
     }
 }

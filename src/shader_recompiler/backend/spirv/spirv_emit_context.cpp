@@ -7,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <climits>
+#include <cstdlib>
 #include <numeric>
 #include <span>
 
@@ -1187,10 +1188,27 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
         }
         return value;
     }};
+    // Keep multi-buffer routing helpers out-of-line so drivers do not inline the entire
+    // candidate search and per-buffer branch ladder into every global load/store/atomic site
+    // (cuts Switch 2 graphics shader build times from up to ~7 s to sub-second and reduces
+    // instruction cache pressure). Task and Mesh shaders keep inline emission to avoid NVIDIA
+    // mesh-stage call-frame miscompiles in Ocarina of Time's Hyrule Field; single-buffer routes
+    // are trivial and stay inline. EDEN_NX2_LEAN_SSBO=0 restores unconditional inlining.
+    static const bool lean_ssbo_helpers{[] {
+        const char* const env = std::getenv("EDEN_NX2_LEAN_SSBO");
+        return env == nullptr || env[0] != '0';
+    }()};
+    const auto helper_control{[&]() noexcept {
+        if (lean_ssbo_helpers && stage != Stage::Task && stage != Stage::Mesh &&
+            buffers.size() > 1) {
+            return spv::FunctionControlMask::DontInline;
+        }
+        return spv::FunctionControlMask::MaskNone;
+    }};
     const auto define_load{[&](DefPtr ssbo_member, const StorageTypeDefinition& type_def, Id type,
                                u32 shift) {
         const Id function_type{TypeFunction(type, U64)};
-        const Id func_id{OpFunction(type, spv::FunctionControlMask::MaskNone, function_type)};
+        const Id func_id{OpFunction(type, helper_control(), function_type)};
         const Id addr{OpFunctionParameter(U64)};
         if (!profile.support_descriptor_aliasing && shift > 2) {
             AddLabel();
@@ -1234,7 +1252,7 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
     const auto define_write{[&](DefPtr ssbo_member, const StorageTypeDefinition& type_def, Id type,
                                 u32 shift) {
         const Id function_type{TypeFunction(void_id, U64, type)};
-        const Id func_id{OpFunction(void_id, spv::FunctionControlMask::MaskNone, function_type)};
+        const Id func_id{OpFunction(void_id, helper_control(), function_type)};
         const Id addr{OpFunctionParameter(U64)};
         const Id data{OpFunctionParameter(type)};
         if (!profile.support_descriptor_aliasing && shift > 2) {
@@ -1339,7 +1357,7 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
     const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
     const auto define_atomic{[&](GlobalAtomic kind) {
         const Id type{kind == AddF32 ? F32[1] : U32[1]};
-        const Id func_id{OpFunction(type, spv::FunctionControlMask::MaskNone,
+        const Id func_id{OpFunction(type, helper_control(),
                                     TypeFunction(type, U64, type))};
         const Id addr{OpFunctionParameter(U64)};
         const Id value{OpFunctionParameter(type)};
@@ -1385,7 +1403,7 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
     }};
     const auto define_compare_exchange{[&] {
         const Id function_type{TypeFunction(U32[1], U64, U32[1], U32[1])};
-        const Id func_id{OpFunction(U32[1], spv::FunctionControlMask::MaskNone, function_type)};
+        const Id func_id{OpFunction(U32[1], helper_control(), function_type)};
         const Id address{OpFunctionParameter(U64)};
         const Id comparator{OpFunctionParameter(U32[1])};
         const Id value{OpFunctionParameter(U32[1])};

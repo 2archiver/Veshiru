@@ -672,13 +672,21 @@ ComputePipeline::ConfigureResult ComputePipeline::Configure(
     std::ranges::for_each(info.image_buffer_descriptors, add_buffer);
 
     // Decided before the bindings below mark the outputs GPU-written.
+    // Buffer-only, global-memory, and small reduction/exposure/LUT dispatches (e.g. Ocarina of
+    // Time's auto-exposure histogram, eye adaptation, and indirect cull) always wait so additive
+    // bloom and tone mapping never run on un-normalized HDR data while a shader compiles.
     if (!is_built.load(std::memory_order::relaxed) && kepler_compute.IsNativeMode()) {
-        const bool images_hold_shader_writes =
+        const bool safe_image_outputs =
+            !written_images.empty() && !info.uses_global_memory &&
             std::ranges::all_of(written_images, [&](VideoCommon::ImageViewId id) {
-                return texture_cache.StorageViewHoldsShaderWrites(id);
+                if (!texture_cache.StorageViewHoldsShaderWrites(id)) {
+                    return false;
+                }
+                const auto& view = texture_cache.GetImageView(id);
+                return view.size.width > 64 && view.size.height > 64;
             });
         if (pipelines.SkipUnbuiltDispatch(
-                *this, images_hold_shader_writes && buffer_cache.ComputeWritesHoldGpuData())) {
+                *this, safe_image_outputs && buffer_cache.ComputeWritesHoldGpuData())) {
             return ConfigureResult::Skipped;
         }
     }

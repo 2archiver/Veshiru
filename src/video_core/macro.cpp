@@ -1423,8 +1423,8 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                     static u64 enable_writes{};
                     ++modes[value & 3];
                     if (++enable_writes % 20000 == 0) {
-                        LOG_INFO(HW_GPU, "Native MME render enable modes: use {} always {} never {} other {}",
-                                 modes[0], modes[1], modes[2], modes[3]);
+                        LOG_DEBUG(HW_GPU, "Native MME render enable modes: use {} always {} never {} other {}",
+                                  modes[0], modes[1], modes[2], modes[3]);
                     }
                 }
                 {

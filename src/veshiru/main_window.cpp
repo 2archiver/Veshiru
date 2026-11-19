@@ -2388,9 +2388,54 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         [this](std::size_t program_index_) { render_window->ExecuteProgram(program_index_); });
 
     QtCommon::system->RegisterExitCallback([this] {
-        QtCommon::emu_thread->ForceStop();
+        // Defer teardown onto the GUI thread via ExitSignal -> MainWindow::OnExit so HLE shutdown
+        // requests (e.g. qlaunch StartShutdownSequence) never race a second ForceStop().
         render_window->Exit();
     });
+
+    QtCommon::system->RegisterLaunchApplicationCallback(
+        [this](u64 launched_program_id, std::string filepath, std::vector<u8> user_bytes) {
+            const QString qpath = QString::fromStdString(filepath);
+            QMetaObject::invokeMethod(
+                this,
+                [this, launched_program_id, qpath, user_bytes = std::move(user_bytes)] {
+                    if (close_pending || qpath.isEmpty()) {
+                        return;
+                    }
+                    if (user_bytes.size() == sizeof(Common::UUID)) {
+                        Common::UUID selected_user{};
+                        std::memcpy(&selected_user, user_bytes.data(), sizeof(selected_user));
+                        if (selected_user.IsValid()) {
+                            if (const auto index =
+                                    QtCommon::system->GetProfileManager().GetUserIndex(
+                                        selected_user);
+                                index.has_value()) {
+                                Settings::values.current_user = static_cast<s32>(*index);
+                            }
+                        }
+                    }
+                    if (launched_program_id ==
+                        static_cast<u64>(Service::AM::AppletProgramId::QLaunch)) {
+                        LaunchFirmwareApplet(launched_program_id, std::nullopt);
+                        return;
+                    }
+                    if (emulation_running) {
+                        boot_in_progress = true;
+                        ShutdownGame();
+                        boot_in_progress = false;
+                    }
+                    if (!Settings::values.ext_content_from_game_dirs.GetValue() &&
+                        QtCommon::provider != nullptr) {
+                        QtCommon::provider->ClearAllEntries();
+                    }
+                    // qlaunch already selected or validated the active user profile.
+                    user_flag_cmd_line = true;
+                    auto launch_params = ApplicationAppletParameters();
+                    launch_params.program_id = launched_program_id;
+                    BootGame(qpath, launch_params);
+                },
+                Qt::QueuedConnection);
+        });
 
     QtCommon::system->RegisterApplicationChangedCallback([this](u64 changed_program_id) {
         if (QtCommon::emu_thread)
@@ -5196,6 +5241,11 @@ void MainWindow::LaunchFirmwareApplet(u64 raw_program_id,
                     }
                 }();
             applet_id != Service::AM::AppletId::None) {
+            if (applet_id == Service::AM::AppletId::QLaunch ||
+                applet_id == Service::AM::AppletId::Settings ||
+                applet_id == Service::AM::AppletId::MyPage) {
+                QtCommon::Content::PopulateProviderForHomeMenu();
+            }
             QtCommon::system->GetFrontendAppletHolder().SetCurrentAppletId(applet_id);
             if (cabinet_mode)
                 QtCommon::system->GetFrontendAppletHolder().SetCabinetMode(*cabinet_mode);
@@ -5902,8 +5952,11 @@ bool MainWindow::SelectRomFSDumpTarget(const FileSys::ContentProvider& installed
                                      FileSys::ContentRecordType record_type) {
         const auto entries = installed.ListEntriesFilter(title_type, record_type);
         for (const auto& entry : entries) {
-            if (FileSys::GetBaseTitleID(entry.title_id) == program_id &&
-                installed.GetEntry(entry)->GetStatus() == Loader::ResultStatus::Success) {
+            if (FileSys::GetBaseTitleID(entry.title_id) != program_id) {
+                continue;
+            }
+            const auto nca = installed.GetEntry(entry);
+            if (nca != nullptr && nca->GetStatus() == Loader::ResultStatus::Success) {
                 available_title_ids.insert({entry.title_id, title_type, record_type});
             }
         }

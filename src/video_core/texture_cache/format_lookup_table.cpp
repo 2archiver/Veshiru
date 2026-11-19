@@ -274,6 +274,14 @@ PixelFormat PixelFormatFromTextureInfo(TextureFormat format, ComponentType red, 
     case Hash(TextureFormat::ASTC_2D_6X5, UNORM, SRGB):
         return PixelFormat::ASTC_2D_6X5_SRGB;
     }
+    if (static_cast<u32>(format) == 0) {
+        // Unpopulated / zeroed TIC slot sampled during bindless shader analysis: fall back quietly
+        // to the null 2D RGBA8 format without firing a critical assert.
+        LOG_DEBUG(HW_GPU, "Unpopulated texture format=0 srgb={} components={{{} {} {} {}}}",
+                  is_srgb, static_cast<int>(red), static_cast<int>(green), static_cast<int>(blue),
+                  static_cast<int>(alpha));
+        return PixelFormat::A8B8G8R8_UNORM;
+    }
     UNIMPLEMENTED_MSG("texture format={} srgb={} components={{{} {} {} {}}}",
                       static_cast<int>(format), is_srgb, static_cast<int>(red),
                       static_cast<int>(green), static_cast<int>(blue), static_cast<int>(alpha));

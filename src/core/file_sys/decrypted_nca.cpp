@@ -11,10 +11,13 @@
 
 #include "common/alignment.h"
 #include "common/logging.h"
+#include "common/stb.h"
 #include "core/crypto/aes_util.h"
 #include "core/crypto/key_manager.h"
 #include "core/file_sys/card_image.h"
+#include "core/file_sys/control_metadata.h"
 #include "core/file_sys/decrypted_nca.h"
+#include "core/file_sys/romfs.h"
 #include "core/file_sys/fssystem/fssystem_aes_ctr_counter_extended_storage.h"
 #include "core/file_sys/fssystem/fssystem_aes_ctr_storage.h"
 #include "core/file_sys/fssystem/fssystem_alignment_matching_storage.h"
@@ -425,7 +428,12 @@ VirtualFile BuildPartitionFile(std::string name, const std::vector<VirtualFile>&
     return ConcatenatedVfsFile::MakeConcatenatedFile(std::move(name), std::move(parts));
 }
 
-VirtualFile BuildAddOnContentNca(u64 title_id, VirtualFile romfs) {
+namespace {
+
+VirtualFile BuildRomFsNca(u64 title_id, NcaHeader::ContentType content_type, VirtualFile romfs) {
+    if (romfs == nullptr) {
+        return nullptr;
+    }
     const u64 romfs_size = romfs->GetSize();
     const u64 section_size = Common::AlignUp(romfs_size, NcaHeader::SectorSize);
 
@@ -437,7 +445,7 @@ VirtualFile BuildAddOnContentNca(u64 title_id, VirtualFile romfs) {
 
     NcaHeader nca{};
     nca.magic = NcaHeader::MagicDecrypted;
-    nca.content_type = NcaHeader::ContentType::PublicData;
+    nca.content_type = content_type;
     nca.content_size = HeaderSize + section_size;
     nca.program_id = title_id;
     nca.sdk_addon_version = 0x000B0000;
@@ -457,6 +465,272 @@ VirtualFile BuildAddOnContentNca(u64 title_id, VirtualFile romfs) {
     }
     return ConcatenatedVfsFile::MakeConcatenatedFile(fmt::format("{:016x}.nca", title_id),
                                                      std::move(parts));
+}
+
+template <std::size_t N>
+void CopyBoundedString(std::array<char, N>& dst, std::string_view src) {
+    dst.fill('\0');
+    const std::size_t len = (std::min)(src.size(), N - 1);
+    if (len > 0) {
+        std::memcpy(dst.data(), src.data(), len);
+    }
+}
+
+void AppendJpegBytes(void* context, void* data, int size) {
+    if (size <= 0) {
+        return;
+    }
+    auto* out = static_cast<std::vector<u8>*>(context);
+    const auto* bytes = static_cast<const u8*>(data);
+    out->insert(out->end(), bytes, bytes + size);
+}
+
+// Fast marker walk verifying a strict baseline (SOF0, 8-bit, 1 or 3 component) JPEG of exact size.
+bool IsCompliantBaselineJpeg(std::span<const u8> data, int expected_dim) noexcept {
+    if (data.size() < 4 || data.size() > HomeMenuMaxIconBytes || data[0] != 0xFF ||
+        data[1] != 0xD8) {
+        return false;
+    }
+    std::size_t pos = 2;
+    while (pos + 1 < data.size()) {
+        if (data[pos] != 0xFF) {
+            return false;
+        }
+        while (pos < data.size() && data[pos] == 0xFF) {
+            ++pos;
+        }
+        if (pos >= data.size()) {
+            return false;
+        }
+        const u8 marker = data[pos++];
+        if (marker == 0xD9) {
+            return false;
+        }
+        if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7)) {
+            continue;
+        }
+        if (pos + 2 > data.size()) {
+            return false;
+        }
+        const std::size_t seg_len =
+            (static_cast<std::size_t>(data[pos]) << 8) | static_cast<std::size_t>(data[pos + 1]);
+        if (seg_len < 2 || pos + seg_len > data.size()) {
+            return false;
+        }
+        if (marker == 0xC0) {
+            if (seg_len < 8) {
+                return false;
+            }
+            const u8 precision = data[pos + 2];
+            const int height = (static_cast<int>(data[pos + 3]) << 8) | data[pos + 4];
+            const int width = (static_cast<int>(data[pos + 5]) << 8) | data[pos + 6];
+            const u8 components = data[pos + 7];
+            return precision == 8 && width == expected_dim && height == expected_dim &&
+                   (components == 1 || components == 3);
+        }
+        // Reject progressive (SOF2) or arithmetic/extended SOF frames so qlaunch never fails decode.
+        if (marker >= 0xC1 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8 &&
+            marker != 0xCC) {
+            return false;
+        }
+        if (marker == 0xDA) {
+            return false;
+        }
+        pos += seg_len;
+    }
+    return false;
+}
+
+std::vector<u8> EncodeJpegUnderLimit(const u8* rgb, int dimension) {
+    static constexpr std::array<int, 5> Qualities{90, 82, 72, 60, 45};
+    std::vector<u8> out;
+    out.reserve(48 * 1024);
+    for (const int quality : Qualities) {
+        out.clear();
+        if (stbi_write_jpg_to_func(AppendJpegBytes, &out, dimension, dimension, STBI_rgb, rgb,
+                                   quality) != 0 &&
+            !out.empty() && out.size() <= HomeMenuMaxIconBytes) {
+            return out;
+        }
+    }
+    return {};
+}
+
+std::vector<u8> GenerateFallbackTileRgb(u64 title_id, int dimension) {
+    // Deterministic accent palette derived from the Title ID so distinct metadata-less dumps are
+    // visually distinguishable on HOME Menu while staying under ~8 KiB encoded.
+    u64 hash = title_id ^ 0x9E3779B97F4A7C15ULL;
+    hash = (hash ^ (hash >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    hash = (hash ^ (hash >> 27)) * 0x94D049BB133111EBULL;
+    hash ^= (hash >> 31);
+
+    const u8 accent_r = static_cast<u8>(48 + (hash & 0x7FU));
+    const u8 accent_g = static_cast<u8>(56 + ((hash >> 8) & 0x6FU));
+    const u8 accent_b = static_cast<u8>(72 + ((hash >> 16) & 0x7FU));
+
+    std::vector<u8> rgb(static_cast<std::size_t>(dimension) * static_cast<std::size_t>(dimension) *
+                        STBI_rgb);
+    const int border = (std::max)(2, dimension / 32);
+    const int stripe = (std::max)(8, dimension / 6);
+    for (int y = 0; y < dimension; ++y) {
+        for (int x = 0; x < dimension; ++x) {
+            const int t = ((x + y) * 128) / (std::max)(1, 2 * (dimension - 1));
+            u8 r = static_cast<u8>(24 + ((accent_r * t) >> 8));
+            u8 g = static_cast<u8>(26 + ((accent_g * t) >> 8));
+            u8 b = static_cast<u8>(32 + ((accent_b * t) >> 8));
+            if (y < stripe) {
+                r = accent_r;
+                g = accent_g;
+                b = accent_b;
+            }
+            if (x < border || y < border || x >= dimension - border || y >= dimension - border) {
+                r = static_cast<u8>((std::min)(255, int{accent_r} + 40));
+                g = static_cast<u8>((std::min)(255, int{accent_g} + 40));
+                b = static_cast<u8>((std::min)(255, int{accent_b} + 40));
+            }
+            const std::size_t idx =
+                (static_cast<std::size_t>(y) * static_cast<std::size_t>(dimension) +
+                 static_cast<std::size_t>(x)) *
+                STBI_rgb;
+            rgb[idx + 0] = r;
+            rgb[idx + 1] = g;
+            rgb[idx + 2] = b;
+        }
+    }
+    return rgb;
+}
+
+} // namespace
+
+VirtualFile BuildAddOnContentNca(u64 title_id, VirtualFile romfs) {
+    return BuildRomFsNca(title_id, NcaHeader::ContentType::PublicData, std::move(romfs));
+}
+
+VirtualFile BuildControlNca(u64 title_id, VirtualFile romfs) {
+    return BuildRomFsNca(title_id, NcaHeader::ContentType::Control, std::move(romfs));
+}
+
+void NormalizeNacpForHomeMenu(RawNACP& nacp, u64 display_title_id, std::string_view fallback_title,
+                              std::string_view fallback_publisher,
+                              std::string_view fallback_version) {
+    if (nacp.titles_data_format == TitleDataFormat::Uncompressed) {
+        std::string chosen_title;
+        std::string chosen_publisher;
+        for (const auto& entry : nacp.language_entries.language_entries) {
+            if (chosen_title.empty() && entry.application_name[0] != '\0') {
+                chosen_title = entry.GetApplicationName();
+            }
+            if (chosen_publisher.empty() && entry.developer_name[0] != '\0') {
+                chosen_publisher = entry.GetDeveloperName();
+            }
+        }
+        if (chosen_title.empty()) {
+            chosen_title = !fallback_title.empty() ? std::string{fallback_title}
+                                                   : fmt::format("{:016X}", display_title_id);
+        }
+        if (chosen_publisher.empty() && !fallback_publisher.empty()) {
+            chosen_publisher = std::string{fallback_publisher};
+        }
+
+        for (auto& entry : nacp.language_entries.language_entries) {
+            if (entry.application_name[0] == '\0') {
+                CopyBoundedString(entry.application_name, chosen_title);
+            }
+            if (entry.developer_name[0] == '\0' && !chosen_publisher.empty()) {
+                CopyBoundedString(entry.developer_name, chosen_publisher);
+            }
+        }
+
+        // Ensure all 16 uncompressed language entries report supported so qlaunch accepts any
+        // locale.
+        nacp.supported_languages = static_cast<SupportedLanguage>(
+            static_cast<u32>(nacp.supported_languages) | 0xFFFFU);
+    } else if (static_cast<u32>(nacp.supported_languages) == 0) {
+        nacp.supported_languages = static_cast<SupportedLanguage>(0xFFFFU);
+    }
+
+    if (nacp.version_string[0] == '\0') {
+        CopyBoundedString(nacp.version_string,
+                          fallback_version.empty() ? std::string_view{"1.0.0"} : fallback_version);
+    }
+
+    if (display_title_id != 0) {
+        if (nacp.save_data_owner_id == 0) {
+            nacp.save_data_owner_id = display_title_id;
+        }
+        if (nacp.presence_group_id == 0) {
+            nacp.presence_group_id = display_title_id;
+        }
+    }
+}
+
+std::vector<u8> BuildHomeMenuIconJpeg(u64 title_id, std::span<const u8> raw_icon, int dimension) {
+    if (dimension <= 0) {
+        dimension = HomeMenuIconDimension;
+    }
+    if (IsCompliantBaselineJpeg(raw_icon, dimension)) {
+        return {raw_icon.begin(), raw_icon.end()};
+    }
+
+    if (!raw_icon.empty() && raw_icon.size() <= (64U << 20)) {
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        u8* decoded = stbi_load_from_memory(raw_icon.data(), static_cast<int>(raw_icon.size()),
+                                            &width, &height, &channels, STBI_rgb);
+        if (decoded != nullptr) {
+            std::vector<u8> encoded;
+            if (width == dimension && height == dimension) {
+                encoded = EncodeJpegUnderLimit(decoded, dimension);
+            } else if (width > 0 && height > 0) {
+                std::vector<u8> resized(static_cast<std::size_t>(dimension) *
+                                        static_cast<std::size_t>(dimension) * STBI_rgb);
+                if (stbir_resize_uint8_srgb(decoded, width, height, 0, resized.data(), dimension,
+                                            dimension, 0, STBI_rgb, STBIR_ALPHA_CHANNEL_NONE,
+                                            0) != 0) {
+                    encoded = EncodeJpegUnderLimit(resized.data(), dimension);
+                }
+            }
+            stbi_image_free(decoded);
+            if (!encoded.empty()) {
+                return encoded;
+            }
+        }
+    }
+
+    const auto fallback_rgb = GenerateFallbackTileRgb(title_id, dimension);
+    return EncodeJpegUnderLimit(fallback_rgb.data(), dimension);
+}
+
+VirtualFile BuildControlNcaFromMetadata(u64 title_id, const RawNACP& nacp,
+                                        std::span<const u8> raw_icon,
+                                        std::string_view fallback_title,
+                                        std::string_view fallback_publisher,
+                                        std::string_view fallback_version) {
+    RawNACP normalized = nacp;
+    NormalizeNacpForHomeMenu(normalized, title_id, fallback_title, fallback_publisher,
+                             fallback_version);
+
+    std::vector<u8> nacp_bytes(sizeof(RawNACP));
+    std::memcpy(nacp_bytes.data(), &normalized, sizeof(RawNACP));
+
+    auto icon_bytes = BuildHomeMenuIconJpeg(title_id, raw_icon, HomeMenuIconDimension);
+
+    std::vector<VirtualFile> files;
+    files.reserve(2);
+    files.push_back(std::make_shared<VectorVfsFile>(std::move(nacp_bytes), "control.nacp"));
+    if (!icon_bytes.empty()) {
+        files.push_back(
+            std::make_shared<VectorVfsFile>(std::move(icon_bytes), "icon_AmericanEnglish.dat"));
+    }
+
+    auto control_dir = std::make_shared<VectorVfsDirectory>(std::move(files),
+                                                            std::vector<VirtualDir>{}, "control");
+    auto romfs = CreateRomFS(control_dir);
+    if (romfs == nullptr) {
+        return nullptr;
+    }
+    return BuildControlNca(title_id, std::move(romfs));
 }
 
 VirtualFile OpenDecryptedNca(VirtualFile nca, std::string& error) {

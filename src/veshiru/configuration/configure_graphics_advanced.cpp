@@ -44,8 +44,9 @@ void ConfigureGraphicsAdvanced::Setup(const ConfigurationShared::Builder& builde
     for (auto setting :
          Settings::values.linkage.by_category[Settings::Category::RendererAdvanced]) {
         const bool is_memory_limit = setting->Id() == Settings::values.texture_cache_memory_limit.Id();
+        const bool is_vram_reserve = setting->Id() == Settings::values.vram_reserve_mib.Id();
         ConfigurationShared::Widget* widget =
-            is_memory_limit
+            (is_memory_limit || is_vram_reserve)
                 ? builder.BuildWidget(setting, apply_funcs, ConfigurationShared::RequestType::Default,
                                       true, 1.0f, nullptr, tr(" MiB"))
                 : builder.BuildWidget(setting, apply_funcs);
@@ -61,6 +62,11 @@ void ConfigureGraphicsAdvanced::Setup(const ConfigurationShared::Builder& builde
         const auto id = setting->Id();
 
         normal_hold.emplace(id, widget);
+
+        if (is_vram_reserve && widget->spinbox != nullptr) {
+            widget->spinbox->setSpecialValueText(tr("Auto"));
+            widget->spinbox->setSingleStep(64);
+        }
 
         if (is_memory_limit && widget->spinbox != nullptr) {
             memory_limit_widget = widget;

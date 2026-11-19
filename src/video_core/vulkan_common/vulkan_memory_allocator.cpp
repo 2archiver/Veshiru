@@ -287,7 +287,11 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
                         ci.extent.width, ci.extent.height, ci.extent.depth, ci.mipLevels,
                         ci.arrayLayers, static_cast<u32>(ci.format));
         }
-        pressure_events.fetch_add(1, std::memory_order_relaxed);
+        // Short-lived dedicated scratch images (e.g. ASTC->BCn RGBA8 decode intermediates) return
+        // their memory immediately after use and must not trigger permanent cache-eviction cascades.
+        if (!dedicated) {
+            pressure_events.fetch_add(1, std::memory_order_relaxed);
+        }
         VmaAllocationCreateInfo relaxed = alloc_ci;
         relaxed.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
         result = vmaCreateImage(allocator, &ci, &relaxed, &handle, &allocation, &alloc_info);
@@ -297,7 +301,7 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
             result = vmaCreateImage(allocator, &ci, &relaxed, &handle, &allocation, &alloc_info);
         }
     }
-    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge) {
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge && !dedicated) {
         pressure_events.fetch_add(1, std::memory_order_relaxed);
     }
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && ci.imageType != VK_IMAGE_TYPE_1D &&
