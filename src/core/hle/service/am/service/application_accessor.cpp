@@ -176,11 +176,18 @@ Result IApplicationAccessor::PushLaunchParameter(LaunchParameterKind kind,
 
     const auto data = storage->GetData();
     if (kind == LaunchParameterKind::AccountPreselectedUser) {
-        if (data.size() >= sizeof(LaunchParameterAccountPreselectedUser)) {
-            LaunchParameterAccountPreselectedUser lp{};
+        constexpr u32 AccountPreselectedUserMagic = 0xC79497CAU;
+        struct AccountPreselectedUserHeader {
+            u32 magic{};
+            u32 is_account_selected{};
+            Common::UUID current_user{};
+        };
+        static_assert(sizeof(AccountPreselectedUserHeader) == 0x18);
+        if (data.size() >= 0x88) {
+            AccountPreselectedUserHeader lp{};
             std::memcpy(&lp, data.data(), sizeof(lp));
-            if (lp.magic == LaunchParameterAccountPreselectedUserMagic &&
-                lp.is_account_selected != 0 && lp.current_user.IsValid()) {
+            if (lp.magic == AccountPreselectedUserMagic && lp.is_account_selected != 0 &&
+                lp.current_user.IsValid()) {
                 m_selected_user = lp.current_user;
             }
         }
