@@ -245,7 +245,9 @@ TEST_CASE("Multi-buffer global memory helpers use DontInline outside task and me
         program.workgroup_size = {1, 1, 1};
         program.output_topology = OutputTopology::TriangleList;
         program.output_vertices = 3;
+        program.mesh.max_vertices = 3;
         program.mesh.max_primitives = 1;
+        program.mesh.topology = 4;
         program.blocks = {&block};
         program.post_order_blocks = {&block};
         program.syntax_list = {{{.block = &block}, IR::AbstractSyntaxNode::Type::Block},
