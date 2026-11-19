@@ -2507,7 +2507,8 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
     const bool depth_tested =
         native ? mode != NativePendingMode::Wait && regs.zeta_enable != 0 &&
                      regs.depth_test_enable != 0 && !regs.IsMeshEnabled() &&
-                     regs.zpass_pixel_count_enable == 0 && !pipeline->Nx2MayWriteMemory() &&
+                     regs.zpass_pixel_count_enable == 0 && !pipeline->WritesStorage() &&
+                     !pipeline->WritesImages() &&
                      ColorWritesHaveHistory(
                          (std::min<u32>)(regs.rt_control.count,
                                          static_cast<u32>(Maxwell::NumRenderTargets)),

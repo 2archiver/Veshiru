@@ -3983,10 +3983,9 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             const char* const value = std::getenv("EDEN_NX2_TC_SKIP_STALE_UPLOAD");
             return value == nullptr || value[0] != '0';
         }();
-        if (!enabled || False(options & RelaxedOptions::RenderTarget) ||
-            !join_copies_to_do.empty() || new_info.type != ImageType::e2D ||
-            new_info.resources.levels != 1 || new_info.resources.layers != 1 ||
-            join_bad_overlap_ids.empty()) {
+        if (!enabled || !render_target || !join_copies_to_do.empty() ||
+            new_info.type != ImageType::e2D || new_info.resources.levels != 1 ||
+            new_info.resources.layers != 1 || join_bad_overlap_ids.empty()) {
             return false;
         }
         const DAddr begin = new_image.cpu_addr;
