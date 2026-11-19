@@ -242,8 +242,6 @@ TEST_CASE("Multi-buffer global memory helpers use DontInline in classic graphics
         IR::Program program;
         program.stage = stage;
         program.workgroup_size = {32, 1, 1};
-        program.output_topology = OutputTopology::TriangleList;
-        program.output_vertices = 3;
         program.mesh.max_vertices = 3;
         program.mesh.max_primitives = 1;
         program.mesh.topology = 4;
