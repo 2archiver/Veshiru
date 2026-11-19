@@ -166,12 +166,12 @@ TEST_CASE("NUP Switch 1 and Switch 2 packages register playable HOME Menu entrie
     REQUIRE(FileSys::Nup::PackDump(sw2_dump, sw2_nup) == FileSys::Nup::PackResult::Success);
 
     const auto icon_png = MakeSolidPng(300, 300, 200, 160, 40);
-    FileSys::Nup::MetadataUpdate meta{};
-    meta.title = "Ocarina of Time";
+    FileSys::Nup::MetadataEdit meta{};
+    meta.title_name = "Ocarina of Time";
     meta.publisher = "Nintendo";
     meta.display_version = "1.2.0";
     meta.icon = icon_png;
-    REQUIRE(FileSys::Nup::UpdateMetadata(sw2_nup, meta) == FileSys::Nup::PackResult::Success);
+    REQUIRE(FileSys::Nup::EditNupMetadata(sw2_nup, meta) == FileSys::Nup::EditResult::Success);
 
     FileSys::RealVfsFilesystem vfs;
     FileSys::ManualContentProvider provider;
