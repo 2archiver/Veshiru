@@ -213,8 +213,8 @@ TEST_CASE("A route through a pointer array keeps the bound slots past those sear
     CHECK(std::ranges::find(route, std::pair{1U, 0U}) == route.end());
 }
 
-TEST_CASE("Multi-buffer global memory helpers use DontInline outside task and mesh stages",
-          "[shader_recompiler]") {
+TEST_CASE("Multi-buffer global memory helpers use DontInline in classic graphics stages only",
+          "[shader][global_memory_routes]") {
     static constexpr u32 op_function{54};
     static constexpr u32 dont_inline_mask{2};
     const auto count_dont_inline = [](const std::vector<u32>& code) {
@@ -232,9 +232,8 @@ TEST_CASE("Multi-buffer global memory helpers use DontInline outside task and me
     };
 
     const auto emit_for_stage = [](Stage stage, size_t buffer_count) {
-        ObjectPool<IR::Inst> inst_pool{64};
-        ObjectPool<IR::Block> block_pool{8};
-        IR::Block& block{*block_pool.Create()};
+        ObjectPool<IR::Inst> inst_pool;
+        IR::Block block{inst_pool};
         IR::IREmitter ir{block};
         const IR::U64 addr{ir.PackUint2x32(
             ir.CompositeConstruct(ir.GetCbuf(ir.Imm32(0), ir.Imm32(0x40)), ir.Imm32(0)))};
@@ -242,7 +241,7 @@ TEST_CASE("Multi-buffer global memory helpers use DontInline outside task and me
 
         IR::Program program;
         program.stage = stage;
-        program.workgroup_size = {1, 1, 1};
+        program.workgroup_size = {32, 1, 1};
         program.output_topology = OutputTopology::TriangleList;
         program.output_vertices = 3;
         program.mesh.max_vertices = 3;
@@ -256,6 +255,7 @@ TEST_CASE("Multi-buffer global memory helpers use DontInline outside task and me
         program.info.native_global_bounds = true;
         program.info.constant_buffer_mask = 1;
         program.info.constant_buffer_used_sizes[0] = 0x100;
+        program.info.constant_buffer_descriptors = {{0, 1}};
         for (size_t i = 0; i < buffer_count; ++i) {
             program.info.storage_buffers_descriptors.push_back({
                 .cbuf_index = 0,
@@ -269,20 +269,19 @@ TEST_CASE("Multi-buffer global memory helpers use DontInline outside task and me
         profile.supported_spirv = 0x00010500;
         profile.support_int64 = true;
         profile.support_descriptor_aliasing = true;
-        profile.support_variable_pointers = true;
+        profile.unified_descriptor_binding = true;
         profile.min_ssbo_alignment = 16;
-        profile.select_global_memory_buffer = Vulkan::SelectGlobalMemoryBuffer(profile, stage);
-        Backend::Bindings bindings{};
-        return Backend::SPIRV::EmitSPIRV(profile, program, bindings);
+        return Backend::SPIRV::EmitSPIRV(profile, program);
     };
 
-    // Multi-buffer compute and fragment helpers stay out-of-line (load_u32 + write_u32).
-    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4)) == 2);
-    CHECK(count_dont_inline(emit_for_stage(Stage::Fragment, 4)) == 2);
-    CHECK(count_dont_inline(emit_for_stage(Stage::VertexB, 4)) == 2);
+    // Multi-buffer fragment and vertex helpers (32/64/128-bit load + write) stay out-of-line.
+    CHECK(count_dont_inline(emit_for_stage(Stage::Fragment, 4)) == 6);
+    CHECK(count_dont_inline(emit_for_stage(Stage::VertexB, 4)) == 6);
     // Single-buffer routes stay inline.
     CHECK(count_dont_inline(emit_for_stage(Stage::Fragment, 1)) == 0);
-    // Task and Mesh stages keep inline emission to avoid mesh call-frame driver miscompiles.
+    // Compute, Task, and Mesh stages keep helpers inline to avoid NVIDIA driver miscompiles in
+    // Ocarina of Time's foliage culling and Hyrule Field tree task/mesh shaders.
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4)) == 0);
     CHECK(count_dont_inline(emit_for_stage(Stage::Task, 4)) == 0);
     CHECK(count_dont_inline(emit_for_stage(Stage::Mesh, 4)) == 0);
 }

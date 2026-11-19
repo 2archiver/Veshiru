@@ -844,7 +844,7 @@ void AppLoader_NX::RegisterContent(FileSys::ManualContentProvider& provider,
     }
 
     if (include_application && impl->program_id != 0 && file != nullptr) {
-        const u32 numeric_version = a.snapshots()[impl->selected].version;
+        const u32 numeric_version = a.snapshots()[impl->selected].numeric_version;
         const std::string version_str = impl->DisplayVersion(impl->selected);
 
         std::string title;

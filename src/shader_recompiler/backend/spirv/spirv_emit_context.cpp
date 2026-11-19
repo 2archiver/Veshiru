@@ -1188,19 +1188,23 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
         }
         return value;
     }};
-    // Keep multi-buffer routing helpers out-of-line so drivers do not inline the entire
-    // candidate search and per-buffer branch ladder into every global load/store/atomic site
-    // (cuts Switch 2 graphics shader build times from up to ~7 s to sub-second and reduces
-    // instruction cache pressure). Task and Mesh shaders keep inline emission to avoid NVIDIA
-    // mesh-stage call-frame miscompiles in Ocarina of Time's Hyrule Field; single-buffer routes
-    // are trivial and stay inline. EDEN_NX2_LEAN_SSBO=0 restores unconditional inlining.
+    // Keep multi-buffer routing helpers out-of-line in classic graphics stages (vertex,
+    // tessellation, geometry, fragment) where pipeline_shader_emission disables
+    // select_global_memory_buffer and drivers would otherwise inline the full per-buffer branch
+    // ladder into every global load/store/atomic site (cuts Switch 2 graphics shader build times
+    // from ~4-7 s to sub-second and reduces instruction cache pressure). Compute stages keep
+    // inlinable helpers (select_global_memory_buffer already isolates search_function as
+    // DontInline, and out-of-line branch helpers miscompiled Ocarina of Time's foliage compute
+    // culling on NVIDIA); Task and Mesh stages also keep inline emission to avoid NVIDIA
+    // mesh-stage call-frame miscompiles in Hyrule Field; single-buffer routes stay inline.
+    // EDEN_NX2_LEAN_SSBO=0 restores unconditional inlining.
     static const bool lean_ssbo_helpers{[] {
         const char* const env = std::getenv("EDEN_NX2_LEAN_SSBO");
         return env == nullptr || env[0] != '0';
     }()};
     const auto helper_control{[&]() noexcept {
-        if (lean_ssbo_helpers && stage != Stage::Task && stage != Stage::Mesh &&
-            buffers.size() > 1) {
+        if (lean_ssbo_helpers && stage != Stage::Compute && stage != Stage::Task &&
+            stage != Stage::Mesh && buffers.size() > 1) {
             return spv::FunctionControlMask::DontInline;
         }
         return spv::FunctionControlMask::MaskNone;

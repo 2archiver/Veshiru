@@ -43,8 +43,10 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 ### Vulkan, SPIR-V & Texture Compatibility
 
 - **Lean multi-buffer SPIR-V global-memory helpers**: Marked generated multi-buffer global-memory
-  load, store, atomic, and CAS helper functions `DontInline` outside `Task`/`Mesh` stages to slash
-  SPIR-V module bloat and driver compile times on heavy Switch 2 shaders.
+  load, store, atomic, and CAS helper functions `DontInline` across classic graphics stages
+  (while preserving inline helpers in `Compute`, `Task`, and `Mesh` stages for Ocarina of Time
+  foliage and tree accuracy) to slash SPIR-V module bloat and multi-second graphics pipeline
+  compile times on heavy Switch 2 shaders.
 - **AMD mesh-shader fallback & NVIDIA driver reporting**: Enabled compute mesh-shader fallback
   properly on AMD hardware where needed, formatted NVIDIA proprietary driver versions using their
   10-8-8-6 bit scheme, added a quiet `A8B8G8R8_UNORM` fallback for zeroed guest texture headers,
