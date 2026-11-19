@@ -87,4 +87,69 @@ struct NativeBufferGcThresholds {
     return 512_MiB;
 }
 
+/// Computes the effective GPU memory ceiling for an integrated / unified-memory GPU, eliminating
+/// fixed 512/2048 MiB BIOS UMA carveout caps and 4/6 GiB unified-RAM ceilings while keeping
+/// sufficient headroom for Switch 2 guest DRAM and the host OS.
+/// - `host_ram_bytes`: OS-visible physical RAM (Common::GetMemInfo().TotalPhysicalMemory), or 0.
+/// - `local_heap_bytes`: Size of the largest VK_MEMORY_HEAP_DEVICE_LOCAL_BIT heap (BIOS UMA
+///   carveout on Windows WDDM APUs, or the unified heap on Linux RADV / Intel ANV / MoltenVK).
+/// - `shared_heap_bytes`: Sum of non-DEVICE_LOCAL heap sizes (shared system GPU segment on
+///   multi-heap iGPU drivers; 0 on single-heap unified drivers).
+/// - `usable_pool_bytes`: Live usable bytes across the primary local + shared heaps (budget minus
+///   initial usage when VK_EXT_memory_budget is present, or 0 to fall back to heap sizes).
+/// - `aggressive`: True for Aggressive VRAM mode or when sizing the maximum selectable UI ceiling.
+[[nodiscard]] constexpr u64 ResolveIntegratedGpuMemory(u64 host_ram_bytes, u64 local_heap_bytes,
+                                                       u64 shared_heap_bytes, u64 usable_pool_bytes,
+                                                       bool aggressive) {
+    const u64 combined_heap = local_heap_bytes <= ~u64{0} - shared_heap_bytes
+                                  ? local_heap_bytes + shared_heap_bytes
+                                  : ~u64{0};
+    const u64 pool = usable_pool_bytes != 0 ? usable_pool_bytes : combined_heap;
+    if (pool == 0) {
+        return 0;
+    }
+    if (host_ram_bytes == 0) {
+        const u64 fallback = aggressive ? (pool / 4 * 3) : (pool / 2);
+        return (std::min)(pool, (std::max)(fallback, (std::min)(pool, u64{4_GiB})));
+    }
+    // On multi-heap iGPU drivers (e.g. Windows WDDM APUs with a 512 MiB or 2048 MiB BIOS UMA
+    // carveout plus a shared system segment), the UMA carveout was already subtracted from
+    // OS-visible physical RAM; add it back to recover total unified machine memory. On single-heap
+    // unified drivers (Linux RADV, Apple Silicon MoltenVK), local_heap overlaps host_ram directly.
+    const bool separate_uma_carveout =
+        shared_heap_bytes != 0 && local_heap_bytes <= (host_ram_bytes <= ~u64{0} / 4
+                                                           ? host_ram_bytes * 4
+                                                           : ~u64{0});
+    const u64 total_unified = separate_uma_carveout && host_ram_bytes <= ~u64{0} - local_heap_bytes
+                                  ? host_ram_bytes + local_heap_bytes
+                                  : host_ram_bytes;
+    u64 share = aggressive ? (total_unified / 8 * 5) : (total_unified / 8 * 3);
+    if (separate_uma_carveout) {
+        // Dedicated BIOS UMA carveouts (e.g. 8 GiB handhelds or 64-96 GiB unified APUs) are
+        // inaccessible to the host OS, so always let the GPU utilize its entire carveout.
+        share = (std::max)(share, local_heap_bytes);
+    }
+    return (std::min)(pool, share);
+}
+
+/// Effective live memory budget cap for an integrated GPU, allowing an explicit user-configured
+/// texture_cache_memory_limit (in MiB) to expand above the conservative default up to the full
+/// unified ceiling (`max_unified_bytes`) plus its reserve margin, bounded by the live driver
+/// budget (`driver_budget_bytes`).
+[[nodiscard]] constexpr u64 ClampIntegratedGpuBudget(u64 driver_budget_bytes,
+                                                     u64 default_budget_bytes,
+                                                     u64 max_unified_bytes,
+                                                     u32 explicit_limit_mib,
+                                                     u64 reserve_bytes) {
+    u64 cap = default_budget_bytes;
+    if (explicit_limit_mib != 0 && max_unified_bytes > cap) {
+        const u64 explicit_bytes = u64{explicit_limit_mib} << 20;
+        const u64 needed = explicit_bytes <= ~u64{0} - reserve_bytes
+                               ? explicit_bytes + reserve_bytes
+                               : ~u64{0};
+        cap = (std::max)(cap, (std::min)(max_unified_bytes, needed));
+    }
+    return cap != 0 ? (std::min)(driver_budget_bytes, cap) : driver_budget_bytes;
+}
+
 } // namespace VideoCommon::TextureCacheMemory

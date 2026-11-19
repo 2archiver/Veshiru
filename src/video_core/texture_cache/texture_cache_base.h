@@ -823,7 +823,10 @@ private:
     std::deque<PendingUnswizzle> unswizzle_queue;
     u8 current_unswizzle_frame;
 
-    // Superseded images (DeleteSupersededImages)
+    // Superseded & overlapping images (DeleteSupersededImages / RetireStaleTargets)
+    void TrackOverlappingImage(ImageId image_id, ImageBase& image);
+    void UntrackOverlappingImage(ImageBase& image);
+    std::vector<ImageId> overlapping_image_ids; ///< Registered images with non-empty overlapping_images
     std::vector<ImageId> superseded_ids;
     u64 superseded_activity_frame{}; ///< Last frame a bad overlap appeared or a clear wrote whole
     u64 superseded_clean_deletes{};

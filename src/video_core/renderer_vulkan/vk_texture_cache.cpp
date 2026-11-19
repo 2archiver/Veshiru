@@ -242,9 +242,11 @@ constexpr VkBorderColor ConvertBorderColor(const std::array<float, 4>& color) {
     }
     // RGBA8 is 4-16x the BC size: Ocarina of Time's uneven ASTC 8x8 images took ~3.4 GB instead
     // of ~0.6 GB at area loads on a Steam Deck, where VRAM and system RAM are the same memory and
-    // the load peaks got the emulator killed. Integrated GPUs and cards under 6 GiB keep BC.
+    // the load peaks got the emulator killed. Keep BC on discrete cards under 6 GiB and integrated
+    // GPUs under a 16 GiB unified budget; high-RAM unified systems (64-128 GiB APUs) can keep RGBA8.
     using namespace Common::Literals;
-    if (device.IsIntegrated() || device.GetDeviceLocalHeapSize() < 6_GiB) {
+    if ((device.IsIntegrated() && device.GetDeviceLocalMemory() < 16_GiB) ||
+        (!device.IsIntegrated() && device.GetDeviceLocalHeapSize() < 6_GiB)) {
         return false;
     }
     return HasUnevenBlockMips(info) && !IsHugeAstcArray(device, info);
@@ -5419,27 +5421,6 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
                   std::clamp<u64>(max_chunk_bytes / (std::max)(layer_decode_bytes, u64{1}), 1,
                                   layers));
     const bool chunked = chunk_layers < layers;
-    const u64 needed_bytes = layer_decode_bytes * chunk_layers;
-    const u64 max_in_flight = MaxInFlightTranscodeBytesFor(device);
-    u64 in_flight_bytes{};
-    for (const PendingTranscode& t : pending_transcodes) {
-        in_flight_bytes += TranscodeBytes(t);
-    }
-    while (!pending_transcodes.empty() && in_flight_bytes + needed_bytes > max_in_flight) {
-        const u64 oldest_tick = pending_transcodes.front().tick;
-        if (oldest_tick >= scheduler.CurrentTick()) {
-            scheduler.Flush();
-        }
-        scheduler.Wait(oldest_tick);
-        RecycleFinishedTranscodes();
-        in_flight_bytes = 0;
-        for (const PendingTranscode& t : pending_transcodes) {
-            in_flight_bytes += TranscodeBytes(t);
-        }
-        if (!pending_transcodes.empty() && pending_transcodes.front().tick == oldest_tick) {
-            break;
-        }
-    }
     const auto fits = [&](const PendingTranscode& t) {
         if (t.levels != levels || t.layers != chunk_layers) {
             return false;
@@ -5483,16 +5464,21 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
         };
         vk::Image decode = memory_allocator.TryCreateImage(decode_ci, true);
         if (!decode && (!free_transcodes.empty() || !pending_transcodes.empty())) {
-            // Drain finished/in-flight decode intermediates so their memory returns to the driver.
-            if (!pending_transcodes.empty()) {
-                const u64 newest_tick = pending_transcodes.back().tick;
-                if (newest_tick >= scheduler.CurrentTick()) {
-                    scheduler.Flush();
+            // Drain already-submitted decode intermediates (strictly older than the current tick so
+            // `map`'s staging buffer is never recycled before this texture's decode reads it).
+            const u64 current_tick = scheduler.CurrentTick();
+            u64 wait_tick = 0;
+            for (const PendingTranscode& t : pending_transcodes) {
+                if (t.tick < current_tick) {
+                    wait_tick = (std::max)(wait_tick, t.tick);
                 }
-                scheduler.Wait(newest_tick);
+            }
+            if (wait_tick != 0) {
+                scheduler.Wait(wait_tick);
                 RecycleFinishedTranscodes();
             }
             free_transcodes.clear();
+            device.FlushPendingMemoryFrees();
             decode = memory_allocator.TryCreateImage(decode_ci, true);
         }
         if (!decode) {
@@ -5636,6 +5622,30 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
     pending.tick = scheduler.CurrentTick();
     pending.last_use = ++transcode_use_counter;
     pending_transcodes.push_back(std::move(pending));
+
+    // Throttle in-flight decode scratch AFTER recording this texture's decode and encode: waiting
+    // before recording finished the submission `map` belonged to, letting the staging pool hand it
+    // to the next upload before the decode read it (corrupted textures on cold shader cache, #905).
+    const u64 max_in_flight = MaxInFlightTranscodeBytesFor(device);
+    u64 in_flight_bytes{};
+    for (const PendingTranscode& t : pending_transcodes) {
+        in_flight_bytes += TranscodeBytes(t);
+    }
+    while (pending_transcodes.size() > 1 && in_flight_bytes > max_in_flight) {
+        const u64 oldest_tick = pending_transcodes.front().tick;
+        if (oldest_tick >= scheduler.CurrentTick()) {
+            scheduler.Flush();
+        }
+        scheduler.Wait(oldest_tick);
+        RecycleFinishedTranscodes();
+        in_flight_bytes = 0;
+        for (const PendingTranscode& t : pending_transcodes) {
+            in_flight_bytes += TranscodeBytes(t);
+        }
+        if (!pending_transcodes.empty() && pending_transcodes.front().tick == oldest_tick) {
+            break;
+        }
+    }
 }
 
 bool TextureCacheRuntime::ClearImage(Image& image) {

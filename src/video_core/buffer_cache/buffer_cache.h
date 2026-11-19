@@ -634,22 +634,20 @@ void BufferCache<P>::DownloadMemoryForRead(DAddr device_addr, u64 size) {
             const DAddr window_begin = device_addr > BackWindow ? device_addr - BackWindow : 0;
             const DAddr window_end =
                 own_end <= ~DAddr{0} - AheadWindow ? own_end + AheadWindow : ~DAddr{0};
-            cpu_read_ranges.ForEachInRange(
-                window_begin, window_end - window_begin, [&](DAddr lower, DAddr upper) {
-                    gpu_modified_ranges.ForEachInRange(lower, upper - lower, add_speculative);
-                });
-            if (window_end < ~DAddr{0} &&
-                (speculative_bytes < MaxSpeculativeReadBytes || !download_cpu_read_ranges)) {
-                cpu_read_ranges.ForEachInRange(
-                    window_end, ~DAddr{0} - window_end, [&](DAddr lower, DAddr upper) {
-                        gpu_modified_ranges.ForEachInRange(lower, upper - lower, add_speculative);
-                    });
+            const auto visit_read_range = [&](DAddr lower, DAddr upper) {
+                if (download_cpu_read_ranges) {
+                    return;
+                }
+                gpu_modified_ranges.ForEachInRange(lower, upper - lower, add_speculative);
+            };
+            cpu_read_ranges.ForEachInRange(window_begin, window_end - window_begin,
+                                           visit_read_range);
+            if (window_end < ~DAddr{0} && !download_cpu_read_ranges) {
+                cpu_read_ranges.ForEachInRange(window_end, ~DAddr{0} - window_end,
+                                               visit_read_range);
             }
-            if (window_begin > 0 &&
-                (speculative_bytes < MaxSpeculativeReadBytes || !download_cpu_read_ranges)) {
-                cpu_read_ranges.ForEachInRange(0, window_begin, [&](DAddr lower, DAddr upper) {
-                    gpu_modified_ranges.ForEachInRange(lower, upper - lower, add_speculative);
-                });
+            if (window_begin > 0 && !download_cpu_read_ranges) {
+                cpu_read_ranges.ForEachInRange(0, window_begin, visit_read_range);
             }
         }
         const std::array own{std::pair<DAddr, u64>{device_addr, size}};

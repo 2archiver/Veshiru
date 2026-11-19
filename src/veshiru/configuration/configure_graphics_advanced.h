@@ -37,8 +37,8 @@ public:
 
     void ExposeComputeOption();
 
-    /// Sets the memory of the selected GPU the texture cache memory limit is checked against.
-    void SetDeviceMemory(u64 bytes);
+    /// Sets the default and maximum selectable memory of the selected GPU for the texture cache limit.
+    void SetDeviceMemory(u64 bytes, u64 max_bytes = 0);
 
 private:
     void Setup(const ConfigurationShared::Builder& builder);
@@ -57,4 +57,5 @@ private:
     ConfigurationShared::Widget* memory_limit_widget{};
     QLabel* memory_limit_note{};
     u64 device_memory{};
+    u64 max_device_memory{};
 };

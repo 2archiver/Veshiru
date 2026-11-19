@@ -65,3 +65,45 @@ TEST_CASE("VRAM budgeting tiers for 4 GB, 6 GB, and 8+ GB GPUs", "[video_core][v
     CHECK(TCM::ResolveTrimmedAstcArrayLimit(8_GiB) == 512_MiB);
     CHECK(TCM::ResolveTrimmedAstcArrayLimit(16_GiB) == 512_MiB);
 }
+
+TEST_CASE("Integrated and unified GPU memory scales past 2048 MiB UMA carveouts and 4 GiB caps",
+          "[video_core][vram_budget][unified_memory]") {
+    // 16 GB Windows APU with 2048 MiB BIOS UMA carveout + 7 GiB shared system GPU segment
+    // (OS sees 14 GiB): no longer locked to 2048 MiB; gets 6 GiB default and full 9 GiB pool max.
+    CHECK(TCM::ResolveIntegratedGpuMemory(14_GiB, 2_GiB, 7_GiB, 9_GiB, false) == 6_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(14_GiB, 2_GiB, 7_GiB, 9_GiB, true) == 9_GiB);
+
+    // 16 GB Windows APU with 512 MiB Auto UMA carveout + 7.75 GiB shared segment (OS sees 15.5 GiB).
+    const u64 os_15_5g = 15_GiB + 512_MiB;
+    const u64 shared_7_75g = 7_GiB + 768_MiB;
+    CHECK(TCM::ResolveIntegratedGpuMemory(os_15_5g, 512_MiB, shared_7_75g, 0, false) == 6_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(os_15_5g, 512_MiB, shared_7_75g, 0, true) ==
+          8_GiB + 256_MiB);
+
+    // 24 GB handheld (2 GiB and 8 GiB UMA carveouts): scales to 9 GiB default and 13-15 GiB max.
+    CHECK(TCM::ResolveIntegratedGpuMemory(22_GiB, 2_GiB, 11_GiB, 13_GiB, false) == 9_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(22_GiB, 2_GiB, 11_GiB, 13_GiB, true) == 13_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(16_GiB, 8_GiB, 8_GiB, 16_GiB, false) == 9_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(16_GiB, 8_GiB, 8_GiB, 16_GiB, true) == 15_GiB);
+
+    // 32 GB Windows APU (2048 MiB UMA + 15 GiB shared) and 32 GB single-heap RADV unified iGPU:
+    // scales far beyond the old 2/4 GiB cap while staying below 20 GiB so BC3 remains enabled.
+    CHECK(TCM::ResolveIntegratedGpuMemory(30_GiB, 2_GiB, 15_GiB, 17_GiB, false) == 12_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(30_GiB, 2_GiB, 15_GiB, 17_GiB, true) == 17_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(30_GiB, 24_GiB, 0, 21_GiB, false) == 11_GiB + 256_MiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(30_GiB, 24_GiB, 0, 21_GiB, true) == 18_GiB + 768_MiB);
+
+    // 64 GB and 128 GB unified RAM systems (including a dedicated 96 GiB BIOS UMA carveout).
+    CHECK(TCM::ResolveIntegratedGpuMemory(62_GiB, 2_GiB, 31_GiB, 33_GiB, false) == 24_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(62_GiB, 2_GiB, 31_GiB, 33_GiB, true) == 33_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(64_GiB, 48_GiB, 0, 48_GiB, false) == 24_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(64_GiB, 48_GiB, 0, 48_GiB, true) == 40_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(32_GiB, 96_GiB, 16_GiB, 112_GiB, false) == 96_GiB);
+    CHECK(TCM::ResolveIntegratedGpuMemory(32_GiB, 96_GiB, 16_GiB, 112_GiB, true) == 96_GiB);
+
+    // Explicit user Texture Cache Memory Limit expands live iGPU budget up to max unified ceiling
+    // without exceeding the live OS/driver budget.
+    CHECK(TCM::ClampIntegratedGpuBudget(17_GiB, 12_GiB, 17_GiB, 0, 1_GiB) == 12_GiB);
+    CHECK(TCM::ClampIntegratedGpuBudget(17_GiB, 12_GiB, 17_GiB, 14336, 1_GiB) == 15_GiB);
+    CHECK(TCM::ClampIntegratedGpuBudget(13_GiB, 12_GiB, 17_GiB, 16384, 1_GiB) == 13_GiB);
+}

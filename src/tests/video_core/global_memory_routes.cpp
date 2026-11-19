@@ -213,7 +213,7 @@ TEST_CASE("A route through a pointer array keeps the bound slots past those sear
     CHECK(std::ranges::find(route, std::pair{1U, 0U}) == route.end());
 }
 
-TEST_CASE("Multi-buffer global memory helpers use DontInline in classic graphics stages only",
+TEST_CASE("Multi-buffer global memory helpers stay out-of-line outside Task and Mesh stages",
           "[shader][global_memory_routes]") {
     static constexpr u32 op_function{54};
     static constexpr u32 dont_inline_mask{2};
@@ -231,7 +231,8 @@ TEST_CASE("Multi-buffer global memory helpers use DontInline in classic graphics
         return count;
     };
 
-    const auto emit_for_stage = [](Stage stage, size_t buffer_count) {
+    const auto emit_for_stage = [](Stage stage, size_t buffer_count, bool select = false,
+                                   bool mesh_as_compute = false) {
         ObjectPool<IR::Inst> inst_pool;
         IR::Block block{inst_pool};
         IR::IREmitter ir{block};
@@ -272,19 +273,28 @@ TEST_CASE("Multi-buffer global memory helpers use DontInline in classic graphics
         profile.support_descriptor_aliasing = true;
         profile.unified_descriptor_binding = true;
         profile.min_ssbo_alignment = 16;
-        return Backend::SPIRV::EmitSPIRV(profile, program);
+        profile.select_global_memory_buffer = select;
+        RuntimeInfo runtime_info{};
+        runtime_info.mesh_as_compute = mesh_as_compute;
+        Backend::Bindings binding{};
+        return Backend::SPIRV::EmitSPIRV(profile, runtime_info, program, binding);
     };
 
-    // Multi-buffer fragment and vertex helpers (32/64/128-bit load + write) stay out-of-line.
+    // Multi-buffer fragment, vertex, and non-select compute helpers stay out-of-line (#907).
     CHECK(count_dont_inline(emit_for_stage(Stage::Fragment, 4)) == 6);
     CHECK(count_dont_inline(emit_for_stage(Stage::VertexB, 4)) == 6);
-    // Single-buffer routes stay inline.
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4)) == 6);
+    // Single-buffer routes stay inline on both branch-chain and select paths.
     CHECK(count_dont_inline(emit_for_stage(Stage::Fragment, 1)) == 0);
-    // Compute, Task, and Mesh stages keep helpers inline to avoid NVIDIA driver miscompiles in
-    // Ocarina of Time's foliage culling and Hyrule Field tree task/mesh shaders.
-    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4)) == 0);
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 1)) == 0);
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 1, true)) == 0);
+    // Multi-buffer select path uses a single DontInline search_function while keeping load/write
+    // helpers themselves inline.
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4, true)) == 1);
+    // Task, Mesh, and emulated mesh-as-compute stages stay inline to avoid NVIDIA tree-wall bugs.
     CHECK(count_dont_inline(emit_for_stage(Stage::Task, 4)) == 0);
     CHECK(count_dont_inline(emit_for_stage(Stage::Mesh, 4)) == 0);
+    CHECK(count_dont_inline(emit_for_stage(Stage::Compute, 4, false, true)) == 0);
 }
 
 

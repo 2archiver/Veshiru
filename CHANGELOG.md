@@ -17,17 +17,32 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   policies from dropping unbuilt storage-image-writing graphics draws or image-only tonemapping,
   auto-exposure, and lighting compute dispatches, preventing temporarily dark or gloomy scene
   transitions while shaders compile in the background.
-- **4 GiB VRAM ASTC→BCn chunked transcoding & OOM recovery**: Split large multi-layer GPU ASTC→BCn
-  transcodes into VRAM-tiered 32/48/64 MiB layer chunks with flush-aware in-flight throttling,
+- **4 GiB VRAM ASTC→BCn chunked transcoding & staging safety**: Split large multi-layer GPU
+  ASTC→BCn transcodes into VRAM-tiered 32/48/64 MiB layer chunks with post-decode in-flight
+  throttling (fixing cold-cache staging buffer reuse corruption and mid-batch pipeline stalls),
   automatic queue-drain retry on transient `VK_ERROR_OUT_OF_DEVICE_MEMORY`, and inter-chunk staging
   flushes on sub-5 GiB GPUs, while keeping dedicated transient RGBA8 scratch allocations from
   falsely triggering persistent texture pressure eviction.
-- **Transient render-target & texture cache optimizations**: Added a 30-frame `BadOverlap` sweep
-  for superseded transient render targets, skipped redundant guest uploads for new single-level 2D
-  render targets completely covered by prior GPU-written images, added a fast path with per-frame
-  LRU deduplication in `PrepareImage`, cached graphics descriptor table host page pointers with
-  64-bit word comparison, and enabled depth/stencil-write render-pass tracking to avoid unneeded
-  feedback-loop transitions.
+- **Unified-RAM / iGPU budget scaling (no more 2,048 MiB UMA & 4 GiB caps)**: Sized integrated and
+  unified-memory GPUs across both BIOS UMA carveouts and shared system GPU heaps scaled to total
+  unified RAM (plus full dedicated BIOS UMA utilization on handhelds and 24–128 GiB APUs), unlocked
+  the *Texture Cache Memory Limit* UI spinbox up to the full unified memory ceiling instead of
+  clamping at 512/2,048/4,096 MiB, and expanded live iGPU budgets cleanly when an explicit cache
+  limit is configured while preserving host commit-room protection.
+- **`v1.8.0` frame-time & streaming regression fixes**: Replaced four per-frame full-LRU texture
+  walks (`DeleteSupersededImages`, `RetireStaleTargets`, and `BadOverlap` GC passes) with an O(1)
+  dense overlapping-image index, tracked in-flight background `vkFreeMemory` bytes per heap so
+  async frees never trigger phantom VRAM eviction loops or false budget pressure, eliminated
+  duplicate `VkImage` creation in render-target allocation and raised device-buffer pool blocks to
+  8 MiB, gated Windows `PrefaultGuestMemory` with a `K32QueryWorkingSetEx` residency check and
+  zero-allocation contiguous iteration, switched Windows `RealVfsFilesystem` read hits to shared
+  locking with `FILE_SKIP_SET_EVENT_ON_HANDLE`, short-circuited capped speculative readback walks,
+  and stopped shared-cache JIT invalidations of uncompiled pages from halting running CPU cores.
+- **Transient render-target & texture cache optimizations**: Skipped redundant guest uploads for
+  new single-level 2D render targets completely covered by prior GPU-written images, added a fast
+  path with per-frame LRU deduplication in `PrepareImage`, cached graphics descriptor table host
+  page pointers with 64-bit word comparison, and enabled depth/stencil-write render-pass tracking
+  to avoid unneeded feedback-loop transitions.
 - **DMA pushbuffer, staging pool & cyclic readback speedups**: Restricted per-entry pushbuffer
   writer sync waits to titles requiring them, skipped unnecessary dirty checks when record reads
   are bypassed, switched deferred Vulkan staging buffer reclamation to sorted tick binary search,
@@ -43,10 +58,10 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 ### Vulkan, SPIR-V & Texture Compatibility
 
 - **Lean multi-buffer SPIR-V global-memory helpers**: Marked generated multi-buffer global-memory
-  load, store, atomic, and CAS helper functions `DontInline` across classic graphics stages
-  (while preserving inline helpers in `Compute`, `Task`, and `Mesh` stages for Ocarina of Time
-  foliage and tree accuracy) to slash SPIR-V module bloat and multi-second graphics pipeline
-  compile times on heavy Switch 2 shaders.
+  load, store, atomic, and CAS helper functions `DontInline` across graphics and non-select compute
+  stages while keeping single-buffer routes (including NVIDIA `OpSelect` single-buffer shaders),
+  `Task`, `Mesh`, and emulated mesh-as-compute shaders inline, slashing SPIR-V bloat and pipeline
+  compile times without miscompiling Ocarina of Time's Hyrule Field trees.
 - **AMD mesh-shader fallback & NVIDIA driver reporting**: Enabled compute mesh-shader fallback
   properly on AMD hardware where needed, formatted NVIDIA proprietary driver versions using their
   10-8-8-6 bit scheme, added a quiet `A8B8G8R8_UNORM` fallback for zeroed guest texture headers,

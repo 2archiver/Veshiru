@@ -1197,14 +1197,19 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
     // DontInline, and out-of-line branch helpers miscompiled Ocarina of Time's foliage compute
     // culling on NVIDIA); Task and Mesh stages also keep inline emission to avoid NVIDIA
     // mesh-stage call-frame miscompiles in Hyrule Field; single-buffer routes stay inline.
+    // Keep multi-buffer global-memory routing helpers out of line (DontInline) outside Task/Mesh
+    // shaders (upstream #907: inlining multi-buffer chains cut OoT Market from ~58 to ~45 FPS and
+    // quadrupled 30-buffer compute compile times). Task, Mesh, emulated mesh-as-compute, and
+    // single-buffer routes stay inline; select_global_memory_buffer uses search_function instead.
     // EDEN_NX2_LEAN_SSBO=0 restores unconditional inlining.
     static const bool lean_ssbo_helpers{[] {
         const char* const env = std::getenv("EDEN_NX2_LEAN_SSBO");
         return env == nullptr || env[0] != '0';
     }()};
     const auto helper_control{[&]() noexcept {
-        if (lean_ssbo_helpers && stage != Stage::Compute && stage != Stage::Task &&
-            stage != Stage::Mesh && buffers.size() > 1) {
+        if (lean_ssbo_helpers && !profile.select_global_memory_buffer &&
+            !runtime_info.mesh_as_compute && stage != Stage::Task && stage != Stage::Mesh &&
+            buffers.size() > 1) {
             return spv::FunctionControlMask::DontInline;
         }
         return spv::FunctionControlMask::MaskNone;
@@ -1437,7 +1442,8 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
         const bool all{route == 0};
         const bool words{!profile.support_descriptor_aliasing &&
                          (use.accesses[1] || use.accesses[2])};
-        if (search_call) {
+        search_function = Id{};
+        if (search_call && buffers.size() > 1) {
             search_function = OpFunction(U32[3], spv::FunctionControlMask::DontInline,
                                          TypeFunction(U32[3], U64));
             const Id addr{OpFunctionParameter(U64)};

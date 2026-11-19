@@ -88,13 +88,13 @@ ConfigureGraphics::ConfigureGraphics(
     connect(api_combobox, qOverload<int>(&QComboBox::activated), this, [this] {
         UpdateAPILayout();
         PopulateVSyncModeSelection(false);
-        emit DeviceMemoryChanged(SelectedDeviceMemory());
+        emit DeviceMemoryChanged(SelectedDeviceMemory(), SelectedMaxDeviceMemory());
     });
     connect(vulkan_device_combobox, qOverload<int>(&QComboBox::activated), this,
             [this](int device) {
                 UpdateDeviceSelection(device);
                 PopulateVSyncModeSelection(false);
-                emit DeviceMemoryChanged(SelectedDeviceMemory());
+                emit DeviceMemoryChanged(SelectedDeviceMemory(), SelectedMaxDeviceMemory());
             });
     connect(ui->bg_button, &QPushButton::clicked, this, [this] {
         const QColor new_bg_color = QColorDialog::getColor(bg_color);
@@ -217,6 +217,15 @@ u64 ConfigureGraphics::SelectedDeviceMemory() const {
         return 0;
     }
     return records[device].device_local_memory;
+}
+
+u64 ConfigureGraphics::SelectedMaxDeviceMemory() const {
+    const int device = vulkan_device_combobox->currentIndex();
+    if (GetCurrentGraphicsBackend() != Settings::RendererBackend::Vulkan || device < 0 ||
+        static_cast<size_t>(device) >= records.size()) {
+        return 0;
+    }
+    return records[device].max_device_memory;
 }
 
 void ConfigureGraphics::SetConfiguration() {}
