@@ -10,67 +10,94 @@
 
 # Veshiru
 
-Veshiru is an experimental, open-source Nintendo Switch 2 emulator written in C++. It is an independent project with its own executable, profile, interface and development direction. It uses verified work from Eglantine, Lichii, Nemyu, Eden, yuzu and Sudachi as engineering references while preserving their contributions and licenses.
+Veshiru is an experimental, open-source Nintendo Switch 2 emulator for Windows. It is an
+independent project with its own executable, profile, interface and direction. It builds on
+verified work from Eglantine, Lichii, Nemyu, Eden, yuzu and Sudachi, with their licenses and
+copyright notices kept.
 
-Veshiru is a Windows-exclusive emulator: it is developed, built and tested for 64-bit Windows 10 and 11, and only Windows packages are published.
+Veshiru is **Windows-exclusive**: it is developed, built and tested for 64-bit Windows 10 and 11,
+and only Windows packages are published. It is not affiliated with Nintendo.
 
-Performance work focuses on Vulkan rendering, bounded VRAM use, GPU thread splitting and
-asynchronous shader/pipeline compilation. Optional frame generation is separate from game simulation
-and is not a substitute for game FPS. Veshiru is not affiliated with Nintendo.
+## System requirements
 
-## Interface and diagnostics
+- Windows 10 or 11, 64-bit.
+- A Vulkan 1.1+ GPU. 4 GB of VRAM is the practical floor; 8 GB or more is recommended.
+- 16 GB of system RAM (24 GB or more lets Veshiru keep decompressed NUP data in memory).
+- A CPU with AVX2. Six or more cores help shader and pipeline background work.
 
-Veshiru Blue is the default interface theme; other themes are available in **Configure > General > UI**.
-On Windows, the Qt frontend logs to the OS console and the session log. **Save Diagnostic Log…**
-exports a redacted snapshot. See [command-line diagnostics](docs/user/CommandLine.md) for console
-and file options.
+The reference target is an Intel i7-10750H, an NVIDIA GTX 1650 Laptop GPU (4 GB) and 32 GB of
+RAM; that machine is what the memory and pipeline defaults are tuned for.
 
-The game list uses local artwork (including existing HD PNG sidecars) without making artwork
-requests at startup or during discovery. See [game artwork](docs/Veshiru.md#high-resolution-game-artwork)
-for local fallback and the status of online lookup.
+## Installation
 
-## Downloads and setup
+1. Download the latest build archive from the [releases page](https://github.com/2archiver/Veshiru/releases).
+2. Extract the **entire** archive to a folder you can write to, and run `veshiru.exe`.
+3. Point **Configure > General > Game Directories** at the folder holding your games.
+4. Install firmware and keys you dumped from your own console under **File > Open Veshiru folder**.
 
-Download Veshiru only from this repository's [releases page](https://github.com/2archiver/Veshiru/releases). On Windows, extract the entire build archive and run **veshiru.exe**. Only use games, updates, firmware and keys you have legally obtained from your own console. Games, keys and firmware are not included.
+Games, firmware and keys are not included and are not provided. Use only copies you legally own.
 
-### Existing Eglantine saves and settings
+## Basic configuration
 
-Veshiru uses its own profile: `%APPDATA%\veshiru`. An existing portable `user/` directory still takes priority and is not imported or changed by the wizard.
+Veshiru sizes video memory, shader caches and pipeline workers automatically for the GPU it finds,
+so the defaults suit most systems. The settings that matter day to day:
 
-Eglantine build 17 and other Eden-derived builds stored saves under `eden`; later Eglantine, Lichii and Nemyu builds used their own names. On the first non-portable GUI launch, Veshiru detects those profiles and offers an import. **Copy** is the default and leaves the source unchanged. Move retains a recovery backup; Link deliberately shares data. Existing Veshiru data is kept in backup directories rather than merged or deleted. Save bytes, title IDs, save-size files and compatible shader caches are preserved; imported storage paths are remapped to the new profile.
+- **Graphics**: resolution scale (1x is native), anisotropic filtering, and the FSR/DLSS upscaler
+  if your GPU supports one.
+- **System**: console language and region, docked or handheld, and the memory layout for the game.
+- **Controls**: keyboard, gamepad and motion bindings, per player.
+- **Per-game settings**: anything set while a game is running applies to that game only.
 
-Back up `%APPDATA%\eden` before importing, and close the source emulator. `veshiru-cmd` refuses to initialize configuration until you import or explicitly choose **Start fresh** in the GUI, so a CLI-first launch cannot silently abandon existing saves.
+Memory and VRAM controls exist but sit behind **Graphics > Advanced > Show memory expert options**.
+They are for testing; the automatic values are what the hardware should get.
 
-## Live console and diagnostics
+If a game's file is moved or deleted, its row stays in the list marked **Missing**, with the old
+location in the tooltip — saves live in the NAND save data, so putting the file back restores the
+game. Files under a folder you remove from the game list are not reported.
 
-**Tools > Console** (`Ctrl+Shift+C`) opens an independent, non-modal live log window. It supports Trace/Debug/Info/Warning/Error/Critical levels, CPU/GPU/HLE/FS/Audio/Networking/Performance/Compatibility filters, search, copy, `.log` export, clear, auto-scroll and display pause. Pausing the display does not pause emulation or log capture.
+**Frame generation** (Open-Frame-Gen) adds interpolated frames on top of the game's own output. It
+does not raise the game's simulation rate, and turning it on can lower native FPS; leave it off
+unless you specifically want smoother-looking motion.
 
-The console backend is asynchronous and bounded, starts only while the window is open, rate-limits repeated messages and redacts personal paths/credential-like values. Logs are written to `veshiru_log.txt` in the emulator's `log` directory. **Export diagnostics** creates a sanitized zip with logs, build information and hardware/graphics details. It does not include game files, saves, firmware, keys or personal documents. Veshiru does not add telemetry or automatic log uploads.
+## Data and profiles
 
-## NUP support
+Veshiru uses `%APPDATA%\veshiru`. A portable `user\` folder next to `veshiru.exe` takes priority.
+On first launch Veshiru offers to import saves and settings from earlier Eglantine, Lichii and
+Nemyu profiles; **Copy** is the default and leaves the source untouched.
 
-Veshiru loads NUP containers with base/update metadata, full-resolution icons, localized titles, integrity verification and streamed zstd members (512 KiB decode chunks). Hosts with 24 GiB+ RAM automatically keep a 1.5 GiB NUP decompression cache in host RAM (`VESHIRU_NUP_CACHE_MIB` or `EDEN_NX2_NUP_CACHE_MIB` overrides the cap) and can serve a sound sibling for a damaged `.zs` member (`EDEN_NUP_DAMAGED_FALLBACK=0` disables that fallback). Carried add-on content is exposed to the game when it is not installed separately, and update-only packages can use a matching base `.nup` in the same folder. The per-game add-on list shows carried Update/DLC entries and honors their disable switches.
+Logs are written to the `log` folder inside the profile. **Tools > Console** shows the same stream
+live, and **Export diagnostics** produces a sanitised zip with logs and hardware details — no game
+files, saves, firmware or keys. Veshiru adds no telemetry and uploads nothing on its own.
 
-## Compatibility and issue reports
+## Known limitations
 
-Compatibility and performance vary by game, hardware and driver. Rendering errors, stutters and crashes remain possible. Passing automated tests does not establish that a game renders correctly, and this project makes no universal frame-rate guarantee.
+- Very experimental. Crashes, rendering errors, audio glitches and stutter are expected.
+- Compatibility and speed vary widely by game, GPU and driver; there is no universal frame-rate
+  promise.
+- Frame generation is cosmetic and costs native performance on some systems.
+- Impersonation: only the releases page linked above is official.
 
-When [reporting an issue](https://github.com/2archiver/Veshiru/issues), include:
+## Reporting an issue
 
-- The exact build, game version, CPU, GPU and driver version.
-- Relevant settings and steps to reproduce the problem.
-- A screenshot and a diagnostic bundle from **Tools > Console**, after reviewing it.
+Include the build, game and version, your CPU, GPU and driver version, the settings that were in
+use, and steps to reproduce. Attach a screenshot and a diagnostic bundle. Do not upload game files,
+keys, firmware or account information.
 
-Do not upload game files, keys, firmware or private account information.
+## Building
 
-## Building and contributing
-
-See the [build guide](docs/Build.md), [user documentation](docs/user/README.md), [coding guidelines](docs/Coding.md) and [Veshiru development notes](docs/Veshiru.md). The GUI build target is `veshiru`; its output is `veshiru.exe`, the Windows-exclusive GUI executable. The CLI target is `veshiru-cmd`; its output is `veshiru-cmd.exe`.
-
-Keep changes focused and distinguish code-level checks from actual gameplay testing. Performance claims should be backed by identical-settings benchmarks on the target hardware.
+The GUI target is `veshiru` (output `veshiru.exe`); the CLI target is `veshiru-cmd`. See the
+[build guide](docs/Build.md), [coding guidelines](docs/Coding.md) and
+[development notes](docs/Veshiru.md). Keep changes focused, and separate code-level checks from
+real gameplay testing; performance claims need identical-settings benchmarks on the target
+hardware.
 
 ## Credits and license
 
-Veshiru inherits the work of the Eglantine, Lichii, Nemyu, Eden, yuzu and Sudachi projects and their contributors, including Eglantine's original developer Camille LaVey, SmileyTatsu's GTX 1650 ASTC/memory work, zortos293's Lichii compatibility work and UesleiDev's Nemyu NUP/interface work. The optional **Open-Frame-Gen** Vulkan neural optical-flow frame generator adapts `NanoModel` and pretrained weights from [Deadly-pro/Open-Frame-gen](https://github.com/Deadly-pro/Open-Frame-gen) (`Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod`, MIT License). Original copyright notices and third-party licenses are retained.
+Veshiru inherits the work of the Eglantine, Lichii, Nemyu, Eden, yuzu and Sudachi projects and
+their contributors, including Eglantine's developer Camille LaVey, SmileyTatsu's GTX 1650
+ASTC/memory work, zortos293's Lichii compatibility work and UesleiDev's Nemyu NUP/interface work.
+The optional **Open-Frame-Gen** Vulkan neural optical-flow frame generator adapts `NanoModel` and
+pretrained weights from [Deadly-pro/Open-Frame-gen](https://github.com/Deadly-pro/Open-Frame-gen)
+(`Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod`, MIT License).
 
-See [LICENSE.txt](LICENSE.txt) and the source files for applicable license terms.
+See [LICENSE.txt](LICENSE.txt) and the source files for the applicable terms.

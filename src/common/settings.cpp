@@ -26,6 +26,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/time_zone.h"
+#include "common/vram_policy.h"
 
 #if defined(__linux__ ) && defined(ARCHITECTURE_arm64)
 #include <unistd.h>
@@ -302,7 +303,7 @@ void SetAstcRecompressionOverride(std::optional<AstcRecompression> recompression
 u64 GetVramReserve(u64 budget) {
     const int mib = values.vram_reserve_mib.GetValue();
     if (mib < 0) {
-        return budget / 8 < (u64{1} << 30) ? budget / 8 : (u64{1} << 30);
+        return Common::VramPolicy::AutoReserve(budget);
     }
     const u64 reserve = static_cast<u64>(mib) << 20;
     return reserve < budget ? reserve : budget;

@@ -177,18 +177,11 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     u64 native_expected_memory{};
     u64 budget_check_frames{};
     /// Usage under which the collector keeps recently used images (EvictionAge): the driver's
-    /// budget less the out-of-memory and block slack margins, within the host's commit bound.
-    /// Not less the base margin too: a Mario Kart World race on a 7.6 GB budget then reached it
-    /// (6.48 GB) and the collector deleted ~40 recently used images a frame again; images that
-    /// do not fit add to the out-of-memory margin.
+    /// budget less the single Common::VramPolicy reserve, within the host's commit bound.
     u64 retention_limit{};
     u64 retention_budget{};       ///< The lowest driver budget read lately (RetentionBudget)
     u64 logged_critical_memory{}; ///< The critical threshold of the last thresholds line logged
-    u32 seen_pressure_events{};   ///< Allocator pressure events already answered
     u32 seen_failed_images{};     ///< Images the allocator could not make, already collected for
-    u64 pressure_margin{};        ///< Extra room under the budget after images did not fit
-    u64 pressure_quiet_frames{};  ///< Frames since the last such image
-    u64 slack_margin{};           ///< Extra room for allocator block space the driver counts as used
     u64 astc_opaque_images{};
     u64 astc_alpha_images{};
     Common::ScratchBuffer<u8> astc_scan_buffer;

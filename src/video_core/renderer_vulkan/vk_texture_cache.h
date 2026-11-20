@@ -116,10 +116,6 @@ public:
     u32 GetMaxScaledExtent() const noexcept;
 
     /// Images that did not fit the device memory budget so far (see MemoryAllocator).
-    u32 MemoryPressureEvents() const noexcept {
-        return memory_allocator.MemoryPressureEvents();
-    }
-
     u32 FailedImages() const noexcept {
         return memory_allocator.FailedImages();
     }

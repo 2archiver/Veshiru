@@ -4,7 +4,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <map>
+#include <ranges>
 #include <vector>
+#include <QCheckBox>
 #include <QLabel>
 #include <QSpinBox>
 #include <qnamespace.h>
@@ -16,6 +19,20 @@
 #include "veshiru/configuration/configuration_shared.h"
 #include "veshiru/configuration/configure_graphics_advanced.h"
 #include "veshiru/configuration/shared_widget.h"
+
+namespace {
+
+/// Settings Veshiru's automatic behaviour covers. They stay supported (config file, per-game
+/// overrides) but leave the normal interface: memory sizing follows the GPU's driver budget on its
+/// own, and the reserve/limit pair only existed because 1.x stacked margins that fought each other.
+/// Showing them invited users to cap the cache at 2 GiB and stutter.
+bool IsExpertOnly(const Settings::BasicSetting& setting) {
+    return setting.Id() == Settings::values.texture_cache_memory_limit.Id() ||
+           setting.Id() == Settings::values.vram_reserve_mib.Id() ||
+           setting.Id() == Settings::values.vram_usage_mode.Id();
+}
+
+} // namespace
 
 ConfigureGraphicsAdvanced::ConfigureGraphicsAdvanced(
     const Core::System& system_, std::shared_ptr<std::vector<ConfigurationShared::Tab*>> group_,
@@ -38,12 +55,20 @@ void ConfigureGraphicsAdvanced::SetConfiguration() {}
 void ConfigureGraphicsAdvanced::Setup(const ConfigurationShared::Builder& builder) {
     auto& normal_layout = *ui->normal_target->layout();
 
+    // The memory controls go behind "Show expert options" instead of into the normal list.
+    show_expert = new QCheckBox(tr("Show memory expert options"), this);
+    show_expert->setToolTip(
+        tr("Veshiru sizes video memory automatically for this GPU. Change these only when testing "
+           "memory behaviour."));
+
     // A map will sort the data for us
     std::map<u32, QWidget*> normal_hold{};
 
     for (auto setting :
          Settings::values.linkage.by_category[Settings::Category::RendererAdvanced]) {
-        const bool is_memory_limit = setting->Id() == Settings::values.texture_cache_memory_limit.Id();
+        const bool is_expert = IsExpertOnly(*setting);
+        const bool is_memory_limit =
+            setting->Id() == Settings::values.texture_cache_memory_limit.Id();
         const bool is_vram_reserve = setting->Id() == Settings::values.vram_reserve_mib.Id();
         ConfigurationShared::Widget* widget =
             (is_memory_limit || is_vram_reserve)
@@ -60,8 +85,6 @@ void ConfigureGraphicsAdvanced::Setup(const ConfigurationShared::Builder& builde
         }
 
         const auto id = setting->Id();
-
-        normal_hold.emplace(id, widget);
 
         if (is_vram_reserve && widget->spinbox != nullptr) {
             widget->spinbox->setSpecialValueText(tr("Auto"));
@@ -83,15 +106,60 @@ void ConfigureGraphicsAdvanced::Setup(const ConfigurationShared::Builder& builde
         if (setting->Id() == Settings::values.enable_compute_pipelines.Id()) {
             checkbox_enable_compute_pipelines = widget;
         }
+
+        if (is_expert) {
+            expert_widgets.push_back(widget);
+        } else {
+            normal_hold.emplace(id, widget);
+        }
     }
 
     for (const auto& [id, widget] : normal_hold) {
+        normal_layout.addWidget(widget);
+    }
+    normal_layout.addWidget(show_expert);
+
+    expert_note = new QLabel(this);
+    expert_note->setWordWrap(true);
+    expert_note->setTextFormat(Qt::RichText);
+    expert_note->setText(
+        tr("<span style=\"color:#8b949e\">Auto follows this GPU's driver budget and keeps about "
+           "387 MiB free on a 4 GB card, or 960 MiB on 8 GB. Lowering either value makes Veshiru "
+           "reload textures and stutter.</span>"));
+    normal_layout.addWidget(expert_note);
+
+    for (QWidget* const widget : expert_widgets) {
         normal_layout.addWidget(widget);
         if (widget == memory_limit_widget) {
             normal_layout.addWidget(memory_limit_note);
         }
     }
+
+    // A per-game or global override of an expert setting is someone's deliberate choice: show the
+    // controls rather than hide the override.
+    const bool any_expert_overridden = std::ranges::any_of(
+        Settings::values.linkage.by_category[Settings::Category::RendererAdvanced],
+        [](const Settings::BasicSetting* setting) {
+            return IsExpertOnly(*setting) && !setting->UsingGlobal();
+        });
+    show_expert->setChecked(any_expert_overridden);
+    connect(show_expert, &QCheckBox::toggled, this, [this] { UpdateExpertVisibility(); });
+
+    UpdateExpertVisibility();
     UpdateMemoryLimit();
+}
+
+void ConfigureGraphicsAdvanced::UpdateExpertVisibility() {
+    const bool show = show_expert != nullptr && show_expert->isChecked();
+    for (QWidget* const widget : expert_widgets) {
+        widget->setVisible(show);
+    }
+    if (expert_note != nullptr) {
+        expert_note->setVisible(show);
+    }
+    if (memory_limit_note != nullptr) {
+        memory_limit_note->setVisible(show && !memory_limit_note->text().isEmpty());
+    }
 }
 
 void ConfigureGraphicsAdvanced::SetDeviceMemory(u64 bytes, u64 max_bytes) {
@@ -142,7 +210,8 @@ void ConfigureGraphicsAdvanced::UpdateMemoryLimit() {
     } else {
         memory_limit_note->setText(QString{});
     }
-    memory_limit_note->setVisible(!memory_limit_note->text().isEmpty());
+    memory_limit_note->setVisible(show_expert != nullptr && show_expert->isChecked() &&
+                                 !memory_limit_note->text().isEmpty());
 }
 
 void ConfigureGraphicsAdvanced::ApplyConfiguration() {

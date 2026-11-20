@@ -26,7 +26,6 @@
 #include "common/assert.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
-#include "common/literals.h"
 #include "common/memory_detect.h"
 #include <ranges>
 #include "common/settings.h"
@@ -49,7 +48,6 @@
 #endif
 
 namespace Vulkan {
-using namespace Common::Literals;
 namespace {
 namespace Alternatives {
 constexpr std::array STENCIL8_UINT{
@@ -747,6 +745,10 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
                           VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT, FormatType::Optimal);
 
     supports_conditional_barriers = !is_intel_windows;
+
+    // Drivers whose pipeline compiles share one internal lock. Running more than one driver
+    // worker then only adds waiters holding their shaders' memory, so the queue keeps one.
+    has_broken_parallel_compiling = is_intel_windows;
 
     CollectPhysicalMemoryInfo();
     CollectToolingInfo();
@@ -2525,14 +2527,12 @@ void Device::CollectPhysicalMemoryInfo() {
         device_access_memory = VideoCommon::TextureCacheMemory::ResolveIntegratedGpuMemory(
             host_ram, main_heap_size, capped_shared, capped_pool, aggressive);
     } else {
+        // The whole device budget, less the reserve Common::VramPolicy sizes from it. This used to
+        // be capped again at 6 GiB plus 1 GiB per resolution scale step unless VRAM Usage Mode was
+        // Aggressive, which on a 12 GB card (11.2 GiB budget) left over 4 GiB unused while the
+        // texture cache evicted. One policy, in one place: see src/common/vram_policy.h.
         const u64 reserve_memory = Settings::GetVramReserve(device_access_memory);
         device_access_memory -= reserve_memory;
-        if (Settings::values.vram_usage_mode.GetValue() != Settings::VramUsageMode::Aggressive) {
-            // Account for resolution scaling in memory limits
-            const size_t normal_memory = 6_GiB;
-            const size_t scaler_memory = 1_GiB * Settings::values.resolution_info.ScaleUp(1);
-            device_access_memory = std::min<u64>(device_access_memory, normal_memory + scaler_memory);
-        }
     }
 }
 

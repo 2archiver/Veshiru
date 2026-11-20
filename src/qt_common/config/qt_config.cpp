@@ -303,6 +303,16 @@ void QtConfig::ReadUIGamelistValues() {
     }
     EndArray();
 
+    // Reading twice (a profile switch reloads the UI values) must not double the record.
+    UISettings::values.listed_games.clear();
+    const int listed_size = BeginArray("listed_games");
+    for (int i = 0; i < listed_size; i++) {
+        SetArrayIndex(i);
+        UISettings::values.listed_games.append(
+            QString::fromStdString(ReadStringSetting(std::string("path"))));
+    }
+    EndArray();
+
     EndGroup();
 }
 
@@ -514,6 +524,13 @@ void QtConfig::SaveUIGamelistValues() {
         WriteIntegerSetting(std::string("program_id"), UISettings::values.favorited_ids[i]);
     }
     EndArray(); // favorites
+
+    BeginArray(std::string("listed_games"));
+    for (int i = 0; i < UISettings::values.listed_games.size(); i++) {
+        SetArrayIndex(i);
+        WriteStringSetting(std::string("path"), UISettings::values.listed_games[i].toStdString());
+    }
+    EndArray(); // listed_games
 
     EndGroup();
 }

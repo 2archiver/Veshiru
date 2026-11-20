@@ -391,9 +391,22 @@ private:
                 member.progress.wait(lock);
                 continue;
             }
+            // Decode several chunks per turn. A big asset (Mario Kart World's 38.6 MiB
+            // Archive.min.bntx.zs) is 512 KiB input chunks, and releasing and re-acquiring the lock
+            // for each one made a single sequential read take 77 turns: measured 514 ms for that
+            // file, on the thread that asked for the bytes (a loading hitch, and the profile applet
+            // waiting for its assets). The loop below still yields to another reader's step, so a
+            // second reader is never starved for more than a batch.
             member.decoding = true;
             lock.unlock();
-            const bool ok = DecodeStep(member);
+            constexpr size_t StepsPerTurn = 16;
+            bool ok = true;
+            for (size_t step = 0; step < StepsPerTurn; ++step) {
+                ok = DecodeStep(member);
+                if (!ok || member.decoded.load(std::memory_order_acquire) >= target) {
+                    break;
+                }
+            }
             lock.lock();
             member.decoding = false;
             member.failed = !ok;

@@ -3,6 +3,9 @@
 
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cstring>
+#include <span>
 #include <utility>
 #include <openssl/err.h>
 #include <openssl/evp.h>
@@ -23,6 +26,26 @@
 #include "common/literals.h"
 
 namespace Loader {
+
+/// The heap size a main.npdm asks for, at offset 0x28, or 0 when the file is not a program
+/// metadata blob. A Switch 2 library applet's ExeFS can carry a main.npdm laid out differently
+/// (the supplied HOME Menu log read 0x7463656c, the ASCII bytes of a text field, as a 1.8 GiB heap)
+/// and the NPDM magic is what tells a real one apart: taking the bytes at 0x28 regardless sized the
+/// pointer buffer for a heap that does not exist.
+static u64 ReadNpdmHeapSize(std::span<const u8> npdm_data) {
+    // NPDM: magic "META" at 0, then 0x20 of format/version/flags, heap size at 0x28.
+    constexpr std::size_t HeapSizeOffset = 0x28;
+    constexpr u64 MaxReasonableHeap = 0x1'0000'0000; // 4 GiB, the largest guest heap
+    if (npdm_data.size() < HeapSizeOffset + sizeof(u64)) {
+        return 0;
+    }
+    if (!std::equal(npdm_data.begin(), npdm_data.begin() + 4, "META")) {
+        return 0;
+    }
+    u64 heap_size = 0;
+    std::memcpy(&heap_size, npdm_data.data() + HeapSizeOffset, sizeof(heap_size));
+    return heap_size <= MaxReasonableHeap ? heap_size : 0;
+}
 
 static u32 CalculatePointerBufferSize(size_t heap_size) {
     if (heap_size > 1073741824) { // Games with 1 GiB
@@ -95,10 +118,14 @@ AppLoader_NCA::LoadResult AppLoader_NCA::Load(Kernel::KProcess& process, Core::S
     if (exefs) {
         const auto npdm_file = exefs->GetFile("main.npdm");
         if (npdm_file) {
-            auto npdm_data = npdm_file->ReadAllBytes();
-            if (npdm_data.size() >= 0x30) {
-                heap_size = *reinterpret_cast<const u64*>(&npdm_data[0x28]);
+            const auto npdm_data = npdm_file->ReadAllBytes();
+            heap_size = ReadNpdmHeapSize(npdm_data);
+            if (heap_size != 0) {
                 LOG_INFO(Loader, "Read heap size {:#x} bytes from main.npdm", heap_size);
+            } else if (npdm_data.size() >= 0x30) {
+                LOG_DEBUG(Loader,
+                          "main.npdm has no NPDM header ({} bytes): using the default heap",
+                          npdm_data.size());
             } else {
                 LOG_WARNING(Loader, "main.npdm too small to read heap size!");
             }

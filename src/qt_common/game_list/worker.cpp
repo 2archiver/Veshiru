@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -580,6 +581,9 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
                 RecordEvent([=](GameListModel* model) {
                     model->AddEntry(pending->Release(), parent_dir);
                 });
+                // Remember it for the next scan: see ReportMissingGames.
+                std::scoped_lock event_lock(lock);
+                listed_this_scan.insert(physical_name);
             };
 
             if (res2 == Loader::ResultStatus::Success && program_ids.size() > 1 &&
@@ -627,6 +631,7 @@ void GameListWorker::run() {
         RecordEvent([=](GameListModel* model) { model->AddDirEntry(pending->release()); });
     };
 
+    GameListDir* first_scanned_dir = nullptr;
     for (UISettings::GameDir& game_dir : game_dirs) {
         if (stop_requested) {
             break;
@@ -670,10 +675,17 @@ void GameListWorker::run() {
                      discovery.errors, stop_requested.load());
             ScanFileSystem(ScanTarget::FillManualContentProvider, discovery.files, game_list_dir);
             ScanFileSystem(ScanTarget::PopulateGameList, discovery.files, game_list_dir);
+            if (first_scanned_dir == nullptr) {
+                first_scanned_dir = game_list_dir;
+            }
         } else {
             AddTitlesToGameList(game_list_dir, parent_type);
         }
     }
+
+    // Every directory is scanned: report the games that are no longer there (see the function).
+    // They are listed under the first scanned directory, the one a moved file came from.
+    ReportMissingGames(first_scanned_dir);
 
     watch_list.removeDuplicates();
     LOG_INFO(Frontend, "Game discovery finished: elapsed_ms={} watched={} cancelled={}",
@@ -682,4 +694,100 @@ void GameListWorker::run() {
              watch_list.size(), stop_requested.load());
     RecordEvent([this](GameListModel* model) { model->DonePopulating(watch_list); });
     processing_completed.Set();
+}
+
+void GameListWorker::ReportMissingGames(GameListDir* parent_dir) {
+    if (stop_requested.load()) {
+        return;
+    }
+
+    // A path listed last scan that is not on disk any more was moved or deleted. Nothing else in
+    // the UI ever says so: the row the player was using is just gone, which is how "I deleted my
+    // MKW .nup and the game vanished" is read. Show the file so it is clear what happened and
+    // where it was. The record below is then rewritten from this scan, so the row appears once.
+    //
+    // Only files under a directory still being scanned can be "gone": a folder the player removed
+    // from the game list takes its whole contents with it, which is not a game going missing.
+    QStringList scan_roots;
+    for (const UISettings::GameDir& game_dir : std::as_const(game_dirs)) {
+        if (game_dir.path != "SDMC" && game_dir.path != "UserNAND" && game_dir.path != "SysNAND") {
+            scan_roots.append(QDir::fromNativeSeparators(QString::fromStdString(game_dir.path)));
+        }
+    }
+    // Windows paths are case-insensitive, and the stored directory and the discovered file can
+    // differ in case (the folder picker keeps what the player typed).
+    constexpr Qt::CaseSensitivity path_case =
+#ifdef _WIN32
+        Qt::CaseInsensitive;
+#else
+        Qt::CaseSensitive;
+#endif
+    const auto under_a_scan_root = [&scan_roots](const QString& path) {
+        return std::ranges::any_of(scan_roots, [&path](const QString& root) {
+            const QString prefix =
+                root.endsWith(QLatin1Char('/')) ? root : root + QLatin1Char('/');
+            return path.startsWith(prefix, path_case);
+        });
+    };
+
+    QStringList missing;
+    for (const QString& previous : std::as_const(UISettings::values.listed_games)) {
+        if (previous.isEmpty()) {
+            continue;
+        }
+        const QString path = QDir::fromNativeSeparators(previous);
+        if (!QFileInfo::exists(path) && under_a_scan_root(path)) {
+            missing.append(previous);
+        }
+    }
+
+    // A non-flat list attaches rows to the directory they came from; with none scanned there is
+    // nowhere to put them, so only the record for the next scan is written.
+    if (!missing.isEmpty() && parent_dir == nullptr) {
+        LOG_WARNING(Frontend,
+                    "{} game file(s) moved or were deleted, but no scanned directory is open to "
+                    "list them under",
+                    missing.size());
+        missing.clear();
+    }
+    // PendingRow owns the items until the model takes them, so a scan cancelled in between
+    // deletes rather than leaks them.
+    auto rows = std::make_shared<std::deque<std::shared_ptr<PendingRow>>>();
+    for (const QString& path : std::as_const(missing)) {
+        const QString name = QFileInfo(path).completeBaseName();
+        LOG_WARNING(Frontend, "Game no longer found: {}", path.toStdString());
+        auto* const path_item =
+            new GameListItemPath(QDir::toNativeSeparators(path), {}, name, {}, 0, 0, {});
+        path_item->setData(tr("This game's file is no longer where it was, so it is not in the "
+                              "list any more.\n\n%1\n\nIf it was deleted by accident, put the "
+                              "file back: its saves are kept in the NAND save data, not in the "
+                              "game file.")
+                               .arg(QDir::toNativeSeparators(path)),
+                           Qt::ToolTipRole);
+        rows->push_back(std::make_shared<PendingRow>(QList<QStandardItem*>{
+            path_item,
+            new GameListItem(tr("Missing")),
+            new GameListItemSize(0),
+            new GameListItemPlayTime(0),
+            new GameListItem(tr("File not found")),
+        }));
+    }
+
+    RecordEvent([rows, parent_dir](GameListModel* model) {
+        for (auto& row : *rows) {
+            model->AddEntry(row->Release(), parent_dir);
+        }
+    });
+
+    // This scan's list becomes the one the next scan compares against. The rows just made for
+    // missing files are not in it: they go away with the next scan unless the file comes back.
+    // Written here rather than in the event above, because a refresh replaces the worker and
+    // ProcessEvents then drops its queued events: the record would go stale and the same files
+    // would be reported missing on every scan. Scanning runs one worker at a time, so this is the
+    // only writer.
+    UISettings::values.listed_games.clear();
+    std::scoped_lock event_lock(lock);
+    for (const auto& path : listed_this_scan) {
+        UISettings::values.listed_games.append(QString::fromStdString(path));
+    }
 }

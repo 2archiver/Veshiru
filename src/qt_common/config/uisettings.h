@@ -168,6 +168,10 @@ struct Values {
     std::string game_dir_deprecated;
     bool game_dir_deprecated_deepscan;
     QVector<GameDir> game_dirs;
+    /// The game files the last scan listed. The next scan compares against it so a title that
+    /// moved or was deleted (it disappears without a word otherwise) can be shown as missing
+    /// instead of silently vanishing.
+    QStringList listed_games;
     QStringList recent_files;
     Setting<std::string> language{linkage, {}, "language", Category::Paths};
 
