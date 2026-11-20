@@ -74,8 +74,9 @@ means nobody has observed it.
 
 - The written brief for 2.2.0 was lost while the work was in progress and could not be recovered
   from the repository. Its sections 3 and 7, part of 6 and 8, and its release gates G1 to G6 are
-  unknown, so nothing was implemented for them and nothing here claims they were met.
-  [docs/2.2-report.md](docs/2.2-report.md) lists what is known and what is not.
+  unknown, so nothing was implemented for them and nothing here claims they were met. The owner
+  chose to release without them, against a substitute list of six checks.
+  [docs/2.2-report.md](docs/2.2-report.md) lists what is known, what is not, and those checks.
 - Nothing in this release was tried on a controller or in a game.
 
 ## [2.1.0] - 2026-11-20
