@@ -6,6 +6,8 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-20
+
 Every entry carries a tag. `[verified: <how>]` means it was run, or a CI job proved it; a green
 CI means the code builds and the tests pass, not that a game or a controller behaves. `[unverified]`
 means nobody has observed it.
