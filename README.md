@@ -51,6 +51,10 @@ so the defaults suit most systems. The settings that matter day to day:
 Memory and VRAM controls exist but sit behind **Graphics > Advanced > Show memory expert options**.
 They are for testing; the automatic values are what the hardware should get.
 
+If a game's file is moved or deleted, its row stays in the list marked **Missing**, with the old
+location in the tooltip — saves live in the NAND save data, so putting the file back restores the
+game. Files under a folder you remove from the game list are not reported.
+
 **Frame generation** (Open-Frame-Gen) adds interpolated frames on top of the game's own output. It
 does not raise the game's simulation rate, and turning it on can lower native FPS; leave it off
 unless you specifically want smoother-looking motion.
