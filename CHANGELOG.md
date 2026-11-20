@@ -49,6 +49,33 @@ means nobody has observed it.
   title). `[verified: 3 unit test cases for the index check, run by CI]` `[unverified]` in a
   game: no title that calls it was run.
 
+### Build and packaging
+
+- **The Windows packages bundle a third-party binary, `renhdrum.dll` (RenHDrum v0.5.0).** The
+  release workflow that builds the packages fails unless the downloaded file has the SHA-256
+  pinned in the workflow, is an x86-64 PE, exports the 18 functions Veshiru resolves by name, and
+  is byte-for-byte the copy that ends up next to `veshiru.exe`. `[verified: those checks are
+  steps of the workflow run that produced the packages of this release]` `[unverified]`: the
+  library was never loaded or called by anyone working on this release.
+- Every GitHub Action in the three workflows is pinned to a commit. `[verified: grep; the
+  workflows ran]`
+
+### Documentation
+
+- The "`main.npdm` is parsed rather than assumed" entry was listed under 1.5.0, 1.6.0 and 1.8.0
+  as well as 2.0.0. The fix first shipped in 2.0.0; the other three entries are removed.
+  `[verified: commit range]`
+- `docs/CI.md` said `build-check` runs the `tools/nx2` scripts. It does not, and the page now
+  says so. `[verified: the workflow file]`
+
+### Known gaps in this release
+
+- The written brief for 2.2.0 was lost while the work was in progress and could not be recovered
+  from the repository. Its sections 3 and 7, part of 6 and 8, and its release gates G1 to G6 are
+  unknown, so nothing was implemented for them and nothing here claims they were met.
+  [docs/2.2-report.md](docs/2.2-report.md) lists what is known and what is not.
+- Nothing in this release was tried on a controller or in a game.
+
 ## [2.1.0] - 2026-11-20
 
 ### Fixed (source-level verification)
