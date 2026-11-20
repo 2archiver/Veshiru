@@ -167,6 +167,10 @@ public:
     /// Signals SDL driver for new input events
     void PumpEvents() const;
 
+    /// Emulation paused or stopped: silences the controllers HD rumble is playing, so a motor
+    /// cannot keep running on the vibration the guest sent last.
+    void StopHdRumble() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

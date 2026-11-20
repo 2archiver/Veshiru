@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <QPushButton>
+
 #include "common/settings.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
 #include "hid_core/hid_types.h"
+#include "input_common/drivers/renhdrum_pad.h"
 #include "ui_configure_vibration.h"
+#include "veshiru/configuration/configure_hd_rumble.h"
 #include "veshiru/configuration/configure_vibration.h"
 
 ConfigureVibration::ConfigureVibration(QWidget* parent, Core::HID::HIDCore& hid_core_)
@@ -42,10 +46,27 @@ ConfigureVibration::ConfigureVibration(QWidget* parent, Core::HID::HIDCore& hid_
     ui->checkBoxDualSenseHaptics->setChecked(Settings::values.enable_dualsense_haptics.GetValue());
     ui->checkBoxFrequencyRumble->setChecked(Settings::values.rumble_frequency_mapping.GetValue());
 
+    // HD rumble (RenHDrum; from the Eglantine hdrumble-mvp branch). Its settings are global and
+    // are applied when its own dialog is accepted, like a tool window rather than a page of this
+    // one: the pads read them live, which is what lets a change be felt at once.
+    auto* hd_rumble_button = new QPushButton(tr("HD Rumble..."), this);
+    hd_rumble_button->setToolTip(
+        tr("HD rumble for Xbox-style controllers, Pro Controller / Joy-Con and the DualSense, "
+           "through RenHDrum. Off by default."));
+    connect(hd_rumble_button, &QPushButton::clicked, this, [this] {
+        ConfigureHdRumble dialog(this);
+        if (dialog.exec() == QDialog::Accepted) {
+            dialog.ApplyConfiguration();
+        }
+    });
+    ui->verticalLayout->addWidget(hd_rumble_button);
+    hd_rumble_button->setVisible(InputCommon::IsRenHDrumBuilt());
+
     if (!Settings::IsConfiguringGlobal()) {
         ui->checkBoxAccurateVibration->setDisabled(true);
         ui->checkBoxDualSenseHaptics->setDisabled(true);
         ui->checkBoxFrequencyRumble->setDisabled(true);
+        hd_rumble_button->setDisabled(true);
     }
 
     RetranslateUI();

@@ -2549,6 +2549,10 @@ bool MainWindow::OnShutdownBegin() {
         return false;
     }
 
+    // The guest may never send the stop for a vibration that is playing. Done again in
+    // OnEmulationStopped, since the guest still runs for a moment after this.
+    input_subsystem->StopHdRumble();
+
     if (ui->action_Fullscreen->isChecked()) {
         HideFullscreen();
     }
@@ -2720,6 +2724,7 @@ void MainWindow::OnEmulationStopped() {
         QtCommon::emu_thread->wait();
         QtCommon::emu_thread.reset();
     }
+    input_subsystem->StopHdRumble();
 
     if (shutdown_dialog) {
         shutdown_dialog->deleteLater();
@@ -3657,6 +3662,8 @@ void MainWindow::OnRestartGame() {
 
 void MainWindow::OnPauseGame() {
     QtCommon::emu_thread->SetRunning(false);
+    // A paused guest sends no stop, so HD rumble would hold the last vibration
+    input_subsystem->StopHdRumble();
     play_time_manager->Stop();
     UpdateMenuState();
     AllowOSSleep();

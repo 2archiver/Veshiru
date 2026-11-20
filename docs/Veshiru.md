@@ -47,6 +47,14 @@ Verified during this development pass:
   architecture and `nano_v17_best` checkpoint weights, implemented natively in Vulkan compute
   shaders (`open_frame_gen_*.comp`) with BatchNorm-folded FP16 embedded weights.
 
+- Octelly/Eglantine `hdrumble-mvp` (`a540ba5`): the RenHDrum integration, "input: HD Rumble and
+  DualSense haptics through RenHDrum" by samaBR85 with follow-up commits by hermes (Octelly),
+  GPL-3.0-or-later. Ported by hand into `renhdrum_pad.{h,cpp}`, `configure_hd_rumble.{h,cpp}`,
+  the SDL driver and the HID service; see [HD rumble on Xbox-style pads](#hd-rumble-on-xbox-style-pads).
+- Three-Dola's RenHDrum (`trzz1214/RenHDrum` v0.5.0, MIT OR Apache-2.0): the library itself. Its
+  header is vendored in `externals/renhdrum/`; its prebuilt `renhdrum.dll` ships in the release
+  packages, with notices in `third_party_notices/RenHDrum.txt`.
+
 Do not blindly merge whole forks. Port the smallest compatible change, preserve upstream SPDX
 notices, and add a regression test or a targeted diagnostic where practical.
 
@@ -136,6 +144,118 @@ uses that peek to find a matching sibling base for an update-only file, exposes 
 the AOC/filesystem services when installed content is absent, and lists carried Update/DLC entries
 in the existing per-game add-on dialog. Disabling Update selects the base; disabling DLC hides
 carried add-ons. Installed content still takes precedence.
+
+## HD rumble on Xbox-style pads
+
+**Status: [unverified on hardware].** Nobody on this project has felt this on a controller. What
+is verified is listed at the end of this section; everything else here describes what the code
+does, not how it feels.
+
+The **HD Rumble...** button in the vibration settings (**Configure > Controls > Vibration >
+Configure**) opens the settings. The feature is **off by
+default** (`hd_rumble_enabled`). While it is off, or when `renhdrum.dll` is not next to
+`veshiru.exe`, every controller is played by exactly the code it was played by before 2.2.0.
+
+Where it comes from: the integration is ported from the `hdrumble-mvp` branch of Octelly's
+Eglantine fork (samaBR85, hermes), and the engine is Three-Dola's RenHDrum, a separate library
+loaded at run time. The release packages include its prebuilt v0.5.0 `renhdrum.dll`; the release
+workflow pins the file's SHA-256 and fails if the download differs. The library is looked for in
+two places only: the path in the `RENHDRUM_LIBRARY` environment variable, then the executable's
+folder. It is a third-party binary that this project did not build.
+
+### What an Xbox-style pad can and cannot play
+
+A Switch controller has a linear resonant actuator: the game sets a frequency and an amplitude
+for a low band (about 160 Hz) and a high band (about 320 Hz), every few milliseconds. An
+Xbox-style pad (Xbox One/Series, Xbox 360, and third-party pads such as the PowerA wired
+controller) has two eccentric rotating masses: a heavy weight in the left grip and a light one in
+the right. Such a motor has one input, its drive level, and that sets speed and force together.
+
+- **Frequency cannot be reproduced.** There is no way to ask the motor for 160 Hz at half
+  strength. The mapping uses the *band* (low to the heavy motor, high to the light one) and
+  otherwise only lets a band's frequency weaken it slightly, by at most 15 % one octave above
+  its nominal frequency. Effects that differ only in pitch feel the same.
+- **Short effects are blurred.** A weight needs tens of milliseconds to spin up and to stop. A
+  5 ms tick from a Switch 2 game arrives as a soft bump or not at all. "Hit accents" (a 25 ms
+  overdrive when a vibration rises suddenly) is a partial workaround, not a fix.
+- **Weak vibrations may not turn the motor at all.** Below some drive level the weight does not
+  move. The mapping applies a curve (exponent 0.6) to lift weak values; the right amount depends
+  on the pad, which is what "Weak rumble boost" and "Motor strength" are for.
+- **Left and right are not independent.** Both halves of the emulated controller land on the same
+  two motors; each motor follows the stronger half.
+- **Trigger motors** exist only on some pads and are reachable only on some Windows input paths.
+  With SDL's default XInput path a pad has its two grip motors and nothing else. They are off
+  unless "Also drive the trigger motors" is ticked *and* the pad reports them.
+
+### Two modes
+
+| Mode | Where the mapping runs | What is tested |
+| --- | --- | --- |
+| **Direct** (default) | `src/input_common/helpers/xbox_hd_rumble.{h,cpp}` | Unit tests, see below |
+| **RenHDrum mix** | inside `renhdrum.dll` | Nothing in this repository can test it |
+
+Both modes write to the pad through the same scheduler: a write happens when the target changed
+by more than 1 % of the range (at most every 8 ms), immediately for a stop, and every 400 ms
+while a vibration is held. Every write lasts at most one second, so if a stop is lost the motors
+stop on their own.
+
+### When the motors are stopped
+
+Zeros are written, for controllers HD rumble is playing, when: the game sends a stop; emulation
+is paused; emulation stops or the window is closed; the controller disconnects; and when the
+master switch, the Xbox switch, the mode or the trigger switch is changed in the dialog (picked
+up within about 100 ms, without waiting for the next vibration).
+
+`veshiru-cmd` does not run the timer that refreshes held vibrations, so there a held Direct-mode
+vibration ends after one second and the RenHDrum mix does not play. Use the Qt frontend for HD
+rumble.
+
+### Log lines
+
+- On connect, once per pad, at Info: `HD rumble: Xbox-style pad VVVV:PPPP "name" through SDL
+  XInput (grip motors: yes, trigger motors: not exposed on this path, wired: ...)`. This names
+  the input path SDL opened the pad through and whether trigger motors are available. It is only
+  printed when the library is loaded.
+- `RenHDrum: renhdrum.dll not found, using the standard rumble` at Info when the library is
+  missing.
+- `HD rumble: the controller refused N rumble writes in a row: ...` at Warning, at most once
+  every 10 seconds per pad.
+
+### Settings
+
+All are in the `Controls` group of the configuration file. No existing setting was renamed;
+`enable_dualsense_haptics` (Veshiru's own DualSense haptics) is untouched and separate from
+`renhdrum_dualsense_enabled`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `hd_rumble_enabled` | `false` | Master switch |
+| `hd_rumble_gain` | `100` | Percent (25-1000) applied to the game's amplitudes |
+| `hd_rumble_low_boost` | `0` | 0-100, lifts weak vibrations more than strong ones |
+| `xbox_rumble_enabled` | `true` | HD rumble on Xbox-style pads (needs the master switch) |
+| `xbox_rumble_mode` | `1` | `1` Direct, `0` RenHDrum mix |
+| `xbox_motor_strength` | `100` | Percent (0-1000) applied after the mapping |
+| `xbox_detail_mix` | `50` | Direct: share of the high band also played on the heavy motor |
+| `xbox_hit_accents` | `50` | Direct: overdrive on a sudden rise, `0` disables it |
+| `xbox_trigger_rumble` | `false` | Drive trigger motors when the pad reports them |
+| `xbox_trigger_mix` | `20` | Direct: share of the high band played on the triggers |
+| `renhdrum_dualsense_enabled` | `false` | RenHDrum's DualSense haptics instead of Veshiru's |
+| `hd_rumble_usb_interval_ms`, `hd_rumble_envelope_5ms`, `hd_rumble_frequency_in_packet`, `hd_rumble_crisp_notes`, `hd_rumble_bluetooth_level`, `hd_rumble_bt_*` | upstream's | Pro Controller / Joy-Con opened through SDL |
+
+### What is verified, and what is not
+
+- **Verified by unit tests** (`src/tests/input_common/xbox_hd_rumble.cpp`, tag
+  `[xbox_hd_rumble]`): the Direct mapping stays within the motor range, is monotonic in
+  amplitude and strength, sends silence for zero, negative and NaN input, routes the bands to
+  the right motors, and combines the two halves; the scheduler always passes a stop through,
+  holds back small and too-frequent changes, refreshes a held vibration, retries a refused
+  write, and plays and ends a hit accent.
+- **Verified by CI**: the code builds with clang-cl and the tests pass. That is all CI shows.
+- **Not verified**: anything felt on a controller, including the PowerA wired Xbox One pad this
+  was written for; which input path that pad takes (XInput is expected with the default
+  settings); the RenHDrum mix; the Pro Controller, Joy-Con and DualSense paths in Veshiru; the
+  curve constants (0.6 exponent, 15 % frequency weight, 25 ms accent), which are reasoned, not
+  measured.
 
 ## Build and test
 

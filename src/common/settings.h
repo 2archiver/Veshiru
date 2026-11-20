@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <map>
 #include <memory>
 #include <optional>
@@ -968,6 +969,63 @@ struct Values {
                                            "enable_dualsense_haptics", Category::Controls};
     Setting<bool> rumble_frequency_mapping{linkage, false, "rumble_frequency_mapping",
                                            Category::Controls};
+
+    // HD rumble through RenHDrum (https://github.com/trzz1214/RenHDrum), ported from the
+    // Eglantine hdrumble-mvp branch. Off by default: with the master switch off, or without
+    // renhdrum.dll next to the emulator, every controller keeps the rumble it had before. The
+    // SDL driver reads these on every vibration, so a change in the HD Rumble dialog applies to
+    // connected controllers right away.
+    Setting<bool> hd_rumble_enabled{linkage, false, "hd_rumble_enabled", Category::Controls};
+    // Switch 2 rumble Mode last sent by the guest (commands 213 / 214): 2 = Mode 2, anything else
+    // is played as Switch 1. Written by the HID service, read by the RenHDrum pad driver. Not a
+    // user setting and not saved.
+    std::atomic<int> nx2_active_mode{0};
+    // Amplitude gain in percent (25-1000) for everything HD rumble plays: some Switch 2 games
+    // send amplitudes below 0.1 that the Joy-Con 2 still plays strongly.
+    Setting<int> hd_rumble_gain{linkage, 100, "hd_rumble_gain", Category::Controls};
+    // 0-100: lifts weak vibrations more than strong ones (power curve after the gain).
+    Setting<int> hd_rumble_low_boost{linkage, 0, "hd_rumble_low_boost", Category::Controls};
+    // Switch Pro Controller / Joy-Con opened through SDL
+    Setting<int> hd_rumble_usb_interval_ms{linkage, 15, "hd_rumble_usb_interval_ms",
+                                           Category::Controls};
+    Setting<bool> hd_rumble_envelope_5ms{linkage, true, "hd_rumble_envelope_5ms",
+                                         Category::Controls};
+    Setting<bool> hd_rumble_frequency_in_packet{linkage, true, "hd_rumble_frequency_in_packet",
+                                                Category::Controls};
+    Setting<bool> hd_rumble_crisp_notes{linkage, true, "hd_rumble_crisp_notes",
+                                        Category::Controls};
+    Setting<int> hd_rumble_bluetooth_level{linkage, 3, "hd_rumble_bluetooth_level",
+                                           Category::Controls};
+    Setting<bool> hd_rumble_bt_after_input{linkage, true, "hd_rumble_bt_after_input",
+                                           Category::Controls};
+    Setting<bool> hd_rumble_bt_fast{linkage, true, "hd_rumble_bt_fast", Category::Controls};
+    Setting<bool> hd_rumble_bt_crisp_notes{linkage, true, "hd_rumble_bt_crisp_notes",
+                                           Category::Controls};
+    // RenHDrum's DualSense haptics. Off by default and separate from enable_dualsense_haptics
+    // above, which is Veshiru's own implementation and keeps working as before. While this one
+    // is on (together with hd_rumble_enabled) it takes the controller's haptics audio device.
+    Setting<bool> renhdrum_dualsense_enabled{linkage, false, "renhdrum_dualsense_enabled",
+                                             Category::Controls};
+    Setting<int> renhdrum_dualsense_volume{linkage, 100, "renhdrum_dualsense_volume",
+                                           Category::Controls};
+    Setting<bool> renhdrum_dualsense_crisp_notes{linkage, true, "renhdrum_dualsense_crisp_notes",
+                                                 Category::Controls};
+    // Xbox-style pads (two eccentric-mass grip motors, sometimes two trigger motors)
+    Setting<bool> xbox_rumble_enabled{linkage, true, "xbox_rumble_enabled", Category::Controls};
+    // Percent (0-1000), applied after the mapping. RenHDrum's own mix tops out near a tenth of
+    // the motor range, which is why this goes far above 100.
+    Setting<int> xbox_motor_strength{linkage, 100, "xbox_motor_strength", Category::Controls};
+    // 0: RenHDrum's four-motor mix (inside the library), 1: direct (low band to the heavy motor,
+    // high band to the light one; input_common/helpers/xbox_hd_rumble, unit tested)
+    Setting<int> xbox_rumble_mode{linkage, 1, "xbox_rumble_mode", Category::Controls};
+    // Direct mode: share of the high band added to the heavy motor, and the burst on a sudden rise
+    Setting<int> xbox_detail_mix{linkage, 50, "xbox_detail_mix", Category::Controls};
+    Setting<int> xbox_hit_accents{linkage, 50, "xbox_hit_accents", Category::Controls};
+    // Trigger motors are only driven when this is on and the pad exposes them. Off by default:
+    // most Windows input paths do not expose them, and unexpected trigger buzz is worse than none.
+    Setting<bool> xbox_trigger_rumble{linkage, false, "xbox_trigger_rumble", Category::Controls};
+    // Direct mode: share of the high band sent to the trigger motors (left side LT, right RT)
+    Setting<int> xbox_trigger_mix{linkage, 20, "xbox_trigger_mix", Category::Controls};
 
     SwitchableSetting<bool> motion_enabled{linkage, true, "motion_enabled", Category::Controls};
     Setting<std::string> udp_input_servers{linkage, "127.0.0.1:26760", "udp_input_servers",

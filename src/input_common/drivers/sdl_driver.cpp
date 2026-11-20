@@ -5,19 +5,30 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <numbers>
 #include <optional>
+#include <vector>
 #include "common/logging.h"
 #include "common/math_util.h"
 #include "common/param_package.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "common/vector_math.h"
+#include "input_common/drivers/renhdrum_pad.h"
 #include "input_common/drivers/sdl_driver.h"
 #include "input_common/helpers/dualsense_haptics.h"
 #include "input_common/helpers/rumble_mapping.h"
 
 namespace InputCommon {
+
+namespace {
+/// The clock every HD rumble call is stamped with.
+std::int64_t HdRumbleNowUs() {
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    return std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+}
+} // Anonymous namespace
 
 namespace {
 Common::UUID GetGUID(SDL_Joystick* joystick) {
@@ -109,11 +120,23 @@ static bool SDLEventWatcher(void* user_data, SDL_Event* event) {
 
 class SDLJoystick {
 public:
+    // The HD rumble pad is created by the caller before it takes the joystick map lock: creating
+    // it calls into SDL, and SDL's controller thread can hold the SDL joystick lock while it waits
+    // for the map lock (raw input).
     SDLJoystick(Common::UUID guid_, int port_, SDL_Joystick* joystick,
-                                SDL_Gamepad* game_controller)
+                                SDL_Gamepad* game_controller,
+                                std::shared_ptr<RenHDrumPad> hd_rumble_pad = nullptr)
                 : guid{guid_}, port{port_}, sdl_joystick{joystick, &SDL_CloseJoystick},
-                    sdl_controller{game_controller, &SDL_CloseGamepad} {
+                    sdl_controller{game_controller, &SDL_CloseGamepad},
+                    hd_rumble{std::move(hd_rumble_pad)} {
         EnableMotion();
+    }
+
+    ~SDLJoystick() {
+        // Before the members close the SDL joystick: this zeroes the motors
+        if (hd_rumble) {
+            hd_rumble->Shutdown();
+        }
     }
 
     void EnableMotion() {
@@ -279,6 +302,12 @@ public:
         return haptics.IsOpen();
     }
 
+    void CloseHaptics() {
+        std::scoped_lock lock{haptics_mutex};
+        haptics.Close();
+        last_haptics_open_attempt.reset();
+    }
+
     /// Closes the haptics when their audio device is removed: SDL keeps feeding the stream to a
     /// silent zombie device, so standard rumble takes over until the device can be opened again.
     void CloseHapticsOnDevice(SDL_AudioDeviceID device_id) {
@@ -362,14 +391,34 @@ public:
         return sdl_controller.get();
     }
 
-    void SetSDLJoystick(SDL_Joystick* joystick, SDL_Gamepad* controller) {
+    void SetSDLJoystick(SDL_Joystick* joystick, SDL_Gamepad* controller,
+                        std::shared_ptr<RenHDrumPad> new_hd_rumble = nullptr) {
         {
             std::scoped_lock lock{haptics_mutex};
             haptics.Close();
             last_haptics_open_attempt.reset();
         }
+        // The old pad zeroes its motors and lets go of the joystick before SDL closes it
+        std::shared_ptr<RenHDrumPad> old_hd_rumble;
+        {
+            std::scoped_lock lock{hd_rumble_mutex};
+            old_hd_rumble = std::move(hd_rumble);
+            hd_rumble.reset();
+        }
+        if (old_hd_rumble) {
+            old_hd_rumble->Shutdown();
+        }
         sdl_joystick.reset(joystick);
         sdl_controller.reset(controller);
+        std::scoped_lock lock{hd_rumble_mutex};
+        hd_rumble = std::move(new_hd_rumble);
+    }
+
+    /// HD rumble (RenHDrum) for this controller, or nullptr when the library is not loaded or
+    /// the controller is not one it drives.
+    std::shared_ptr<RenHDrumPad> GetHdRumble() const {
+        std::scoped_lock lock{hd_rumble_mutex};
+        return hd_rumble;
     }
 
     bool IsJoyconLeft() const {
@@ -535,6 +584,9 @@ private:
 
     std::mutex rumble_mutex;
     std::array<Common::Input::VibrationStatus, 2> side_vibrations{};
+
+    mutable std::mutex hd_rumble_mutex;
+    std::shared_ptr<RenHDrumPad> hd_rumble;
 };
 
 std::shared_ptr<SDLJoystick> SDLDriver::GetSDLJoystickByGUID(const Common::UUID& guid, int port) {
@@ -654,9 +706,14 @@ void SDLDriver::InitJoystick(SDL_JoystickID joystick_id) {
         }
     }
 
+    // Outside the map lock, see SDLJoystick. nullptr unless renhdrum.dll is loaded and this is a
+    // controller it drives; the pad object does nothing while HD rumble is switched off.
+    auto hd_rumble_pad = RenHDrumPad::Create(sdl_joystick, sdl_gamecontroller);
+
     std::scoped_lock lock{joystick_map_mutex};
     if (joystick_map.find(guid) == joystick_map.end()) {
-        auto joystick = std::make_shared<SDLJoystick>(guid, 0, sdl_joystick, sdl_gamecontroller);
+        auto joystick = std::make_shared<SDLJoystick>(guid, 0, sdl_joystick, sdl_gamecontroller,
+                                                      std::move(hd_rumble_pad));
         PreSetController(joystick->GetPadIdentifier());
         joystick->EnableMotion();
         SetBattery(joystick->GetPadIdentifier(),
@@ -671,7 +728,7 @@ void SDLDriver::InitJoystick(SDL_JoystickID joystick_id) {
                      [](const auto& joystick) { return !joystick->GetSDLJoystick(); });
 
     if (joystick_it != joystick_guid_list.end()) {
-        (*joystick_it)->SetSDLJoystick(sdl_joystick, sdl_gamecontroller);
+        (*joystick_it)->SetSDLJoystick(sdl_joystick, sdl_gamecontroller, std::move(hd_rumble_pad));
         (*joystick_it)->EnableMotion();
         SetBattery((*joystick_it)->GetPadIdentifier(),
                    (*joystick_it)->GetBatteryLevel(battery_state, battery_percent));
@@ -679,7 +736,8 @@ void SDLDriver::InitJoystick(SDL_JoystickID joystick_id) {
     }
 
     const int port = static_cast<int>(joystick_guid_list.size());
-    auto joystick = std::make_shared<SDLJoystick>(guid, port, sdl_joystick, sdl_gamecontroller);
+    auto joystick = std::make_shared<SDLJoystick>(guid, port, sdl_joystick, sdl_gamecontroller,
+                                                  std::move(hd_rumble_pad));
     PreSetController(joystick->GetPadIdentifier());
     joystick->EnableMotion();
     SetBattery(joystick->GetPadIdentifier(),
@@ -708,6 +766,7 @@ void SDLDriver::PumpEvents() {
         return;
     }
     SDL_PumpEvents();
+    TickHdRumble();
     const auto now = std::chrono::steady_clock::now();
     if (now - last_motion_stall_check < std::chrono::milliseconds{250}) {
         return;
@@ -722,6 +781,44 @@ void SDLDriver::PumpEvents() {
                 joystick->EnableMotion();
             }
         }
+    }
+}
+
+std::vector<std::shared_ptr<RenHDrumPad>> SDLDriver::CollectHdRumblePads() {
+    std::vector<std::shared_ptr<RenHDrumPad>> pads;
+    std::scoped_lock lock{joystick_map_mutex};
+    for (const auto& [guid, joysticks] : joystick_map) {
+        for (const auto& joystick : joysticks) {
+            if (auto pad = joystick->GetHdRumble()) {
+                pads.push_back(std::move(pad));
+            }
+        }
+    }
+    return pads;
+}
+
+void SDLDriver::TickHdRumble() {
+    // HD rumble paces its own writes; due ones go out here. The pads are ticked after the map
+    // lock is released: a tick calls into SDL, and SDL's controller-added callback can hold the
+    // SDL joystick lock while it waits for the map lock.
+    const auto pads = CollectHdRumblePads();
+    if (pads.empty()) {
+        return;
+    }
+    const std::int64_t now_us = HdRumbleNowUs();
+    for (const auto& pad : pads) {
+        pad->Tick(now_us);
+    }
+}
+
+void SDLDriver::StopHdRumble() {
+    if (!initialized) {
+        return;
+    }
+    const auto pads = CollectHdRumblePads();
+    const std::int64_t now_us = HdRumbleNowUs();
+    for (const auto& pad : pads) {
+        pad->Halt(now_us);
     }
 }
 
@@ -800,8 +897,15 @@ void SDLDriver::HandleGameControllerEvent(const SDL_Event& event) {
 }
 
 void SDLDriver::CloseJoysticks() {
-    std::scoped_lock lock{joystick_map_mutex};
-    joystick_map.clear();
+    // Destroyed after the map lock is released: an HD rumble pad stops its motors through SDL on
+    // shutdown, and SDL's controller thread can hold the SDL joystick lock while it waits for
+    // the map lock.
+    decltype(joystick_map) closing;
+    {
+        std::scoped_lock lock{joystick_map_mutex};
+        closing.swap(joystick_map);
+    }
+    closing.clear();
 }
 
 SDLDriver::SDLDriver(std::string input_engine_) : InputEngine(std::move(input_engine_)) {
@@ -933,7 +1037,23 @@ Common::Input::DriverResult SDLDriver::SetVibration(
     const PadIdentifier& identifier, const Common::Input::VibrationStatus& vibration) {
     const auto joystick =
         GetSDLJoystickByGUID(identifier.guid.RawString(), static_cast<int>(identifier.port));
-    if (joystick->HapticsPlay(vibration)) {
+
+    // HD rumble first. False (always, while it is switched off) means it left the vibration to
+    // the code below, which is the rumble this controller had before.
+    bool hd_rumble_owns_haptics = false;
+    if (const auto pad = joystick->GetHdRumble()) {
+        const bool is_right = vibration.side == Common::Input::VibrationSide::Right;
+        if (pad->Vibrate(HdRumbleNowUs(), is_right, vibration)) {
+            return Common::Input::DriverResult::Success;
+        }
+        hd_rumble_owns_haptics = pad->OwnsDualSenseHaptics();
+    }
+
+    if (hd_rumble_owns_haptics) {
+        // RenHDrum's DualSense haptics are on but not open yet (the audio device can show up
+        // late): the built-in haptics must not take the device meanwhile
+        joystick->CloseHaptics();
+    } else if (joystick->HapticsPlay(vibration)) {
         return Common::Input::DriverResult::Success;
     }
 
@@ -979,6 +1099,12 @@ bool SDLDriver::IsVibrationEnabled(const PadIdentifier& identifier) {
         return joystick->HasVibration();
     }
 
+    // HD rumble plays this pad without the call the test below makes, so it would prove nothing
+    if (const auto pad = joystick->GetHdRumble(); pad && pad->IsActive()) {
+        joystick->EnableVibration(true);
+        return true;
+    }
+
     // First vibration might fail
     joystick->RumblePlay(test_vibration, 1.0f);
 
@@ -996,6 +1122,11 @@ bool SDLDriver::IsVibrationEnabled(const PadIdentifier& identifier) {
 
 bool SDLDriver::IsVibrationStreamed(const PadIdentifier& identifier) {
     const auto joystick = GetSDLJoystickByGUID(identifier.guid, static_cast<int>(identifier.port));
+    // HD rumble paces its own writes, like the haptics: the 15 ms filter would only drop the
+    // short pulses it is there to play
+    if (const auto pad = joystick->GetHdRumble(); pad && pad->IsActive()) {
+        return true;
+    }
     return joystick->IsHapticsOpen();
 }
 

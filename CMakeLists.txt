@@ -123,6 +123,12 @@ option(ENABLE_LSFG "Enable frame generation (LSFG and FSR 3 Fluid Motion)" ON)
 
 option(ENABLE_RESHADE "Enable ReShade FX post-processing effects" ON)
 
+# HD rumble through RenHDrum (https://github.com/trzz1214/RenHDrum). Building needs only the
+# header in externals/renhdrum; the library is a run-time option. RENHDRUM_DLL names a
+# renhdrum.dll to copy next to the executable (the release workflow passes a hash-checked one).
+option(ENABLE_RENHDRUM "Build HD rumble support, used when renhdrum.dll is next to the executable" ON)
+set(RENHDRUM_DLL "" CACHE FILEPATH "renhdrum.dll to bundle next to the executable (optional)")
+
 # non-linux bundled qt are static
 if (VESHIRU_USE_BUNDLED_QT AND (APPLE OR NOT UNIX))
     set(VESHIRU_STATIC_BUILD ON)

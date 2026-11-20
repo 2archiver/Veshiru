@@ -6,6 +6,32 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+Every entry carries a tag. `[verified: <how>]` means it was run, or a CI job proved it; a green
+CI means the code builds and the tests pass, not that a game or a controller behaves. `[unverified]`
+means nobody has observed it.
+
+### Added
+
+- **HD rumble (off by default), for Xbox-style pads, Pro Controller / Joy-Con and DualSense.**
+  The **HD Rumble...** button in the vibration settings opens it. Ported from Octelly's Eglantine
+  `hdrumble-mvp` branch (samaBR85, hermes) and played by Three-Dola's RenHDrum v0.5.0, whose
+  prebuilt `renhdrum.dll` now ships in the Windows packages (third-party binary, SHA-256 pinned
+  in the release workflow, notices in `third_party_notices/RenHDrum.txt`). With the switch off,
+  or without the DLL, rumble is played by the same code as in 2.1.0. Details and limits:
+  [HD rumble on Xbox-style pads](docs/Veshiru.md#hd-rumble-on-xbox-style-pads).
+  - Xbox-style pads get a "Direct" mode mapped by Veshiru itself (low band to the heavy motor,
+    high band to the light one) and RenHDrum's own mix as the alternative.
+    `[verified: 14 unit test cases for the Direct mapping and the write scheduler, run by CI]`
+    `[unverified on hardware]`: nobody has felt it on a controller, the PowerA wired Xbox One pad
+    included. Eccentric-mass motors cannot reproduce HD rumble frequencies or very short ticks.
+  - Motors are zeroed on pause, stop, exit, disconnect and when the feature is switched off, and
+    every write expires after one second. `[verified: scheduler unit tests]` for the stop and the
+    expiry logic; `[unverified]` on a real pad.
+  - One Info log line per Xbox-style pad names the SDL input path and whether trigger motors are
+    available; refused rumble writes are logged at most once every 10 seconds. `[unverified]`
+  - RenHDrum mix, Pro Controller / Joy-Con and DualSense paths. `[unverified]`: the mapping is
+    inside the DLL and none of these controllers was available.
+
 ## [2.1.0] - 2026-11-20
 
 ### Fixed (source-level verification)

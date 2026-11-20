@@ -56,6 +56,8 @@ else()
     target_sources(input_common PRIVATE
         drivers/joycon.cpp
         drivers/joycon.h
+        drivers/renhdrum_pad.cpp
+        drivers/renhdrum_pad.h
         drivers/sdl_driver.cpp
         drivers/sdl_driver.h
         helpers/dualsense_haptics.cpp
@@ -64,6 +66,8 @@ else()
         helpers/joycon_driver.h
         helpers/rumble_mapping.cpp
         helpers/rumble_mapping.h
+        helpers/xbox_hd_rumble.cpp
+        helpers/xbox_hd_rumble.h
         helpers/joycon_protocol/calibration.cpp
         helpers/joycon_protocol/calibration.h
         helpers/joycon_protocol/common_protocol.cpp
@@ -85,6 +89,14 @@ else()
 
     target_link_libraries(input_common PRIVATE SDL3::SDL3)
     target_compile_definitions(input_common PRIVATE HAVE_SDL3)
+endif()
+
+# HD rumble through RenHDrum. Only the vendored header is needed to build: the library is loaded
+# at run time when renhdrum.dll sits next to the executable, and without it rumble is unchanged.
+if (ENABLE_RENHDRUM AND NOT ANDROID)
+    target_compile_definitions(input_common PRIVATE ENABLE_RENHDRUM)
+    target_include_directories(input_common SYSTEM PRIVATE
+        ${PROJECT_SOURCE_DIR}/externals/renhdrum)
 endif()
 
 if (ENABLE_LIBUSB)

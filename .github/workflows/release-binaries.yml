@@ -171,6 +171,27 @@ jobs:
             objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v2-${{ github.sha }}-
             objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v2-
 
+      # HD rumble is played by RenHDrum (https://github.com/trzz1214/RenHDrum), a third-party
+      # library that Veshiru loads at run time when renhdrum.dll sits next to the executable. The
+      # packages ship its prebuilt v0.5.0 binary. The hash is pinned here, not read from the
+      # release's own SHA256SUMS.txt, so a replaced release asset fails this step instead of
+      # being packaged. Notices: third_party_notices/RenHDrum.txt.
+      - name: Download RenHDrum
+        shell: pwsh
+        env:
+          RENHDRUM_URL: https://github.com/trzz1214/RenHDrum/releases/download/v0.5.0/renhdrum.dll
+          RENHDRUM_SHA256: C6859C17AD0F9F689FFA00028AB0066454D199C25A98E3FB68F136D1D0049669
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'renhdrum'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $dll = Join-Path $dir 'renhdrum.dll'
+          Invoke-WebRequest -OutFile $dll $env:RENHDRUM_URL
+          $actualSha = (Get-FileHash -Algorithm SHA256 -Path $dll).Hash
+          if ($actualSha -ne $env:RENHDRUM_SHA256) {
+            throw "renhdrum.dll SHA-256 mismatch: expected $env:RENHDRUM_SHA256, got $actualSha"
+          }
+          "RENHDRUM_DLL=$($dll -replace '\\', '/')" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
       # A profile older than the source only warns: functions changed since training lose their
       # profile data and are optimized as in the ThinLTO build. clang-cl 22 reads LLVM's indexed
       # profile format 13, so the profile must come from the LLVM that tools/windows installs.
@@ -201,6 +222,8 @@ jobs:
             "-DVESHIRU_BUILD_TAG=${build_tag}" \
             -DVESHIRU_BUILD_PLATFORM=${{ matrix.platform }} \
             -DUSE_DISCORD_PRESENCE=OFF \
+            -DENABLE_RENHDRUM=ON \
+            "-DRENHDRUM_DLL=$RENHDRUM_DLL" \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             "-DCMAKE_C_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
@@ -245,6 +268,12 @@ jobs:
             if (-not (Test-Path "build/release/bin/$exe")) {
               throw "build/release/bin/$exe was not produced"
             }
+          }
+          # The copy the build made next to the executable must still be the pinned file
+          $packagedSha = (Get-FileHash -Algorithm SHA256 -Path build/release/bin/renhdrum.dll).Hash
+          $pinnedSha = (Get-FileHash -Algorithm SHA256 -Path $env:RENHDRUM_DLL).Hash
+          if ($packagedSha -ne $pinnedSha) {
+            throw "build/release/bin/renhdrum.dll is not the file that was downloaded and checked"
           }
           windeployqt --release --dir build/release/bin --libdir build/release/bin --plugindir build/release/bin/plugins --no-compiler-runtime --no-opengl-sw --no-system-d3d-compiler --no-translations build/release/bin/veshiru.exe
 
