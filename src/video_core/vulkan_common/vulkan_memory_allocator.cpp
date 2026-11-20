@@ -271,19 +271,34 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
         }
     }
     const bool huge = IsTooLargeToBack(texels, bytes);
+    // A small image is not evidence of VRAM pressure. VMA's budget is its own estimate of what
+    // fits, and when it is momentarily spent a title asking for a 64x64, 7-level, format-37 shadow
+    // map (21 KiB, in the supplied log) was refused and logged as "over the memory budget" even
+    // though the card had room. Images this small fit whatever the estimate says, so they skip the
+    // budget check and fail only when the allocation really fails.
+    constexpr u64 BudgetExemptBytes = 4 * 1024 * 1024; // 4 MiB
+    VmaAllocationCreateInfo alloc_ci_used = alloc_ci;
+    // A bound on the image's size without creating it: texels times the largest texel.
+    const u64 estimate_bytes = texels <= ~u64{0} / 16 ? texels * 16 : ~u64{0};
+    if (estimate_bytes <= BudgetExemptBytes) {
+        alloc_ci_used.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+    }
+
     VkResult result =
         huge ? VK_ERROR_OUT_OF_DEVICE_MEMORY
-        : !dedicated && CreateImageInSeparatePool(ci, alloc_ci, handle, allocation, alloc_info)
+        : !dedicated &&
+                CreateImageInSeparatePool(ci, alloc_ci_used, handle, allocation, alloc_info)
             ? VK_SUCCESS
-            : vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
+            : vmaCreateImage(allocator, &ci, &alloc_ci_used, &handle, &allocation, &alloc_info);
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge && device.HasPendingMemoryFrees()) {
         // Background vkFreeMemory calls may still hold VRAM the caches already evicted this frame;
         // drain them before declaring budget pressure or spilling an image into host memory.
         device.FlushPendingMemoryFrees();
-        result = !dedicated && CreateImageInSeparatePool(ci, alloc_ci, handle, allocation,
+        result = !dedicated && CreateImageInSeparatePool(ci, alloc_ci_used, handle, allocation,
                                                          alloc_info)
                      ? VK_SUCCESS
-                     : vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
+                     : vmaCreateImage(allocator, &ci, &alloc_ci_used, &handle, &allocation,
+                                      &alloc_info);
     }
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge) {
         // Over the device memory budget (Switch 2 titles fill 8 GB cards): let the driver page
@@ -297,10 +312,8 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
                         ci.arrayLayers, static_cast<u32>(ci.format));
         }
         // Short-lived dedicated scratch images (e.g. ASTC->BCn RGBA8 decode intermediates) return
-        // their memory immediately after use and must not trigger permanent cache-eviction cascades.
-        if (!dedicated) {
-            pressure_events.fetch_add(1, std::memory_order_relaxed);
-        }
+        // their memory immediately after use; paging one of those out is not worth an eviction
+        // cascade either.
         VmaAllocationCreateInfo relaxed = alloc_ci;
         relaxed.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
         result = vmaCreateImage(allocator, &ci, &relaxed, &handle, &allocation, &alloc_info);
@@ -309,9 +322,6 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
             relaxed.requiredFlags = 0;
             result = vmaCreateImage(allocator, &ci, &relaxed, &handle, &allocation, &alloc_info);
         }
-    }
-    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge && !dedicated) {
-        pressure_events.fetch_add(1, std::memory_order_relaxed);
     }
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && ci.imageType != VK_IMAGE_TYPE_1D &&
         UsesUnbackedFallback(texels, bytes, may_fail)) {
@@ -412,7 +422,6 @@ VmaAllocation MemoryAllocator::AllocateSparseMemory(const VkMemoryRequirements &
         }
     }
     if (vmaAllocateMemory(allocator, &requirements, &alloc_ci, &allocation, &info) != VK_SUCCESS) {
-        pressure_events.fetch_add(1, std::memory_order_relaxed);
         return VK_NULL_HANDLE;
     }
     memory = info.deviceMemory;
@@ -564,13 +573,6 @@ VkResult MemoryAllocator::AllocateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
                             "allocating it anyway",
                             ci.size, static_cast<u32>(usage));
             }
-            // The texture cache answers each pressure event by keeping more device memory free.
-            // Upload and download buffers live in host memory on a discrete GPU, so they only
-            // count when the heaps are shared or the buffer asked for device-local memory.
-            if (device.IsIntegrated() || usage == MemoryUsage::DeviceLocal ||
-                usage == MemoryUsage::Stream) {
-                pressure_events.fetch_add(1, std::memory_order_relaxed);
-            }
             VmaAllocationCreateInfo relaxed = alloc_ci;
             relaxed.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
             result = vmaCreateBuffer(allocator, &ci, &relaxed, &handle, &allocation, &alloc_info);
@@ -651,10 +653,6 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
     VkResult result = vmaCreateBufferWithAlignment(allocator, &ci, &alloc_ci, min_alignment,
                                                    &handle, &allocation, &alloc_info);
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_OUT_OF_HOST_MEMORY) {
-        if (device.IsIntegrated() || usage == MemoryUsage::DeviceLocal ||
-            usage == MemoryUsage::Stream) {
-            pressure_events.fetch_add(1, std::memory_order_relaxed);
-        }
         VmaAllocationCreateInfo relaxed = alloc_ci;
         relaxed.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
         result = vmaCreateBufferWithAlignment(allocator, &ci, &relaxed, min_alignment, &handle,

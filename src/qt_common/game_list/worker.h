@@ -9,6 +9,7 @@
 #include <deque>
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -85,12 +86,21 @@ private:
     void ScanFileSystem(ScanTarget target, const std::vector<std::filesystem::path>& files,
                         GameListDir* parent_dir);
 
+    /// Lists a row for every game the previous scan listed whose file is now gone, and forgets it.
+    /// Without this a title that is moved or deleted simply stops appearing, which looks like the
+    /// emulator losing the game: the player's own MKW .nup report.
+    void ReportMissingGames(GameListDir* parent_dir);
+
     std::shared_ptr<FileSys::VfsFilesystem> vfs;
     FileSys::ManualContentProvider* provider;
     QVector<UISettings::GameDir>& game_dirs;
     const PlayTime::PlayTimeManager& play_time_manager;
 
     QStringList watch_list;
+
+    /// The game files listed by this scan, as UTF-8 paths: compared with
+    /// UISettings::values.listed_games (the previous scan) by ReportMissingGames.
+    std::set<std::string> listed_this_scan;
 
     std::mutex lock;
     std::condition_variable cv;
