@@ -699,7 +699,7 @@ struct RenHDrumPad::Impl {
         SDL_AudioStream* stream = nullptr;
         const bool inited = SDL_InitSubSystem(SDL_INIT_AUDIO);
         if (inited) {
-            stream = OpenDualSenseAudioStream(js, audio_attempts == 1);
+            stream = OpenDualSenseAudioStream(audio_attempts == 1);
         } else {
             LOG_WARNING(Input, "RenHDrum: SDL audio init failed: {}", SDL_GetError());
         }
@@ -840,7 +840,7 @@ struct RenHDrumPad::Impl {
     /// Finds the DualSense audio device and opens a stream on it, paused until it is published
     /// in `audio_stream`, or nullptr. Called without the mutex, with the SDL audio subsystem
     /// initialized.
-    SDL_AudioStream* OpenDualSenseAudioStream(SDL_Joystick* js, bool verbose) {
+    SDL_AudioStream* OpenDualSenseAudioStream(bool verbose) {
         int count = 0;
         SDL_AudioDeviceID* devices = SDL_GetAudioPlaybackDevices(&count);
         SDL_AudioDeviceID matched = 0;
