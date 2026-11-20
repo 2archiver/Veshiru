@@ -51,6 +51,21 @@ means nobody has observed it.
   title). `[verified: 3 unit test cases for the index check, run by CI]` `[unverified]` in a
   game: no title that calls it was run.
 
+- **Shader builds that a draw is waiting for run at normal thread priority (Windows).** Shader
+  workers run below normal priority so that background builds give way to the game. A build was
+  already moved to the front of the queue once a draw waited for it, but one that had started
+  kept the low priority while the GPU thread was blocked on it. The worker running such a build
+  is now raised until that stage ends; builds nothing has waited for are untouched. Taken from
+  an owner's Donkey Kong Bananza log on a GTX 1650 laptop, where draws were held 48.5 s out of
+  833 s for pipelines still building on a first run with an empty shader cache.
+  `[verified: 6 unit test cases for when a worker is raised and when that ends, run by CI; the
+  scheduler's 31 cases also pass under ThreadSanitizer in a Linux build]` `[unverified]` in a
+  game: no frame time was measured before or after, and the log cannot say how much of the
+  waiting was priority.
+  It does not change the frame rate once shaders are built: that log's 14 FPS in gameplay is
+  time on the GPU command threads, which this release does not address.
+  [What the log shows](https://github.com/2archiver/Veshiru/blob/v2.2.0/docs/bananza-2.2-log-review.md).
+
 ### Build and packaging
 
 - **The Windows packages bundle a third-party binary, `renhdrum.dll` (RenHDrum v0.5.0).** The
@@ -78,7 +93,8 @@ means nobody has observed it.
   chose to release without them, against a substitute list of six checks.
   [The 2.2.0 report](https://github.com/2archiver/Veshiru/blob/v2.2.0/docs/2.2-report.md)
   lists what is known, what is not, and those checks.
-- Nothing in this release was tried on a controller or in a game.
+- Nothing in this release was tried on a controller or in a game, and no performance figure
+  was measured for it.
 
 ## [2.1.0] - 2026-11-20
 
