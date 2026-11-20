@@ -20,7 +20,7 @@ means nobody has observed it.
   prebuilt `renhdrum.dll` now ships in the Windows packages (third-party binary, SHA-256 pinned
   in the release workflow, notices in `third_party_notices/RenHDrum.txt`). With the switch off,
   or without the DLL, rumble is played by the same code as in 2.1.0. Details and limits:
-  [HD rumble on Xbox-style pads](docs/Veshiru.md#hd-rumble-on-xbox-style-pads).
+  [HD rumble on Xbox-style pads](https://github.com/2archiver/Veshiru/blob/v2.2.0/docs/Veshiru.md#hd-rumble-on-xbox-style-pads).
   - Xbox-style pads get a "Direct" mode mapped by Veshiru itself (low band to the heavy motor,
     high band to the light one) and RenHDrum's own mix as the alternative.
     `[verified: 14 unit test cases for the Direct mapping and the write scheduler, run by CI]`
@@ -76,7 +76,8 @@ means nobody has observed it.
   from the repository. Its sections 3 and 7, part of 6 and 8, and its release gates G1 to G6 are
   unknown, so nothing was implemented for them and nothing here claims they were met. The owner
   chose to release without them, against a substitute list of six checks.
-  [docs/2.2-report.md](docs/2.2-report.md) lists what is known, what is not, and those checks.
+  [The 2.2.0 report](https://github.com/2archiver/Veshiru/blob/v2.2.0/docs/2.2-report.md)
+  lists what is known, what is not, and those checks.
 - Nothing in this release was tried on a controller or in a game.
 
 ## [2.1.0] - 2026-11-20
