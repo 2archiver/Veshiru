@@ -19,14 +19,17 @@ TEST_CASE("VRAM reserve follows the card, not the recent failures", "[common][vr
     CHECK(VP::AutoReserve(24_GiB) == VP::MaxReserve);
 }
 
-TEST_CASE("VRAM reserve never exceeds an eighth and is zero for no budget", "[common][vram]") {
+TEST_CASE("VRAM reserve never exceeds an eighth and scales down with the card",
+          "[common][vram]") {
     for (const u64 budget : {256_MiB, 1_GiB, 2_GiB, 3_GiB, 6_GiB, 12_GiB, 48_GiB}) {
         CHECK(VP::AutoReserve(budget) <= budget / 8);
         CHECK(VP::AutoReserve(budget) <= VP::MaxReserve);
     }
     CHECK(VP::AutoReserve(0) == 0);
-    // Below 8 MiB an eighth rounds to nothing; the cache still works, it just has no margin.
-    CHECK(VP::AutoReserve(4_MiB) == 0);
+    // A tiny budget gets a tiny reserve rather than a fixed one: an eighth of 4 MiB is 512 KiB,
+    // and the reserve can never take a noticeable share of what there is.
+    CHECK(VP::AutoReserve(4_MiB) == 512_KiB);
+    CHECK(VP::AutoReserve(4_MiB) <= 4_MiB / 8);
 }
 
 TEST_CASE("Critical memory leaves the reserve free and stays above half", "[common][vram]") {
