@@ -12,7 +12,7 @@ packages only; Linux and macOS artifacts are not produced.
 
 | Workflow | File | Triggers | Purpose |
 | --- | --- | --- | --- |
-| `build-check` | `.github/workflows/build-check.yml` | Pull requests & pushes to `main`, manual dispatch | Compiles `veshiru`, `veshiru-cmd` and `tests` with LLVM 22 `clang-cl` (`-DENABLE_WERROR=ON`) and runs the CTest suite + `tools/nx2` checks (skipped automatically for docs-only PRs). |
+| `build-check` | `.github/workflows/build-check.yml` | Pull requests & pushes to `main`, manual dispatch | Compiles `veshiru`, `veshiru-cmd` and `tests` with LLVM 22 `clang-cl` (`-DENABLE_WERROR=ON`) and runs the CTest suite (skipped automatically for docs-only PRs). The scripts in `tools/nx2` are not run by any workflow. |
 | `release-binaries` | `.github/workflows/release-binaries.yml` | Manual dispatch; publishing from `main` only | Builds ThinLTO (`windows-x86_64`) and ThinLTO + PGO (`windows-x86_64-pgo`) archives, checks both console executables and their version, and uploads verified archives with `SHA256SUMS.txt`. Publishes only when explicitly selected. |
 
 Every job declares an explicit `timeout-minutes` budget and least-privilege `permissions:` (`contents: read` on build/test jobs; `contents: write` only on tag/release jobs), and checks out repository code with `persist-credentials: false`.
@@ -25,6 +25,8 @@ All external toolchain and dependency downloads in CI are cryptographically veri
 - **Vulkan SDK 1.4.341.1**: SHA-256 verified against LunarG's official digest endpoint (or `$env:VULKAN_SDK_SHA256`) plus Windows Authenticode signature verification (`Get-AuthenticodeSignature`) in `tools/windows/install-vulkan-sdk.ps1`.
 - **Compiler caches (`ccache` 4.14.2 / `sccache` 0.19.0)**: pinned SHA-256 verified before archive extraction in `build-check.yml` and `release-binaries.yml`.
 - **CPM source & binary packages (`cpmfile.json`)**: verified against pinned SHA-512 / SHA-256 digests in `CMakeModules/CPMUtil.cmake`, including cached `.cache/cpm` hash marker validation (`needs_refetch`).
+- **RenHDrum v0.5.0 (`renhdrum.dll`, third-party prebuilt binary bundled for HD rumble)**: pinned SHA-256 verified in `release-binaries.yml` before the build; the hash is in the workflow, not read from RenHDrum's own `SHA256SUMS.txt`. The same job checks that the file is an x86-64 PE exporting every function Veshiru resolves, and that the packaged copy is the checked file. `build-check` neither downloads nor needs it.
+- **GitHub Actions**: every `uses:` in the three workflows names a full commit SHA, with the tag it was taken from in a comment.
 - **Release archives & in-app updater**: `release-binaries.yml` generates `SHA256SUMS.txt` over `veshiru-windows-x86_64.zip` and `veshiru-windows-x86_64-pgo.zip`. The in-app updater (`UpdateDialog`) requires a matching entry in `SHA256SUMS.txt` (or GitHub's asset `sha256:` digest) and verifies the downloaded `.zip` before invoking `veshiru-updater.exe`.
 
 ## Version, tags and updater rules
