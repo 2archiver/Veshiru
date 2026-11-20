@@ -30,6 +30,25 @@ driver-budget refresh, out-of-memory backoff, allocator block-slack reserve and 
 still apply on top. On a 4 GB card this keeps the cache below the WDDM budget instead of using a
 fixed high-end cap.
 
+### Sparse texture tiles that do not fit in video memory
+
+Since 2.1.0, when device-local memory is exhausted while a sparse texture's tiles are being
+backed (seen with Mario Kart World on the 4 GB target), `MemoryAllocator::AllocateSparseMemory`
+places the remaining tiles on a compatible non-device-local heap within its budget instead of
+failing the upload. 2.2.0 does not change that; it makes it visible. When it happens the log gets
+a warning, at most once every 10 seconds, with counters only:
+
+```
+Video memory is full: sparse texture tiles are going to a non-device-local heap. Since the last
+report: N tiles (X MiB) placed there, F that no heap had room for. This session: ...
+```
+
+A warning is only written when a spill happens, so a burst that ends inside the 10 seconds is
+counted but not printed until the next spill; the session totals are printed once more, at Info,
+when the renderer shuts down. Whether these tiles cost frame time, and how much, has **not been
+measured**: there are no before/after numbers from the same scene, so nothing here or in the log
+line says so. Moving tiles back into video memory once it frees up is not implemented.
+
 ## Upstream references
 
 Verified during this development pass:

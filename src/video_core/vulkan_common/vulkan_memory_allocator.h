@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "video_core/vulkan_common/sparse_spill_report.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/vulkan_common/vma.h"
@@ -134,6 +135,10 @@ namespace Vulkan {
         VmaAllocation AllocateSparseMemory(const VkMemoryRequirements &requirements,
                                            VkDeviceMemory &memory, VkDeviceSize &offset) const;
 
+        /// Counts a sparse tile that device-local memory had no room for, and logs a warning
+        /// with the counters at most once per SparseSpillReport::IntervalMs.
+        void NoteSparseSpill(VkDeviceSize size, bool placed) const;
+
         void FreeSparseMemory(VmaAllocation allocation) const;
 
         /// Counts the images that could not be made at all (no memory left anywhere): the
@@ -190,6 +195,9 @@ namespace Vulkan {
         VkDeviceSize buffer_image_granularity;            ///< Adjacent buffer/image granularity
         u32 valid_memory_types{~0u};
         mutable std::atomic<u32> failed_images{0};
+        /// Sparse tiles that device-local memory had no room for (AllocateSparseMemory).
+        mutable std::mutex sparse_spill_mutex;
+        mutable SparseSpillReport sparse_spill_report;
         mutable std::mutex buffer_type_mutex;
         /// Memory type of device-local buffers by usage and flags (CreateBufferInSeparatePool).
         mutable std::unordered_map<u64, u32> buffer_memory_types;

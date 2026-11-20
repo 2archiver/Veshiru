@@ -32,6 +32,16 @@ means nobody has observed it.
   - RenHDrum mix, Pro Controller / Joy-Con and DualSense paths. `[unverified]`: the mapping is
     inside the DLL and none of these controllers was available.
 
+### Changed
+
+- **Mario Kart World, sparse texture tiles outside video memory are now reported.** When
+  device-local memory runs out and tiles go to a non-device-local heap (the 2.1.0 behaviour,
+  unchanged), the log gets a warning at most once every 10 seconds with the tiles and MiB placed
+  there since the last report, the tiles no heap had room for, and the session totals; the totals
+  are logged once more at shutdown. Counters only: no claim about frame rate is made, because
+  none was measured. `[verified: 4 unit test cases for the counting and the rate limit, run by
+  CI]` `[unverified]` in a game: nobody has seen the line in a Mario Kart World log yet.
+
 ## [2.1.0] - 2026-11-20
 
 ### Fixed (source-level verification)

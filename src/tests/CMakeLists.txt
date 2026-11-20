@@ -104,6 +104,7 @@ add_executable(tests
     video_core/framebuffer_clear_layers.cpp
     video_core/framebuffer_limits.cpp
     video_core/texture_swizzle.cpp
+    video_core/sparse_spill_report.cpp
     video_core/unbacked_fallback.cpp
     video_core/eviction_age.cpp
     video_core/host_memory_limit.cpp
