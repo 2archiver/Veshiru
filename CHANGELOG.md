@@ -19,10 +19,20 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   supplied log). A single `Common::VramPolicy` now sizes the reserve from the driver budget alone:
   an eighth of it, at most 1 GiB — about 387 MiB on the GTX 1650's ~3 GiB budget, so the texture
   cache may fill ~2,709 MiB instead of ~1,734 MiB. The reserve settles instead of ratcheting up.
-- **Removed the dead allocator-pressure feedback**: `runtime.MemoryPressureEvents()` no longer
-  raises a margin, and the unused `pressure_margin`, `pressure_quiet_frames`, `slack_margin` and
-  `seen_pressure_events` state is gone. An allocation that still misses the budget is served by the
-  allocator's existing relax/try-fallback path, which did not need the margin loop.
+- **Removed the dead allocator-pressure feedback**: `runtime.MemoryPressureEvents()`, the
+  `pressure_events` counter behind it and the unused `pressure_margin`, `pressure_quiet_frames`,
+  `slack_margin` and `seen_pressure_events` state are gone. An allocation that still misses the
+  budget is served by the allocator's existing relax/try-fallback path, which did not need the
+  margin loop.
+- **Small images no longer count as VRAM pressure**: every `is over the memory budget; allocating
+  it anyway` line in the supplied Mario Kart log was the same 64x64, 7-level depth image — 21 KiB.
+  The Vulkan allocator's own budget estimate refused it, which counted as pressure and made the
+  texture cache evict recently used images. Images that cannot exceed 4 MiB now skip the budget
+  check and fail only if the allocation really fails.
+- **Removed the second hidden cap**: a discrete GPU's budget was capped again at 6 GiB plus 1 GiB
+  per resolution scale step unless *VRAM Usage Mode* was *Aggressive*. On a 12 GB card that left
+  over 4 GiB unused while the cache evicted to stay under the cap. The driver budget less the
+  reserve is now the whole answer.
 
 ### Frame delivery: fewer hitches while playing
 
@@ -48,6 +58,16 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   of layers that should be on screen differs from what the frame can show, without consuming extra
   producer buffers.
 
+### Game list: a file that goes missing says so
+
+- **Moved or deleted game files are reported**: a title whose file moved or was deleted simply
+  stopped appearing, with nothing to distinguish it from never having been added — the reported
+  "I deleted my MKW `.nup` and the game vanished". The worker keeps the paths the last scan listed
+  and, on the next scan, lists a **Missing** row for each one now absent from a directory still
+  being scanned, with its old location and a note that saves live in the NAND save data, not in the
+  game file. Removing a folder from the game list stays silent, since that is not a game going
+  missing.
+
 ### Settings
 
 - **Memory knobs behind "Show memory expert options"**: *VRAM Usage Mode*, *VRAM Reserve* and
@@ -55,6 +75,14 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   ticked (or when a per-game/global override already exists, so an existing choice stays editable).
   Veshiru sizes this automatically from the GPU's driver budget; showing the knobs invited users to
   cap the cache at 2 GiB and stutter.
+
+### Boot
+
+- **`main.npdm` is parsed rather than assumed**: the NCA loader read the eight bytes at offset
+  0x28 as a heap size without checking the `META` magic, and the supplied HOME Menu log shows a
+  file where that read produced `0x7463656c` — the ASCII bytes of a text field — as a 1.8 GiB heap,
+  which then sized the pointer buffer for a heap that does not exist. The heap size is now read
+  only from a real NPDM, and anything unreasonable falls back to the default pointer buffer.
 
 ### Tests
 
@@ -194,6 +222,14 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   prefaulting and faster Windows memory/zero-page queries, GPU-only region tracking, VP9 range
   encoder fixes, and `nx2:gsv` service stability improvements.
 
+### Boot
+
+- **`main.npdm` is parsed rather than assumed**: the NCA loader read the eight bytes at offset
+  0x28 as a heap size without checking the `META` magic, and the supplied HOME Menu log shows a
+  file where that read produced `0x7463656c` — the ASCII bytes of a text field — as a 1.8 GiB heap,
+  which then sized the pointer buffer for a heap that does not exist. The heap size is now read
+  only from a real NPDM, and anything unreasonable falls back to the default pointer buffer.
+
 ### Tests
 
 - Added and expanded Catch2 test coverage for large cyclic readback rings and forward-windowed
@@ -270,6 +306,14 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
     the validated, CA-checked request path.
   - Successful artwork resolutions are logged (`Artwork lookup ... resolved from <source>`) so the
     startup console and session log show where each icon came from.
+
+### Boot
+
+- **`main.npdm` is parsed rather than assumed**: the NCA loader read the eight bytes at offset
+  0x28 as a heap size without checking the `META` magic, and the supplied HOME Menu log shows a
+  file where that read produced `0x7463656c` — the ASCII bytes of a text field — as a 1.8 GiB heap,
+  which then sized the pointer buffer for a heap that does not exist. The heap size is now read
+  only from a real NPDM, and anything unreasonable falls back to the default pointer buffer.
 
 ### Tests
 
@@ -368,6 +412,14 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
     overwrite stale wrong `TitleRole` values (`force_title = true`).
   - Propagated `package.title_id` through `FileSys::Nup::ProbeNupMetadata` into
     `NupEditDialog::FindIcon()` so NUP metadata icon lookups use the exact Program ID.
+
+### Boot
+
+- **`main.npdm` is parsed rather than assumed**: the NCA loader read the eight bytes at offset
+  0x28 as a heap size without checking the `META` magic, and the supplied HOME Menu log shows a
+  file where that read produced `0x7463656c` — the ASCII bytes of a text field — as a 1.8 GiB heap,
+  which then sized the pointer buffer for a heap that does not exist. The heap size is now read
+  only from a real NPDM, and anything unreasonable falls back to the default pointer buffer.
 
 ### Tests
 
