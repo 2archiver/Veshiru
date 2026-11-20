@@ -421,7 +421,26 @@ VmaAllocation MemoryAllocator::AllocateSparseMemory(const VkMemoryRequirements &
             }
         }
     }
-    if (vmaAllocateMemory(allocator, &requirements, &alloc_ci, &allocation, &info) != VK_SUCCESS) {
+    VkResult result = vmaAllocateMemory(allocator, &requirements, &alloc_ci, &allocation, &info);
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        // MKW can exhaust the local heap mid-atlas on 4 GiB GPUs. Keep the tiles already
+        // allocated in this batch and back the remaining ones on a compatible non-local heap.
+        VmaAllocationCreateInfo spill = alloc_ci;
+        spill.flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+        spill.requiredFlags = 0;
+        constexpr VkMemoryPropertyFlags excluded = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+            VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT | VK_MEMORY_PROPERTY_PROTECTED_BIT;
+        for (u32 i = 0; i < properties.memoryTypeCount; ++i) {
+            if (properties.memoryTypes[i].propertyFlags & excluded) {
+                spill.memoryTypeBits &= ~(1U << i);
+            }
+        }
+        // VMA interprets a zero mask as unrestricted.
+        if (spill.memoryTypeBits != 0) {
+            result = vmaAllocateMemory(allocator, &requirements, &spill, &allocation, &info);
+        }
+    }
+    if (result != VK_SUCCESS) {
         return VK_NULL_HANDLE;
     }
     memory = info.deviceMemory;

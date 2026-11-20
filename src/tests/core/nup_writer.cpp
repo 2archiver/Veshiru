@@ -18,6 +18,7 @@
 #include <openssl/evp.h>
 
 #include "common/settings.h"
+#include "core/file_sys/common_funcs.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/nup_container.h"
@@ -1171,6 +1172,19 @@ TEST_CASE("NUP loader leaves standalone update metadata unchanged", "[nup][loade
     REQUIRE(program_id == TitleId);
 }
 
+TEST_CASE("A missing DLC base uses only unambiguous carried IDs from the caller's family",
+          "[nup][loader-addons]") {
+    constexpr u64 program = 0x040074A01BF12000;
+    constexpr std::array ids{program + 0x3001, program + 0x1001, program + 0x1002};
+    CHECK(FileSys::ResolveAOCBaseTitleID(program, 0, ids) == program + 0x1000);
+    CHECK(FileSys::ResolveAOCBaseTitleID(program, program + 0x1800, ids) == program + 0x1800);
+    CHECK(FileSys::ResolveAOCBaseTitleID(program, 0, {}) == program + 0x1000);
+    constexpr std::array other_namespace{program + 1};
+    CHECK(FileSys::ResolveAOCBaseTitleID(program, 0, other_namespace) == program);
+    constexpr std::array mixed{program + 1, program + 0x1001};
+    CHECK(FileSys::ResolveAOCBaseTitleID(program, 0, mixed) == program + 0x1000);
+}
+
 TEST_CASE("NUP loader serves the newest carried add-on and rejects foreign titles",
           "[nup][loader-addons]") {
     TempDir t;
@@ -1187,8 +1201,12 @@ TEST_CASE("NUP loader serves the newest carried add-on and rejects foreign title
     REQUIRE(loader.ReadAddOnTitleIds(ids) == Loader::ResultStatus::Success);
     REQUIRE(ids == std::vector<u64>{TitleId + 0x1001, TitleId + 0x12001});
 
+    FileSys::NACP control;
+    REQUIRE(loader.ReadControlData(control) == Loader::ResultStatus::Success);
+    REQUIRE(control.GetDLCBaseTitleId() == TitleId + 0x1000);
     FileSys::VirtualFile romfs;
-    REQUIRE(loader.ReadAddOnRomFS(TitleId + 0x1001, romfs) == Loader::ResultStatus::Success);
+    REQUIRE(loader.ReadAddOnRomFS(control.GetDLCBaseTitleId() + 1, romfs) ==
+            Loader::ResultStatus::Success);
     const auto tree = FileSys::ExtractRomFS(romfs);
     REQUIRE(tree != nullptr);
     REQUIRE(Read(tree->GetFile("addon.bin")) == "newer addon");

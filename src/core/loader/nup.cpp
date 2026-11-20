@@ -269,6 +269,11 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
     }
     display_publisher = meta.publisher;
     nacp_file = BuildNacp(meta, display_version);
+    if (nacp_file) {
+        std::vector<u64> carried;
+        ReadAddOnTitleIds(carried);
+        nacp_file->raw.dlc_base_title_id = FileSys::ResolveAOCBaseTitleID(base_title_id, 0, carried);
+    }
     if (!meta.icon.empty()) {
         icon_file = std::make_shared<FileSys::VectorVfsFile>(meta.icon, "icon.dat");
     } else {
