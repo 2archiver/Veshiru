@@ -42,6 +42,13 @@ means nobody has observed it.
   none was measured. `[verified: 4 unit test cases for the counting and the rate limit, run by
   CI]` `[unverified]` in a game: nobody has seen the line in a Mario Kart World log yet.
 
+- **`aoc:u` PrepareAddOnContent says whether the add-on exists.** It still always reports
+  success, exactly as the stub did, so no title behaves differently. The log now has an Info line
+  when the index names an add-on that ListAddOnContent lists for the calling title, and a warning
+  with the number of listed add-ons when it does not (or when add-ons are disabled for the
+  title). `[verified: 3 unit test cases for the index check, run by CI]` `[unverified]` in a
+  game: no title that calls it was run.
+
 ## [2.1.0] - 2026-11-20
 
 ### Fixed (source-level verification)

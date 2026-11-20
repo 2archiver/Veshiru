@@ -74,4 +74,22 @@ constexpr u64 BASE_TITLE_ID_MASK = 0xFFFFFFFFFFFFE000;
     return inferred != 0 ? inferred : GetAOCBaseTitleID(program_id);
 }
 
+/// Whether `addon_index` (what aoc:u's ListAddOnContent hands the guest: an add-on's title id
+/// masked with AOC_TITLE_ID_MASK) names one of `add_on_title_ids` that belongs to `program_id`.
+/// Add-ons of other programs are ignored, as ListAddOnContent ignores them. A negative index
+/// names nothing.
+[[nodiscard]] constexpr bool IsListedAddOnContentIndex(u64 program_id, s32 addon_index,
+                                                       std::span<const u64> add_on_title_ids) {
+    if (addon_index < 0) {
+        return false;
+    }
+    const u64 index = static_cast<u64>(addon_index);
+    for (const u64 id : add_on_title_ids) {
+        if (GetBaseTitleID(id) == GetBaseTitleID(program_id) && GetAOCID(id) == index) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace FileSys

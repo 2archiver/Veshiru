@@ -187,8 +187,29 @@ Result IAddOnContentManager::GetAddOnContentBaseId(Out<u64> out_title_id,
 }
 
 Result IAddOnContentManager::PrepareAddOnContent(s32 addon_index, ClientProcessId process_id) {
-    LOG_WARNING(Service_AOC, "(STUBBED) called with addon_index={}, process_id={}", addon_index,
-                process_id.pid);
+    // There is nothing to prepare: add-on data is opened when the guest mounts it. The request
+    // always succeeds, as it did when this was a plain stub, so no guest sees a difference. What
+    // is new is that the log says whether the index names an add-on ListAddOnContent would have
+    // listed, which is the first thing to know when a title stops at a missing add-on.
+    const u64 program_id = system.ResolveCallerProgramId(*process_id);
+    const u64 current = FileSys::GetBaseTitleID(program_id);
+    const auto& disabled = Settings::values.disabled_addons[current];
+    const bool dlc_disabled = std::find(disabled.begin(), disabled.end(), "DLC") != disabled.end();
+    const auto all = dlc_disabled ? std::vector<u64>{} : AllAOCTitleIDs(system, add_on_content);
+
+    if (FileSys::IsListedAddOnContentIndex(program_id, addon_index, all)) {
+        LOG_INFO(Service_AOC, "addon_index={} is a listed add-on of {:016X}, process_id={}",
+                 addon_index, current, process_id.pid);
+    } else {
+        const auto listed = std::count_if(all.begin(), all.end(), [current](u64 tid) {
+            return CheckAOCTitleIDMatchesBase(tid, current);
+        });
+        LOG_WARNING(Service_AOC,
+                    "addon_index={} is not an add-on of {:016X} ({} listed{}), process_id={}; "
+                    "reporting success as before",
+                    addon_index, current, listed,
+                    dlc_disabled ? ", add-ons disabled for this title" : "", process_id.pid);
+    }
 
     R_SUCCEED();
 }

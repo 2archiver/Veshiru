@@ -216,6 +216,7 @@ add_executable(tests
     core/nextendo_redirect.cpp
     core/thread_startup_policy.cpp
     core/home_menu_content.cpp
+    core/add_on_content_index.cpp
     core/nup_writer.cpp
     core/nup_metadata.cpp
     core/nup_read_bench.cpp
