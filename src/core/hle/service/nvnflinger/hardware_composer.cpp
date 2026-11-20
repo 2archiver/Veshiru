@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <optional>
+#include <vector>
 
 #include <boost/container/small_vector.hpp>
 
@@ -75,6 +76,20 @@ u32 HardwareComposer::ComposeLocked(f32* out_speed_scale, Display& display,
     // Determine the number of vsync periods to wait before composing again.
     std::optional<s32> swap_interval{};
     bool has_acquired_buffer{};
+    // What should be on screen, and what this frame can actually show. They differ while a layer
+    // that just became visible has no buffer yet, and after a layer is hidden or destroyed: the
+    // profile applet appeared over Mario Kart World and, once it was gone, the game had nothing
+    // new to present that frame, so the previous composite (the applet's blank last frame) stayed
+    // on screen. Present again whenever they differ.
+    std::vector<ConsumerId> wanted_ids;
+    std::vector<ConsumerId> stacked_ids;
+    wanted_ids.reserve(display.stack.layers.size());
+    stacked_ids.reserve(display.stack.layers.size());
+    for (const auto& layer : display.stack.layers) {
+        if (layer->visible) {
+            wanted_ids.push_back(layer->consumer_id);
+        }
+    }
 
     // Acquire all necessary framebuffers.
     for (auto& layer : display.stack.layers) {
@@ -115,6 +130,7 @@ u32 HardwareComposer::ComposeLocked(f32* out_speed_scale, Display& display,
         const auto& igbp_buffer = *item.graphic_buffer;
 
         if (layer->visible) {
+            stacked_ids.push_back(consumer_id);
             composition_stack.emplace_back(HwcLayer{
                 .buffer_handle = igbp_buffer.BufferId(),
                 .offset = igbp_buffer.Offset(),
@@ -151,8 +167,10 @@ u32 HardwareComposer::ComposeLocked(f32* out_speed_scale, Display& display,
         }
     }
 
-    // If any new buffers were acquired, we can present.
-    if (has_acquired_buffer && !composition_stack.empty()) {
+    // Present when the frame changed (a new buffer arrived) or when the set of layers that should
+    // be on screen changed (one appeared, got its first buffer, or went away).
+    const bool layer_set_changed = wanted_ids != stacked_ids;
+    if ((has_acquired_buffer || layer_set_changed) && !composition_stack.empty()) {
         // Sort back-to-front: lower z first, higher z last so top-most draws last (on top).
         std::stable_sort(composition_stack.begin(), composition_stack.end(),
                          [&](const HwcLayer& l, const HwcLayer& r) { return l.z_index < r.z_index; });

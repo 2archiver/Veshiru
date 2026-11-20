@@ -8,6 +8,7 @@
 #include "common/common_types.h"
 #include "veshiru/configuration/configuration_shared.h"
 
+class QCheckBox;
 class QLabel;
 
 namespace Core {
@@ -52,10 +53,14 @@ private:
     std::vector<std::function<void(bool)>> apply_funcs;
 
     void UpdateMemoryLimit();
+    void UpdateExpertVisibility();
 
     QWidget* checkbox_enable_compute_pipelines{};
     ConfigurationShared::Widget* memory_limit_widget{};
     QLabel* memory_limit_note{};
+    QCheckBox* show_expert{};
+    QLabel* expert_note{};
+    std::vector<QWidget*> expert_widgets;
     u64 device_memory{};
     u64 max_device_memory{};
 };

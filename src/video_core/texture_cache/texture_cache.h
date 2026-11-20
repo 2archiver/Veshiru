@@ -25,6 +25,7 @@
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/slot_vector.h"
+#include "common/vram_policy.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/nx2_fast_draw.h"
@@ -701,9 +702,8 @@ u64 TextureCache<P>::QueryDeviceMemory() {
 
 template <class P>
 void TextureCache<P>::ApplyThresholdOverrides(bool log) {
-    // The user-facing limit replaces the fixed retention cap. Keep Lichii's driver-budget
-    // margins, pressure backoff and block-slack reserve: on a 4 GB card they still bound the
-    // cache below the Windows/WDDM budget even when Auto resolves to three quarters of it.
+    // The user-facing limit caps the cache under the driver budget derived limits. It only ever
+    // lowers them: Auto (0) must not raise the cache past what the card's budget leaves room for.
     const u64 budget_critical = critical_memory;
     const u64 budget_expected = expected_memory;
     const u32 limit_mib = Settings::values.texture_cache_memory_limit.GetValue();
@@ -780,50 +780,16 @@ void TextureCache<P>::TickFrame() {
         // budget as the card fills (16 GB card: 13.5 GB left mid-race), hence the re-read every 30
         // frames. EDEN_NX2_TC_*_MIB overrides can raise the thresholds up to this budget.
         if constexpr (requires { runtime.GetDeviceMemoryBudget(); }) {
-            if constexpr (requires { runtime.MemoryPressureEvents(); }) {
-                // Images that did not fit (made in host memory or with nothing bound) mean the
-                // thresholds sit too high for this card and driver: leave more room until the
-                // pressure has been gone for a while.
-                if (native_thresholds_applied) {
-                    const bool small_card =
-                        device_memory_total != 0 && device_memory_total <= 4_GiB;
-                    const u64 pressure_step = small_card ? 256_MiB : 512_MiB;
-                    const u64 pressure_cap = small_card ? 2_GiB : 3_GiB;
-                    const u64 pressure_relax = small_card ? 64_MiB : 128_MiB;
-                    const u32 events = runtime.MemoryPressureEvents();
-                    if (events != seen_pressure_events) {
-                        seen_pressure_events = events;
-                        pressure_margin = (std::min)(pressure_margin + pressure_step, pressure_cap);
-                        pressure_quiet_frames = 0;
-                        budget_check_frames = 0; // thresholds are recomputed below
-                        LOG_WARNING(HW_GPU, "Out of device memory: keeping {} MiB more free",
-                                    pressure_margin >> 20);
-                    } else if (pressure_margin != 0 && ++pressure_quiet_frames % 600 == 0) {
-                        pressure_margin -= (std::min)(pressure_margin, pressure_relax);
-                        budget_check_frames = 0;
-                    }
-                }
-            }
             if (native_thresholds_applied && budget_check_frames++ % 30 == 0) {
                 const u64 budget = runtime.GetDeviceMemoryBudget();
                 retention_limit = 0;
                 if (budget >= TextureCacheMemory::MinTrackedDeviceBudget) {
+                    // One reserve, sized from the budget alone: see Common::VramPolicy. It
+                    // replaces the base + out-of-memory + block-slack margins, which reacted to
+                    // each other and pushed the cache to keep 2 GiB of a 4 GB card free.
                     device_memory_total = budget;
-                    const u64 margin = Settings::GetVramReserve(budget);
-                    if constexpr (requires { runtime.GetDeviceMemorySlack(); }) {
-                        // The usage counted here leaves out the unused part of the allocator's
-                        // blocks, which the driver counts and a full heap cannot hand to a new
-                        // image (RX 7800 XT: 1.06 GiB of it, the whole margin, with the heap at
-                        // its budget for a minute before images stopped fitting). Reserve it
-                        // too: at once when it grows, slowly when it shrinks, so evicting images
-                        // (which leaves partly used blocks) does not chase the threshold down.
-                        const u64 slack = (std::min)(runtime.GetDeviceMemorySlack(), 1536_MiB);
-                        slack_margin = slack >= slack_margin
-                                           ? slack
-                                           : slack_margin - (std::min)(slack_margin - slack, 16_MiB);
-                    }
-                    critical_memory =
-                        budget - (std::min)(margin + pressure_margin + slack_margin, budget / 2);
+                    const u64 margin = Common::VramPolicy::AutoReserve(budget);
+                    critical_memory = Common::VramPolicy::CriticalMemory(budget, margin);
                     // The device's budget is not all the room there is: see HostCriticalMemory.
                     // The usage is the driver's, which still counts images waiting to be freed.
                     const std::optional<u64> commit_room = Common::GetSystemCommitRoom();
@@ -833,9 +799,8 @@ void TextureCache<P>::TickFrame() {
                             : (std::numeric_limits<u64>::max)();
                     critical_memory = (std::min)(critical_memory, host_critical);
                     retention_budget = RetentionBudget(retention_budget, budget);
-                    const u64 room_margin =
-                        (std::min)(pressure_margin + slack_margin, retention_budget / 2);
-                    retention_limit = (std::min)(retention_budget - room_margin, host_critical);
+                    const u64 kept_margin = (std::min)(margin, retention_budget / 2);
+                    retention_limit = (std::min)(retention_budget - kept_margin, host_critical);
                     expected_memory = critical_memory - (std::min)(margin, critical_memory / 2);
                     ApplyThresholdOverrides(false);
                     // Log the first values and real changes (the budget moves by a few MiB all
@@ -851,11 +816,10 @@ void TextureCache<P>::TickFrame() {
                         logged_critical_memory = critical_memory;
                         LogThresholds();
                         LOG_INFO(HW_GPU,
-                                 "Memory margins: base {} MiB, out of memory {} MiB, block slack "
-                                 "{} MiB; budget {} MiB, retention limit {} MiB (lowest budget "
-                                 "lately {} MiB)",
-                                 margin >> 20, pressure_margin >> 20, slack_margin >> 20,
-                                 budget >> 20, retention_limit >> 20, retention_budget >> 20);
+                                 "Memory margins: reserve {} MiB; budget {} MiB, retention limit "
+                                 "{} MiB (lowest budget lately {} MiB)",
+                                 margin >> 20, budget >> 20, retention_limit >> 20,
+                                 retention_budget >> 20);
                         if (commit_room) {
                             LOG_INFO(HW_GPU, "Host memory: {} MiB of commit left, {}",
                                      *commit_room >> 20,

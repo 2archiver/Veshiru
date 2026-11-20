@@ -6,6 +6,61 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-20
+
+### Memory: one VRAM policy instead of three fighting margins
+
+- **Removed the 2,048 MiB "keep free" behaviour**: Veshiru 1.x stacked three margins under the
+  driver budget (a base share, a reaction to every allocation that missed the budget, and a reserve
+  for the allocator's block space). They reacted to each other: a miss raised the margin by
+  256–512 MiB, the raised margin made the next allocations miss, and on a 4 GB card the margin
+  reached its 2 GiB cap, so the cache held half the card free and re-decoded textures every frame
+  (`Out of device memory: keeping 2048 MiB more free` once per few hundred milliseconds in the
+  supplied log). A single `Common::VramPolicy` now sizes the reserve from the driver budget alone:
+  an eighth of it, at most 1 GiB — about 387 MiB on the GTX 1650's ~3 GiB budget, so the texture
+  cache may fill ~2,709 MiB instead of ~1,734 MiB. The reserve settles instead of ratcheting up.
+- **Removed the dead allocator-pressure feedback**: `runtime.MemoryPressureEvents()` no longer
+  raises a margin, and the unused `pressure_margin`, `pressure_quiet_frames`, `slack_margin` and
+  `seen_pressure_events` state is gone. An allocation that still misses the budget is served by the
+  allocator's existing relax/try-fallback path, which did not need the margin loop.
+
+### Frame delivery: fewer hitches while playing
+
+- **NVIDIA pipeline-compile workers**: the driver stage of the pipeline build
+  (`vkCreateGraphicsPipelines`/`vkCreateComputePipelines`) took 201 ms at the median in the supplied
+  log with six workers on a 12-thread laptop. NVIDIA's driver serialises that work behind an
+  internal lock, so the extra workers only queued while holding their shaders' memory. NVIDIA now
+  runs two driver workers; other vendors keep the previous scaling. The previously dead
+  `has_broken_parallel_compiling` flag is now set for Intel's Windows driver, which shares the lock
+  too and keeps one worker.
+- **NUP decompression batching**: `DecodeTo` released and re-acquired the member's lock once per
+  512 KiB chunk, so one sequential read of a big asset made dozens of turns: the log shows
+  `Archive.min.bntx.zs` (38.6 MiB) taking 514 ms, `CmnTex_Tera_Product_Proc_Nrm.bntx.zs` 228 ms and
+  `main` 193 ms on the thread that asked for the bytes. A read now decodes up to 16 chunks per turn,
+  which is five turns for that 38.6 MiB file instead of 77, while still yielding to another reader.
+
+### Profile applet: no more stale black frame
+
+- **Compositor presents when the visible layer set changes**: `HardwareComposer::ComposeLocked` only
+  presented when a producer handed over a new buffer. A layer that just became visible (the profile
+  applet over Mario Kart World) or went away left the previous composite on screen until the next
+  buffer arrived — the reported two-second black frame. The composer now also presents when the set
+  of layers that should be on screen differs from what the frame can show, without consuming extra
+  producer buffers.
+
+### Settings
+
+- **Memory knobs behind "Show memory expert options"**: *VRAM Usage Mode*, *VRAM Reserve* and
+  *Texture Cache Memory Limit* leave the normal Advanced tab and appear only when that box is
+  ticked (or when a per-game/global override already exists, so an existing choice stays editable).
+  Veshiru sizes this automatically from the GPU's driver budget; showing the knobs invited users to
+  cap the cache at 2 GiB and stutter.
+
+### Tests
+
+- Added `src/tests/common/vram_policy.cpp`, covering the reserve, the critical threshold, and the
+  4 GB case the report described (the cache keeps more than 2 GiB of a ~3 GiB budget).
+
 ## [1.9.0] - 2026-11-18
 
 ### The Legend of Zelda: Ocarina of Time & 4–8 GiB GPU Performance

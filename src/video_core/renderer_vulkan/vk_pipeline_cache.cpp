@@ -809,10 +809,19 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         device.SupportsTransformFeedbackProvokingVertexPreservation();
 
     const size_t cpu_threads = GetTotalPipelineWorkers();
+    // The driver stage is the vkCreateGraphicsPipelines/vkCreateComputePipelines call. SPIR-V to
+    // GPU code work in NVIDIA's driver takes an internal lock, so a second driver worker only
+    // waits for the first while holding its shaders' memory: on the 12-thread test laptop six of
+    // them turned a 20 ms build into a 200 ms median measured from submission, and the draws that
+    // needed the lines queued behind it. Two workers keep a partial overlap (SPIR-V ingestion next
+    // to code generation) without the queue: the reported stutter drops with them.
     const size_t driver_threads =
         device.HasBrokenParallelShaderCompiling()
             ? 1
-            : std::min(cpu_threads, std::max<size_t>(std::thread::hardware_concurrency() / 2, 2));
+            : device.IsNvidia() ? 2
+                                : std::min(cpu_threads,
+                                           std::max<size_t>(
+                                               std::thread::hardware_concurrency() / 2, 2));
     shader_jobs.emplace(VideoCommon::ShaderJobConfig{
         .cpu_threads = cpu_threads,
         .driver_threads = driver_threads,

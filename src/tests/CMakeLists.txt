@@ -396,6 +396,7 @@ if (NOT ANDROID)
     add_executable(config_tests
         common/first_run_config.cpp
         common/recommended_settings.cpp
+        common/vram_policy.cpp
         ../frontend_common/profile_import.cpp
         ../frontend_common/config.cpp
         ../frontend_common/recommended_settings.cpp)

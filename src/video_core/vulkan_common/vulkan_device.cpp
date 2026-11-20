@@ -748,6 +748,10 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
 
     supports_conditional_barriers = !is_intel_windows;
 
+    // Drivers whose pipeline compiles share one internal lock. Running more than one driver
+    // worker then only adds waiters holding their shaders' memory, so the queue keeps one.
+    has_broken_parallel_compiling = is_intel_windows;
+
     CollectPhysicalMemoryInfo();
     CollectToolingInfo();
 

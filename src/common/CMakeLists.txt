@@ -157,6 +157,7 @@ add_library(
     typed_address.h
     uint128.h
     unique_function.h
+    vram_policy.h
     random.cpp
     random.h
     uuid.cpp
