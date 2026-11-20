@@ -288,14 +288,6 @@ means nobody has observed it.
   prefaulting and faster Windows memory/zero-page queries, GPU-only region tracking, VP9 range
   encoder fixes, and `nx2:gsv` service stability improvements.
 
-### Boot
-
-- **`main.npdm` is parsed rather than assumed**: the NCA loader read the eight bytes at offset
-  0x28 as a heap size without checking the `META` magic, and the supplied HOME Menu log shows a
-  file where that read produced `0x7463656c` — the ASCII bytes of a text field — as a 1.8 GiB heap,
-  which then sized the pointer buffer for a heap that does not exist. The heap size is now read
-  only from a real NPDM, and anything unreasonable falls back to the default pointer buffer.
-
 ### Tests
 
 - Added and expanded Catch2 test coverage for large cyclic readback rings and forward-windowed
@@ -372,14 +364,6 @@ means nobody has observed it.
     the validated, CA-checked request path.
   - Successful artwork resolutions are logged (`Artwork lookup ... resolved from <source>`) so the
     startup console and session log show where each icon came from.
-
-### Boot
-
-- **`main.npdm` is parsed rather than assumed**: the NCA loader read the eight bytes at offset
-  0x28 as a heap size without checking the `META` magic, and the supplied HOME Menu log shows a
-  file where that read produced `0x7463656c` — the ASCII bytes of a text field — as a 1.8 GiB heap,
-  which then sized the pointer buffer for a heap that does not exist. The heap size is now read
-  only from a real NPDM, and anything unreasonable falls back to the default pointer buffer.
 
 ### Tests
 
@@ -478,14 +462,6 @@ means nobody has observed it.
     overwrite stale wrong `TitleRole` values (`force_title = true`).
   - Propagated `package.title_id` through `FileSys::Nup::ProbeNupMetadata` into
     `NupEditDialog::FindIcon()` so NUP metadata icon lookups use the exact Program ID.
-
-### Boot
-
-- **`main.npdm` is parsed rather than assumed**: the NCA loader read the eight bytes at offset
-  0x28 as a heap size without checking the `META` magic, and the supplied HOME Menu log shows a
-  file where that read produced `0x7463656c` — the ASCII bytes of a text field — as a 1.8 GiB heap,
-  which then sized the pointer buffer for a heap that does not exist. The heap size is now read
-  only from a real NPDM, and anything unreasonable falls back to the default pointer buffer.
 
 ### Tests
 
