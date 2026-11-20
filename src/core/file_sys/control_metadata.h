@@ -6,6 +6,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <string>
 #include <vector>
 #include "common/common_funcs.h"
@@ -261,6 +262,7 @@ struct RawNACP {
     INSERT_PADDING_BYTES(0x697);
     std::array<u8, 0x400> platform_specific_region;
 };
+static_assert(offsetof(RawNACP, dlc_base_title_id) == 0x3070);
 static_assert(sizeof(RawNACP) == 0x4000, "RawNACP has incorrect size.");
 
 extern const std::array<const char*, size_t(Language::Count)> LANGUAGE_NAMES;

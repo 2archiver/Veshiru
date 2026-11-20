@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <span>
+
 #include "common/common_types.h"
 
 namespace FileSys {
@@ -49,6 +51,27 @@ constexpr u64 BASE_TITLE_ID_MASK = 0xFFFFFFFFFFFFE000;
  */
 [[nodiscard]] constexpr u64 GetAOCID(u64 aoc_title_id) {
     return aoc_title_id & AOC_TITLE_ID_MASK;
+}
+
+// Legacy NUP metadata may omit the DLC base. Only infer it from add-ons of this program;
+// if the package IDs disagree, use the standard namespace rather than depending on their order.
+[[nodiscard]] constexpr u64 ResolveAOCBaseTitleID(u64 program_id, u64 metadata_base,
+                                                  std::span<const u64> carried) {
+    if (metadata_base != 0) {
+        return metadata_base;
+    }
+    u64 inferred{};
+    for (const u64 id : carried) {
+        if (GetBaseTitleID(id) != GetBaseTitleID(program_id)) {
+            continue;
+        }
+        const u64 base = id & ~u64{0xFFF};
+        if (inferred != 0 && inferred != base) {
+            return GetAOCBaseTitleID(program_id);
+        }
+        inferred = base;
+    }
+    return inferred != 0 ? inferred : GetAOCBaseTitleID(program_id);
 }
 
 } // namespace FileSys

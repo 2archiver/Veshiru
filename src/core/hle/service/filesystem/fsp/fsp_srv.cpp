@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/ranges.h>
+
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "common/hex_util.h"
@@ -517,9 +519,15 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
     // Installed content wins; otherwise serve an add-on carried by the opened NUP. The loader
     // checks the title relationship and the existing DLC disable key before opening its RomFS.
     if (!data) {
+        auto& loader = system.GetAppLoader();
+        if (loader.GetFileType() == Loader::FileType::NUP) {
+            std::vector<u64> ids;
+            const auto status = loader.ReadAddOnTitleIds(ids);
+            LOG_WARNING(Service_FS, "requested={:016X}, NUP carried=[{:016X}], list_status={}",
+                        title_id, fmt::join(ids, ", "), static_cast<u16>(status));
+        }
         FileSys::VirtualFile carried;
-        if (system.GetAppLoader().ReadAddOnRomFS(title_id, carried) ==
-                Loader::ResultStatus::Success && carried != nullptr) {
+        if (loader.ReadAddOnRomFS(title_id, carried) == Loader::ResultStatus::Success && carried) {
             *out_interface = std::make_shared<IStorage>(system, std::move(carried));
             R_SUCCEED();
         }
@@ -533,11 +541,10 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
             R_SUCCEED();
         }
 
-        // TODO(DarkLordZach): Find the right error code to use here
         LOG_ERROR(Service_FS,
                   "Could not open data storage with title_id={:016X}, storage_id={:02X}", title_id,
                   storage_id);
-        R_RETURN(ResultUnknown);
+        R_RETURN(FileSys::ResultTargetNotFound);
     }
 
     const FileSys::PatchManager pm{title_id, fsc, content_provider};

@@ -6,6 +6,29 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-20
+
+### Fixed (source-level verification)
+
+- Zero or absent DLC metadata no longer produces a zero AOC base. Use a matching carried
+  add-on's namespace or the conventional application DLC base; preserve non-zero metadata.
+  Populate the base in synthesized NUP control data too. Pin its NACP offset at `0x3070`.
+
+### Changed (UNVERIFIED - needs runtime test)
+
+- Donkey Kong Bananza: log the returned base and the actual carried/requested IDs, and return
+  FS TargetNotFound for missing data storage. **Reaching the menu is unverified.**
+- Mario Kart World: `MemoryAllocator::AllocateSparseMemory` tries a compatible non-local type
+  within budget after device-local exhaustion, before rolling back a sparse tile upload. The
+  GTX 1650 log recorded 213 failed tile allocations. No same-scene FPS measurement yet.
+
+### Known issues and credits
+
+- Guest software can still abort on a missing required add-on. GPU paging and readback stalls
+  are still possible; no changes to frame generation, shader cache, JIT, or PGO profiles.
+- Thanks to Orchid, Lichii (both forks) and Eglantine PR #877 for DLC metadata precedents.
+  See [the investigation and retest plan](docs/2.1-investigation.md) for evidence and limitations.
+
 ## [2.0.0] - 2026-11-20
 
 ### Memory: one VRAM policy instead of three fighting margins
