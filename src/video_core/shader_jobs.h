@@ -118,6 +118,8 @@ struct ShaderJobStats {
     std::array<Priority, NumShaderJobPriorities> priorities{};
     u64 budget_stalls{};   ///< Stage starts the budget held back
     u64 budget_stall_ns{}; ///< Time they were held back
+    /// Stage runs on workers that got normal thread priority because a draw waited for the job.
+    u64 priority_boosts{};
     u64 budget_bytes{};
     u64 in_flight_bytes{};
     u64 peak_in_flight_bytes{};
@@ -136,6 +138,10 @@ struct ShaderJobConfig {
     std::chrono::nanoseconds background_aging{std::chrono::seconds{2}};
     /// Worker threads are named <name>Cpu and <name>Driver.
     std::string name{"ShaderJobs"};
+    /// Called in place of the thread priority change when a worker starts (true) or ends (false)
+    /// running a NeedNow job's stage, with the worker's index (CPU workers first). For tests; it
+    /// runs under the scheduler's lock and must not call the scheduler.
+    std::function<void(size_t worker, bool boosted)> worker_priority;
 };
 
 /// An eighth of physical memory, at least 512 MiB.
@@ -145,6 +151,12 @@ u64 DefaultShaderJobBudget();
 /// stage, each taking the highest priority stage first. In-flight bytes are the estimates of the
 /// stages now running. A Soon or Background stage starts only while they stay within the budget,
 /// or when nothing else is in flight; a NeedNow stage always starts.
+///
+/// Workers run below normal thread priority, so background builds give way to the game. While a
+/// worker runs a stage of a NeedNow job, whether it started as one or was promoted mid-stage, it
+/// runs at normal priority: the GPU thread has blocked on that job (for good, or for a bounded
+/// draw's wait budget), and the stage would otherwise share what the game leaves of the CPU with
+/// every Soon and Background stage in flight. Jobs nothing has waited for are never raised.
 class ShaderJobScheduler {
 public:
     explicit ShaderJobScheduler(const ShaderJobConfig& config);
@@ -188,7 +200,16 @@ private:
     using Clock = std::chrono::steady_clock;
     using Queue = std::array<std::deque<JobPtr>, NumShaderJobPriorities>;
 
-    void Worker(bool driver);
+    /// One worker thread, by its index in `threads`.
+    struct WorkerThread {
+        std::thread::native_handle_type handle{};
+        bool boosted{};
+    };
+
+    void Worker(bool driver, size_t index);
+    /// Runs the worker at normal thread priority until its stage ends.
+    void Boost(size_t index);
+    void EndBoost(size_t index);
     JobPtr Pick(bool driver, Clock::time_point now);
     void StartStage(ShaderJobState& job, bool driver, Clock::time_point now);
     void RunCpu(const JobPtr& job, bool run_driver_here);
@@ -214,6 +235,8 @@ private:
     bool driver_aged_last{};
     ShaderJobStats stats;
     std::vector<std::thread> threads;
+    std::vector<WorkerThread> workers;
+    const std::function<void(size_t, bool)> worker_priority;
 };
 
 /// Calls `function` with every index below `count`, as NeedNow jobs that the calling thread helps

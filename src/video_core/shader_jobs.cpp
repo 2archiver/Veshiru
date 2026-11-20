@@ -38,6 +38,7 @@ struct ShaderJobState {
     std::chrono::steady_clock::time_point submitted;
     std::chrono::steady_clock::time_point stage_begin;
     std::optional<std::chrono::steady_clock::time_point> stalled_since;
+    std::optional<size_t> worker; ///< The worker running a stage of it now, if a worker does
     bool started{};
 };
 
@@ -153,15 +154,19 @@ u64 DefaultShaderJobBudget() {
 
 ShaderJobScheduler::ShaderJobScheduler(const ShaderJobConfig& config)
     : budget{config.memory_budget != 0 ? config.memory_budget : DefaultShaderJobBudget()},
-      background_aging{config.background_aging} {
+      background_aging{config.background_aging}, worker_priority{config.worker_priority} {
     stats.budget_bytes = budget;
+    // The workers take the lock before their first job, so each one's handle is stored by then.
+    std::scoped_lock lock{mutex};
     const auto start{[this](std::string name, bool driver) {
-        threads.emplace_back([this, name = std::move(name), driver] {
+        const size_t index{workers.size()};
+        threads.emplace_back([this, name = std::move(name), driver, index] {
             Common::SetCurrentThreadName(name.c_str());
             Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
             Common::SetCurrentThreadToBackgroundWork();
-            Worker(driver);
+            Worker(driver, index);
         });
+        workers.push_back(WorkerThread{threads.back().native_handle(), false});
     }};
     for (size_t i = 0; i < std::max<size_t>(config.cpu_threads, 1); ++i) {
         start(config.name + "Cpu", false);
@@ -225,6 +230,10 @@ void ShaderJobScheduler::Promote(const ShaderJobHandle& handle, ShaderJobPriorit
     }
     job.priority = priority;
     if (!IsQueued(status)) {
+        // A draw now waits for the stage a worker is in the middle of.
+        if (priority == ShaderJobPriority::NeedNow && job.worker) {
+            Boost(*job.worker);
+        }
         return;
     }
     const bool driver{status == ShaderJobStatus::DriverQueued};
@@ -333,7 +342,7 @@ ShaderJobStats ShaderJobScheduler::Stats() const {
     return stats;
 }
 
-void ShaderJobScheduler::Worker(bool driver) {
+void ShaderJobScheduler::Worker(bool driver, size_t index) {
     std::unique_lock lock{mutex};
     while (true) {
         JobPtr job;
@@ -344,6 +353,10 @@ void ShaderJobScheduler::Worker(bool driver) {
             return;
         }
         StartStage(*job, driver, Clock::now());
+        job->worker = index;
+        if (job->priority.load() == ShaderJobPriority::NeedNow) {
+            Boost(index);
+        }
         lock.unlock();
         if (driver) {
             RunDriver(job);
@@ -352,6 +365,34 @@ void ShaderJobScheduler::Worker(bool driver) {
         }
         job.reset();
         lock.lock();
+        EndBoost(index);
+    }
+}
+
+void ShaderJobScheduler::Boost(size_t index) {
+    WorkerThread& worker{workers[index]};
+    if (worker.boosted) {
+        return;
+    }
+    worker.boosted = true;
+    ++stats.priority_boosts;
+    if (worker_priority) {
+        worker_priority(index, true);
+    } else {
+        Common::SetNativeThreadPriority(worker.handle, Common::ThreadPriority::Normal);
+    }
+}
+
+void ShaderJobScheduler::EndBoost(size_t index) {
+    WorkerThread& worker{workers[index]};
+    if (!worker.boosted) {
+        return;
+    }
+    worker.boosted = false;
+    if (worker_priority) {
+        worker_priority(index, false);
+    } else {
+        Common::SetNativeThreadPriority(worker.handle, Common::ThreadPriority::Low);
     }
 }
 
@@ -438,6 +479,8 @@ void ShaderJobScheduler::RunCpu(const JobPtr& job, bool run_driver_here) {
     bool run_driver{};
     {
         std::scoped_lock lock{mutex};
+        // No longer on a worker: a promotion from here on boosts whoever runs the driver stage.
+        job->worker.reset();
         auto& counters{stats.priorities[Index(job->priority.load())]};
         counters.cpu_run_ns += Nanoseconds(Clock::now() - job->stage_begin);
         if (job->reported_cpu_bytes) {
@@ -495,6 +538,7 @@ void ShaderJobScheduler::RunDriver(const JobPtr& job) {
     }
     std::vector<ShaderJob> dead;
     std::scoped_lock lock{mutex};
+    job->worker.reset();
     stats.priorities[Index(job->priority.load())].driver_run_ns +=
         Nanoseconds(Clock::now() - job->stage_begin);
     ReleaseBytes(*job);

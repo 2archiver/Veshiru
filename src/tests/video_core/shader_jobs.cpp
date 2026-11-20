@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #ifdef __linux__
@@ -20,6 +21,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "common/thread.h"
 #include "video_core/renderer_vulkan/pipeline_build.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache_prebuild.h"
 #include "video_core/shader_jobs.h"
@@ -136,6 +138,46 @@ void WaitForStatus(const ShaderJobHandle& handle, ShaderJobStatus status) {
     while (handle.Status() != status) {
         std::this_thread::sleep_for(1ms);
     }
+}
+
+/// Records the thread priority changes of a scheduler's workers in place of making them.
+class Boosts {
+public:
+    ShaderJobConfig Recording(size_t cpu_threads, size_t driver_threads) {
+        ShaderJobConfig config{Config(cpu_threads, driver_threads)};
+        config.worker_priority = [this](size_t worker, bool boosted) {
+            std::scoped_lock lock{mutex};
+            changes.emplace_back(worker, boosted);
+        };
+        return config;
+    }
+
+    /// The changes of one worker in order: true raised it to normal priority, false ended that.
+    std::vector<bool> Of(size_t worker) {
+        std::scoped_lock lock{mutex};
+        std::vector<bool> result;
+        for (const auto& [index, boosted] : changes) {
+            if (index == worker) {
+                result.push_back(boosted);
+            }
+        }
+        return result;
+    }
+
+    size_t Count() {
+        std::scoped_lock lock{mutex};
+        return changes.size();
+    }
+
+private:
+    std::mutex mutex;
+    std::vector<std::pair<size_t, bool>> changes;
+};
+
+/// Returns once every worker of a scheduler with one worker per pool has ended the stages it ran
+/// before this call, and with them their priority changes.
+void Settle(ShaderJobScheduler& scheduler) {
+    scheduler.Submit(TwoStageJob(Soon, [](ShaderJobContext&) {}, [] {})).Wait();
 }
 
 } // namespace
@@ -616,6 +658,208 @@ TEST_CASE("RunOrWait runs a queued job on the waiting thread", "[video_core][sha
     REQUIRE(stats.priorities[0].done == 1);
     REQUIRE(stats.priorities[0].running == 1);
     REQUIRE(blocker.Status() == ShaderJobStatus::Done);
+}
+
+TEST_CASE("A shader job promoted to NeedNow mid-stage raises its worker's priority",
+          "[video_core][shader_jobs]") {
+    Boosts boosts;
+    ShaderJobScheduler scheduler{boosts.Recording(1, 1)};
+    constexpr size_t cpu_worker = 0;
+    constexpr size_t driver_worker = 1;
+    SECTION("CPU stage") {
+        Gate gate;
+        std::promise<void> entered;
+        const auto job = scheduler.Submit(CpuJob(Soon, [&] {
+            entered.set_value();
+            gate.Wait();
+        }));
+        entered.get_future().wait();
+        const size_t before = boosts.Count();
+        scheduler.Promote(job, NeedNow);
+        const auto during = boosts.Of(cpu_worker);
+        // A second waiter changes nothing.
+        scheduler.Promote(job, NeedNow);
+        const size_t promoted_twice = boosts.Count();
+        gate.Open();
+        job.Wait();
+        Settle(scheduler);
+
+        REQUIRE(before == 0);
+        REQUIRE(during == std::vector<bool>{true});
+        REQUIRE(promoted_twice == 1);
+        REQUIRE(boosts.Of(cpu_worker) == std::vector<bool>{true, false});
+        REQUIRE(boosts.Of(driver_worker).empty());
+        REQUIRE(scheduler.Stats().priority_boosts == 1);
+    }
+    SECTION("Driver stage") {
+        Gate gate;
+        std::promise<void> entered;
+        const auto job = scheduler.Submit(TwoStageJob(
+            Soon, [](ShaderJobContext&) {},
+            [&] {
+                entered.set_value();
+                gate.Wait();
+            }));
+        entered.get_future().wait();
+        const size_t before = boosts.Count();
+        scheduler.Promote(job, NeedNow);
+        const auto during = boosts.Of(driver_worker);
+        gate.Open();
+        job.Wait();
+        Settle(scheduler);
+
+        REQUIRE(before == 0);
+        REQUIRE(during == std::vector<bool>{true});
+        REQUIRE(boosts.Of(driver_worker) == std::vector<bool>{true, false});
+        // The CPU stage had ended at Soon priority.
+        REQUIRE(boosts.Of(cpu_worker).empty());
+        REQUIRE(scheduler.Stats().priority_boosts == 1);
+    }
+    SECTION("Soon is not enough") {
+        Gate gate;
+        std::promise<void> entered;
+        const auto job = scheduler.Submit(CpuJob(Background, [&] {
+            entered.set_value();
+            gate.Wait();
+        }));
+        entered.get_future().wait();
+        scheduler.Promote(job, Soon);
+        gate.Open();
+        job.Wait();
+        Settle(scheduler);
+
+        REQUIRE(job.Priority() == Soon);
+        REQUIRE(boosts.Count() == 0);
+        REQUIRE(scheduler.Stats().priority_boosts == 0);
+    }
+}
+
+TEST_CASE("A NeedNow shader job runs both stages at raised priority, other jobs at none",
+          "[video_core][shader_jobs]") {
+    Boosts boosts;
+    ShaderJobScheduler scheduler{boosts.Recording(1, 1)};
+    scheduler.Submit(TwoStageJob(Background, [](ShaderJobContext&) {}, [] {})).Wait();
+    Settle(scheduler);
+    const size_t without_need_now = boosts.Count();
+
+    scheduler.Submit(TwoStageJob(NeedNow, [](ShaderJobContext&) {}, [] {})).Wait();
+    Settle(scheduler);
+
+    REQUIRE(without_need_now == 0);
+    REQUIRE(boosts.Of(0) == std::vector<bool>{true, false});
+    REQUIRE(boosts.Of(1) == std::vector<bool>{true, false});
+    REQUIRE(scheduler.Stats().priority_boosts == 2);
+}
+
+TEST_CASE("A shader job promoted while queued raises only the worker that then runs it",
+          "[video_core][shader_jobs]") {
+    Boosts boosts;
+    ShaderJobScheduler scheduler{boosts.Recording(1, 1)};
+    Gate gate;
+    std::promise<void> entered;
+    // Holds the driver worker at Soon priority, so the job below waits in the driver queue.
+    const auto blocker = scheduler.Submit(TwoStageJob(
+        Soon, [](ShaderJobContext&) {},
+        [&] {
+            entered.set_value();
+            gate.Wait();
+        }));
+    entered.get_future().wait();
+    const auto job = scheduler.Submit(TwoStageJob(Soon, [](ShaderJobContext&) {}, [] {}));
+    WaitForStatus(job, ShaderJobStatus::DriverQueued);
+    scheduler.Promote(job, NeedNow);
+    const size_t while_queued = boosts.Count();
+    gate.Open();
+    job.Wait();
+    blocker.Wait();
+    Settle(scheduler);
+
+    // Neither the worker that ran its CPU stage nor the one still busy with the blocker.
+    REQUIRE(while_queued == 0);
+    REQUIRE(boosts.Of(0).empty());
+    REQUIRE(boosts.Of(1) == std::vector<bool>{true, false});
+}
+
+TEST_CASE("RunOrWait raises the worker whose stage it waits for",
+          "[video_core][shader_jobs]") {
+    Boosts boosts;
+    ShaderJobScheduler scheduler{boosts.Recording(1, 1)};
+    Gate gate;
+    std::promise<void> entered;
+    std::thread::id driver_thread;
+    const auto job = scheduler.Submit(TwoStageJob(
+        Soon,
+        [&](ShaderJobContext&) {
+            entered.set_value();
+            gate.Wait();
+        },
+        [&] { driver_thread = std::this_thread::get_id(); }));
+    entered.get_future().wait();
+    std::thread::id waiting_thread;
+    auto waiter = std::async(std::launch::async, [&] {
+        waiting_thread = std::this_thread::get_id();
+        scheduler.RunOrWait(job);
+    });
+    for (int tries = 0; tries < 10000 && boosts.Count() == 0; ++tries) {
+        std::this_thread::sleep_for(1ms);
+    }
+    const auto during = boosts.Of(0);
+    gate.Open();
+    waiter.get();
+    Settle(scheduler);
+
+    REQUIRE(job.Status() == ShaderJobStatus::Done);
+    REQUIRE(during == std::vector<bool>{true});
+    REQUIRE(boosts.Of(0) == std::vector<bool>{true, false});
+    // Whoever takes the driver stage first runs it: the waiting thread, with no worker to raise,
+    // or the driver worker, raised for it.
+    if (driver_thread == waiting_thread) {
+        REQUIRE(boosts.Of(1).empty());
+    } else {
+        REQUIRE(boosts.Of(1) == std::vector<bool>{true, false});
+    }
+}
+
+TEST_CASE("Shader job workers end their raised priority across a shutdown",
+          "[video_core][shader_jobs]") {
+    Boosts boosts;
+    Gate gate;
+    std::promise<void> entered;
+    {
+        ShaderJobScheduler scheduler{boosts.Recording(1, 1)};
+        const auto job = scheduler.Submit(CpuJob(NeedNow, [&] {
+            entered.set_value();
+            gate.Wait();
+        }));
+        entered.get_future().wait();
+        auto shutdown = std::async(std::launch::async, [&] { scheduler.Shutdown(); });
+        gate.Open();
+        shutdown.get();
+        // Promoting a job that has ended, after the workers are gone, touches no thread.
+        scheduler.Promote(job, NeedNow);
+    }
+    REQUIRE(boosts.Of(0) == std::vector<bool>{true, false});
+    REQUIRE(boosts.Of(1).empty());
+}
+
+TEST_CASE("A worker thread's priority can be set from another thread where the host allows it",
+          "[video_core][shader_jobs]") {
+    Gate gate;
+    std::thread thread{[&] { gate.Wait(); }};
+    const bool raised =
+        Common::SetNativeThreadPriority(thread.native_handle(), Common::ThreadPriority::Normal);
+    const bool lowered =
+        Common::SetNativeThreadPriority(thread.native_handle(), Common::ThreadPriority::Low);
+    gate.Open();
+    thread.join();
+#if defined(_WIN32) && defined(_MSC_VER)
+    REQUIRE(raised);
+    REQUIRE(lowered);
+#else
+    // Nothing is changed here, and the scheduler's workers keep their low priority.
+    REQUIRE_FALSE(raised);
+    REQUIRE_FALSE(lowered);
+#endif
 }
 
 #ifdef __linux__
