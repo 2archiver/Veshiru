@@ -5,6 +5,8 @@
 
 #include <string>
 
+#include "common/scm_rev.h"
+
 namespace DiscordRPC {
 namespace {
 
@@ -49,15 +51,25 @@ std::string EscapeJson(std::string_view value) {
     return escaped;
 }
 
+void AppendU32(std::string& output, std::uint32_t value) {
+    for (unsigned int shift = 0; shift < 32; shift += 8) {
+        output.push_back(static_cast<char>((value >> shift) & 0xff));
+    }
+}
+
 } // namespace
+
+std::string PresenceName() {
+    return "Veshiru " + std::string{Common::g_build_version};
+}
 
 PresencePayload BuildPresencePayload(const ActivityData& activity) {
     if (activity.browsing) {
-        return {.details = "Browsing library", .state = VeshiruPresenceName};
+        return {.details = "Browsing library", .state = PresenceName()};
     }
     return {
         .details = "Playing " + activity.game_title,
-        .state = std::string{VeshiruPresenceName} + " · Version " + activity.game_version,
+        .state = PresenceName() + " - Version " + activity.game_version,
         .started_at = activity.started_at,
     };
 }
@@ -85,6 +97,15 @@ std::string BuildClearActivityPayload(std::uint32_t process_id, std::string_view
     return "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":" +
            std::to_string(process_id) +
            ",\"activity\":null},\"nonce\":\"" + EscapeJson(nonce) + "\"}";
+}
+
+std::string BuildFrame(std::uint32_t opcode, std::string_view payload) {
+    std::string frame;
+    frame.reserve(8 + payload.size());
+    AppendU32(frame, opcode);
+    AppendU32(frame, static_cast<std::uint32_t>(payload.size()));
+    frame.append(payload);
+    return frame;
 }
 
 } // namespace DiscordRPC
