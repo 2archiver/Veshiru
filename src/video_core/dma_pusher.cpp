@@ -180,11 +180,17 @@ public:
 
     /// Waits until job `number` and the ones before it ran.
     void WaitFor(u64 number) const {
-        for (u32 spins = 0; completed.load(std::memory_order_acquire) < number; ++spins) {
+        for (u32 spins = 0;; ++spins) {
+            const u64 done = completed.load(std::memory_order_acquire);
+            if (done >= number) {
+                return;
+            }
             if (spins < 4096) {
                 CopierPause();
             } else {
-                std::this_thread::yield();
+                // Park the GPU thread instead of yielding in a loop while the copy finishes.
+                // Ported from Lichii nx2 4a3dbf64 (GPL-3.0-or-later).
+                completed.wait(done, std::memory_order_acquire);
             }
         }
     }
@@ -223,6 +229,7 @@ private:
             for (; done != available; ++done) {
                 Copy(jobs[done % Capacity]);
                 completed.store(done + 1, std::memory_order_release);
+                completed.notify_all();
             }
         }
     }

@@ -6,6 +6,53 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-11-21
+
+Ports six self-contained stability and hot-path fixes from Lichii `nx2` `3165970a`, with the
+upstream commit named in each file. No frame-generation behaviour changed.
+
+### Fixed
+
+- **`UniqueFunction` owns a callable given as an lvalue.** It previously stored `Functor` with a
+  forwarding reference, so a callable passed by name as `const` was kept as a reference;
+  `QueueVulkanPipelineCacheSave` queues `const auto save = ...`, and the serialization worker ran
+  that lambda after its stack frame returned. It now stores `std::decay_t<Functor>`, constrains
+  construction and calls through `std::invoke`. Ported from Lichii `249d889b`.
+  `[verified: host g++ harness covers const/non-const lvalues, std::ref, member pointers and the
+  construction constraints; unverified: the original crash on hardware]`
+- **Shader `TrackAddend` no longer recurses without a depth limit.** A long `IAdd32` chain could
+  overflow the host stack while translating a shader; it now uses an explicit stack with the same
+  visit order. Ported from Lichii `19dcffea`.
+  `[verified: same visit order and ambiguity rule by inspection; unverified: a title with the long
+  chain]`
+- **A failed `ScratchBuffer::resize_destructive` leaves a consistent buffer.** The old order
+  raised the capacity before allocating, so a failed growth left a capacity with no storage. It
+  now releases first; a failure leaves an empty, reusable buffer. Ported from Lichii `64ea088a`
+  (the ScratchBuffer part only). `[verified: host g++ failure-injection harness and a new ctest
+  case; unverified: memory pressure in a game]`
+- **Sparse texture segments with no device translation are skipped, not asserted.** A segment can
+  lose its translation between the submapped-range query and the lookup. The first eight are
+  logged, the rest are skipped, and iteration continues. Ported from Lichii `4a558454` (originally
+  Eglantine `19dfa543`). `[unverified: a title that hits the race]`
+- **Unmapped guest writes no longer flood the log.** `Write`, `WriteExclusive` and
+  `WriteExclusive128` now log the first 1000 and then one per 100000, as unmapped reads already
+  did. A guest spinning on a bad pointer could otherwise write a ~100 MB log and slow the run.
+  Ported from Lichii `528dae4b`. `[verified: code path by inspection; unverified: the pathological
+  guest]`
+
+### Changed
+
+- **The GPU snapshot copier parks its waiter.** After 4096 spins, `WaitFor` now waits on the
+  completion atomic and the copier notifies after each job, instead of yielding in a loop. Ported
+  from Lichii `4a3dbf64`. `[unverified: frame-time effect on the GTX 1650]`
+
+### Not ported
+
+- Lichii's 4 MiB device-buffer blocks: Veshiru already uses 8 MiB; the extra step is unmeasured.
+- Spill-collect GC change: Veshiru has no host-spill collect path.
+- Texel-buffer clamp, GPU-split parking and GPFIFO inline headers: deferred; reasons and exact
+  commits are in [the comparison](docs/2.4-lichii-comparison.md).
+
 ## [2.4.0] - 2026-11-21
 
 Versioned List, Discord Rich Presence, crash dumps, the HOME Menu news applet, notification icons

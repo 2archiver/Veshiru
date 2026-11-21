@@ -831,7 +831,15 @@ struct Memory::Impl {
     inline void Write(Common::ProcessAddress vaddr, const T data) noexcept requires(std::is_trivially_copyable_v<T>) {
         const u64 addr = GetInteger(vaddr);
         if (auto const ptr = GetPointerImpl(addr, [addr, data]() {
-            LOG_ERROR(HW_Memory, "Unmapped Write{} @ {:#016x} = {:#016x}", sizeof(T) * 8, addr, u64(data));
+            // As with unmapped reads, a guest spinning on a bad pointer writes unmapped memory
+            // tens of thousands of times a second: keep the first ones and then a sample.
+            // Ported from Lichii nx2 528dae4b (GPL-3.0-or-later).
+            static std::atomic<u64> unmapped_writes{};
+            if (const u64 count = unmapped_writes.fetch_add(1);
+                count < 1000 || count % 100000 == 0) {
+                LOG_ERROR(HW_Memory, "Unmapped Write{} @ {:#016x} = {:#016x} (#{})",
+                          sizeof(T) * 8, addr, u64(data), count);
+            }
         }, [&]() { HandleRasterizerWrite(addr, sizeof(T)); }); ptr) [[likely]]
             std::memcpy(ptr, &data, sizeof(T));
     }
@@ -841,8 +849,12 @@ struct Memory::Impl {
         u8* const ptr = GetPointerImpl(
             GetInteger(vaddr),
             [vaddr, data]() {
-                LOG_ERROR(HW_Memory, "Unmapped WriteExclusive{} @ {:#016x} = {:#016x}",
-                          sizeof(T) * 8, GetInteger(vaddr), static_cast<u64>(data));
+                static std::atomic<u64> unmapped_exclusive_writes{};
+                if (const u64 count = unmapped_exclusive_writes.fetch_add(1);
+                    count < 1000 || count % 100000 == 0) {
+                    LOG_ERROR(HW_Memory, "Unmapped WriteExclusive{} @ {:#016x} = {:#016x} (#{})",
+                              sizeof(T) * 8, GetInteger(vaddr), static_cast<u64>(data), count);
+                }
             },
             [&]() { HandleRasterizerWrite(GetInteger(vaddr), sizeof(T)); });
         if (ptr) {
@@ -855,8 +867,14 @@ struct Memory::Impl {
         u8* const ptr = GetPointerImpl(
             GetInteger(vaddr),
             [vaddr, data]() {
-                LOG_ERROR(HW_Memory, "Unmapped WriteExclusive128 @ {:#016x} = {:#016x}{:016X}",
-                          GetInteger(vaddr), static_cast<u64>(data[1]), static_cast<u64>(data[0]));
+                static std::atomic<u64> unmapped_exclusive_writes_128{};
+                if (const u64 count = unmapped_exclusive_writes_128.fetch_add(1);
+                    count < 1000 || count % 100000 == 0) {
+                    LOG_ERROR(HW_Memory,
+                              "Unmapped WriteExclusive128 @ {:#016x} = {:#016x}{:016X} (#{})",
+                              GetInteger(vaddr), static_cast<u64>(data[1]),
+                              static_cast<u64>(data[0]), count);
+                }
             },
             [&]() { HandleRasterizerWrite(GetInteger(vaddr), sizeof(u128)); });
         if (ptr) {
