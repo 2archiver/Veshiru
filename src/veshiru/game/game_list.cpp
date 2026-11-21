@@ -149,10 +149,14 @@ QString GameList::GetLastFilterResultItem() const {
         return tree_view->GetLastFilterResultItem();
     }
 
+    // The flat views keep no public row-hidden state: the same filter match OnTextChanged
+    // counts with decides which entries they show, so the last match is the last entry.
     QString file_path;
+    const QString filter = search_field->filterText();
     for (int row = 0; row < item_model->rowCount(); ++row) {
-        if (!m_currentView->isIndexHidden(item_model->index(row, 0))) {
-            file_path = item_model->item(row, 0)->data(GameListItemPath::FullPathRole).toString();
+        const QStandardItem* item = item_model->item(row, 0);
+        if (item && Veshiru::FilterMatches(filter, item)) {
+            file_path = item->data(GameListItemPath::FullPathRole).toString();
         }
     }
     return file_path;
