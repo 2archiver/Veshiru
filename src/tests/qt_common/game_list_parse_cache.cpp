@@ -8,8 +8,8 @@
 
 namespace {
 
-GameList::ParseCache::EntryData MakeData(const std::string& path, u64 program_id) {
-    GameList::ParseCache::EntryData data;
+GameListParseCache::EntryData MakeData(const std::string& path, u64 program_id) {
+    GameListParseCache::EntryData data;
     data.path = path;
     data.name = "Test Game";
     data.icon = {1, 2, 3, 4};
@@ -26,7 +26,7 @@ GameList::ParseCache::EntryData MakeData(const std::string& path, u64 program_id
 
 TEST_CASE("The parse cache reuses a row only while its file is unchanged",
           "[game_list][parse_cache]") {
-    GameList::ParseCache::Cache cache;
+    GameListParseCache::Cache cache;
 
     // Nothing was parsed yet: a lookup must miss rather than invent a row.
     CHECK(cache.Find("games/Mario.nsp", 0x1000, 1000) == nullptr);
@@ -63,7 +63,7 @@ TEST_CASE("The parse cache reuses a row only while its file is unchanged",
 }
 
 TEST_CASE("The parse cache is cleared when keys or firmware change", "[game_list][parse_cache]") {
-    GameList::ParseCache::Cache cache;
+    GameListParseCache::Cache cache;
     cache.Store(MakeData("games/Mario.nsp", 1), 0x1000, 1000);
     cache.Store(MakeData("games/Zelda.nsp", 2), 0x2000, 2000);
     REQUIRE(cache.Find("games/Mario.nsp", 0x1000, 1000) != nullptr);

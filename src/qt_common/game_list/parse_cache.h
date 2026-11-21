@@ -48,8 +48,7 @@ enum class GameListRefreshReason {
     return "unknown";
 }
 
-namespace GameList {
-namespace ParseCache {
+namespace GameListParseCache {
 
 /// Everything needed to rebuild a game-list row without touching the file again. Plain
 /// values only, so the cache stays Qt-free and trivially destructible.
@@ -116,5 +115,4 @@ inline void Invalidate() {
     Global().Clear();
 }
 
-} // namespace ParseCache
-} // namespace GameList
+} // namespace GameListParseCache

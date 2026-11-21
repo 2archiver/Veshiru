@@ -3086,7 +3086,7 @@ void MainWindow::OnGameListRemoveInstalledEntry(u64 program_id,
     }
     Common::FS::RemoveDirRecursively(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
                                      "game_list");
-    GameList::ParseCache::Invalidate();
+    GameListParseCache::Invalidate();
     game_list->PopulateAsync(UISettings::values.game_dirs,
                                                 GameListRefreshReason::Settings);
 }
@@ -3604,7 +3604,7 @@ void MainWindow::OnMenuInstallToNAND() {
     QMessageBox::information(this, tr("Install Results"), install_results);
     Common::FS::RemoveDirRecursively(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
                                      "game_list");
-    GameList::ParseCache::Invalidate();
+    GameListParseCache::Invalidate();
     game_list->PopulateAsync(UISettings::values.game_dirs,
                                                 GameListRefreshReason::Settings);
     ui->action_Install_File_NAND->setEnabled(true);
@@ -4614,14 +4614,14 @@ void MainWindow::OnVerifyInstalledContents() {
 void MainWindow::OnInstallFirmware() {
     QtCommon::Content::InstallFirmware();
     // New firmware can change how titles parse: the next scan must start from the files.
-    GameList::ParseCache::Invalidate();
+    GameListParseCache::Invalidate();
     OnCheckFirmwareDecryption();
 }
 
 void MainWindow::OnInstallFirmwareFromZIP() {
     QtCommon::Content::InstallFirmwareZip();
     // New firmware can change how titles parse: the next scan must start from the files.
-    GameList::ParseCache::Invalidate();
+    GameListParseCache::Invalidate();
     OnCheckFirmwareDecryption();
 }
 
@@ -4633,7 +4633,7 @@ void MainWindow::OnInstallDecryptionKeys() {
 
     QtCommon::Content::InstallKeys();
     // New keys can change what a dump resolves to: the next scan must start from the files.
-    GameList::ParseCache::Invalidate();
+    GameListParseCache::Invalidate();
 
     game_list->PopulateAsync(UISettings::values.game_dirs,
                                                 GameListRefreshReason::Settings);

@@ -266,7 +266,7 @@ QString FormatPatchNameVersions(const FileSys::PatchManager& patch_manager,
 
 // The expensive half of a row: container stays closed after this. The result is plain data,
 // so it can be cached and the row rebuilt without touching the file again.
-GameList::ParseCache::EntryData MakeEntryData(const std::string& path, const std::string& name,
+GameListParseCache::EntryData MakeEntryData(const std::string& path, const std::string& name,
                                               const std::size_t size, const std::vector<u8>& icon,
                                               Loader::AppLoader& loader, u64 program_id,
                                               const FileSys::PatchManager& patch) {
@@ -299,7 +299,7 @@ GameList::ParseCache::EntryData MakeEntryData(const std::string& path, const std
     const QString game_version = QString::fromStdString(
         GameListVersion::Resolve(patch_versions.toStdString(), patch, loader));
 
-    GameList::ParseCache::EntryData data;
+    GameListParseCache::EntryData data;
     data.path = path;
     data.name = name;
     data.icon = icon;
@@ -358,7 +358,7 @@ GameListWorker::GameListWorker(FileSys::VirtualFilesystem vfs_,
     setAutoDelete(false);
 }
 
-QList<QStandardItem*> GameListWorker::BuildRow(const GameList::ParseCache::EntryData& data,
+QList<QStandardItem*> GameListWorker::BuildRow(const GameListParseCache::EntryData& data,
                                                u64 play_time) {
     QList<QStandardItem*> entry{
         new GameListItemPath(FormatGameName(data.path), data.icon,
@@ -508,7 +508,7 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
         if (target == ScanTarget::PopulateGameList) {
             fingerprint = FingerprintFile(path);
             if (fingerprint.valid) {
-                const auto* cached = GameList::ParseCache::Global().Find(
+                const auto* cached = GameListParseCache::Global().Find(
                     physical_name, fingerprint.size, fingerprint.mtime_ns);
                 if (cached != nullptr) {
                     auto pending = std::make_shared<PendingRow>(
@@ -661,7 +661,7 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
 
                 auto data = MakeEntryData(physical_name, name, size, icon, *app_loader, id, patch);
                 if (fingerprint.valid) {
-                    GameList::ParseCache::Global().Store(data, fingerprint.size,
+                    GameListParseCache::Global().Store(data, fingerprint.size,
                                                          fingerprint.mtime_ns);
                 }
                 auto pending = std::make_shared<PendingRow>(

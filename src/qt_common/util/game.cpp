@@ -389,7 +389,7 @@ void ResetMetadata(bool show_message) {
                                             tr("The operation completed successfully."));
         // The in-memory parse cache must not outlive the on-disk metadata cache it was
         // built alongside: drop it so the next scan re-parses every file.
-        GameList::ParseCache::Invalidate();
+        GameListParseCache::Invalidate();
         UISettings::values.is_game_list_reload_pending.exchange(true);
     } else {
         if (show_message)
