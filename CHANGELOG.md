@@ -46,6 +46,15 @@ upstream commit named in each file. No frame-generation behaviour changed.
   completion atomic and the copier notifies after each job, instead of yielding in a loop. Ported
   from Lichii `4a3dbf64`. `[unverified: frame-time effect on the GTX 1650]`
 
+### Verified
+
+- Windows clang-cl production build and ctest: CI run
+  [44892557878](https://github.com/2archiver/Veshiru/actions/runs/44892557878) passed configure,
+  `cmake --build build` with `ENABLE_WERROR=ON`, both executable checks and
+  `ctest --test-dir build --output-on-failure --no-tests=error` on commit `5838714`.
+- Host `g++ -std=c++20` harnesses for `UniqueFunction` (const/non-const lvalues, `std::ref`,
+  member pointers, construction constraints) and `ScratchBuffer` (failure injection and reuse).
+
 ### Not ported
 
 - Lichii's 4 MiB device-buffer blocks: Veshiru already uses 8 MiB; the extra step is unmeasured.
