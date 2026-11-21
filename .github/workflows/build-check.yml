@@ -132,7 +132,7 @@ jobs:
           -DVESHIRU_USE_BUNDLED_QT=OFF
           -DVESHIRU_USE_BUNDLED_SDL3=ON
           -DENABLE_UPDATE_CHECKER=ON
-          -DUSE_DISCORD_PRESENCE=OFF
+          -DUSE_DISCORD_PRESENCE=ON
           -DUSE_CCACHE=ON
 
       # The install script pins clang-cl by checksum, so it identifies the compiler without hashing

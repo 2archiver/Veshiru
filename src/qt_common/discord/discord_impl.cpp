@@ -6,6 +6,8 @@
 
 #include "qt_common/discord/discord_impl.h"
 
+#include "qt_common/discord/discord_payload.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>

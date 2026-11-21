@@ -246,7 +246,7 @@ jobs:
             -DENABLE_UPDATE_CHECKER=ON \
             "-DVESHIRU_BUILD_TAG=${build_tag}" \
             -DVESHIRU_BUILD_PLATFORM=${{ matrix.platform }} \
-            -DUSE_DISCORD_PRESENCE=OFF \
+            -DUSE_DISCORD_PRESENCE=ON \
             -DENABLE_RENHDRUM=ON \
             "-DRENHDRUM_DLL=$RENHDRUM_DLL" \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
