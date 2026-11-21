@@ -8,6 +8,17 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [2.3.0] - 2026-11-21
 
+Every entry carries a tag. `[verified: <how>]` means it was run, or a CI job proved it; a green
+CI means the code builds and the tests pass, not that a game or Discord behaves. `[unverified]`
+means nobody has observed it. The Verified and Unverified sections below summarize.
+
+### Fixed
+
+- **The Windows production build, broken on main since the 2.3 library merge.** `game_list.cpp`
+  called `isRowHidden` (removed with the view change) and used `Veshiru` without its include;
+  both compile errors are repaired, and CI compiles the Discord RPC TU (`USE_DISCORD_PRESENCE=ON`)
+  so a broken include cannot ship silently again. `[verified: Windows clang-cl build in CI]`
+
 ### Added
 
 - **Discord Rich Presence over a local IPC client (Windows).** Presence is opt-in, uses a
@@ -64,6 +75,28 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 - The Windows production build of PR #22 was broken (`isRowHidden`, missing include); this release
   restores it. Main carried the broken commit, so 2.3.0 is the first release whose artifacts are
   expected to build since 2.2.0.
+
+### Verified
+- Unit tests run by the CI test job on the release head: Discord payload construction, escaping
+  and version derivation (`src/tests/common/discord_payload.cpp`, 8 cases); watcher refresh
+  coalescing (`src/tests/qt_common/refresh_coalescer.cpp`, 2 cases); the game-list version
+  resolver (`src/tests/qt_common/game_version.cpp`, 5 cases); address redaction
+  (`src/tests/common/address_redaction.cpp`, 18 cases plus a printed benchmark); the
+  mapping-generation lockstep (`src/tests/video_core/memory_manager_runs.cpp`); the parse cache
+  (`src/tests/qt_common/game_list_parse_cache.cpp`, 3 cases).
+- The Windows clang-cl production build and the full test suite on the exact release commit.
+
+### Unverified
+- Live Discord behavior on a real desktop (no Application ID was supplied; none is bundled).
+- GUI behavior of the Versioned List badge, the Debug > Performance Summary menu and Ctrl+F10.
+- Watcher-driven refreshes under a real OS filesystem watcher, and large-library refresh timing.
+- Any gameplay or FPS effect: no target-hardware measurement exists for this release.
+
+### Off by default
+- Discord Rich Presence (opt-in; requires a user-supplied Application ID in Settings).
+- The periodic performance summary (off / 10 s / 30 s; Ctrl+F10 and VESHIRU_PERF_SUMMARY also
+  available). When off it costs one atomic load per present.
+- No experimental performance change from the 2.3 review is enabled in this release.
 
 ### Performance status
 
