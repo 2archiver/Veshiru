@@ -474,6 +474,10 @@ MainWindow::MainWindow(const QStringList& launch_arguments)
 
     show();
     Veshiru::NotificationCenter::Instance().Initialize(this);
+    if (user_data_migrator.migrated) {
+        Veshiru::NotificationCenter::Instance().Notify(
+            tr("Import finished"), tr("Your profile was imported into Veshiru."));
+    }
 
 #ifdef ENABLE_UPDATE_CHECKER
     if (UISettings::values.check_for_updates) {

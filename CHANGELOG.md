@@ -32,8 +32,8 @@ still need a desktop run, so those entries are marked unverified.
   object, escaping and the digits-only ID; unverified: live Discord on a desktop]`
 - **Notification-area icon and toasts use the embedded Veshiru icon.** A tray icon is created from
   `:/img/veshiru.ico` (never a relative path), the application window icon is set at startup, and
-  update-available, install-finished, game-started (only while the window is inactive) and Qt
-  critical-error toasts all pass that icon explicitly. `[unverified: tray/toast appearance on a
+  update-available, install-finished, profile-import-finished, game-started (only while the
+  window is inactive) and Qt critical-error toasts all pass that icon explicitly. `[unverified: tray/toast appearance on a
   real desktop]`
 
 ### Changed
