@@ -6,28 +6,97 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-21
+
+Every entry carries a tag. `[verified: <how>]` means it was run, or a CI job proved it; a green
+CI means the code builds and the tests pass, not that a game or Discord behaves. `[unverified]`
+means nobody has observed it. The Verified and Unverified sections below summarize.
+
+### Fixed
+
+- **The Windows production build, broken on main since the 2.3 library merge.** `game_list.cpp`
+  called `isRowHidden` (removed with the view change) and used `Veshiru` without its include;
+  both compile errors are repaired, and CI compiles the Discord RPC TU (`USE_DISCORD_PRESENCE=ON`)
+  so a broken include cannot ship silently again. `[verified: Windows clang-cl build in CI]`
+
 ### Added
 
-- **Discord Rich Presence over a local IPC client.** Presence is opt-in, uses a user-supplied
-  Discord Application ID (none is bundled), and only sends the game title, version and elapsed-time
-  timestamp plus the required local IPC metadata. Artwork lookups and the third-party RPC library
-  were removed. `[payload tests added but not run; Windows IPC and live Discord behavior unverified]`
+- **Discord Rich Presence over a local IPC client (Windows).** Presence is opt-in, uses a
+  user-supplied Discord Application ID (none is bundled), and only sends the game title, version
+  and elapsed-time timestamp plus the required local IPC metadata. The worker owns one persistent
+  pipe connection with overlapped I/O, a 15-second send rate limit, and reconnect backoff of 1 to
+  60 seconds with a bounded shutdown. Artwork lookups and the third-party RPC library were
+  removed. The activity name is derived from the build version, and the payload escaping is
+  covered by unit tests. `[verified: payload/version unit tests; unverified: live Discord behavior
+  on a real desktop]`
 - **Versioned List game-library mode.** A new compact, keyboard/controller-friendly card list shows
-  cover art, title, content type, play time and the installed game version at a glance.
-  `[unverified in a running GUI]`
+  cover art, title, content type, play time and the installed game version at a glance. The
+  version comes from one shared resolver (`GameListVersion::Resolve`: enabled update > control
+  metadata > display version > "1.0.0" only when a base NACP exists); an unknown version hides
+  the badge, and Discord reports the same version. `[verified: resolver unit tests; unverified:
+  badge rendering in a running GUI]`
 
 ### Changed
 
 - **Vulkan storage-binding cache reads only stable GPU mapping generations.** Cache hits are
   bypassed while a page-table update is in progress, so a service thread cannot reuse a binding
-  against a partially updated map. Adapted from Orchid's `buffer_cache: reuse storage bindings
-  while GPU mappings are stable` change. `[unverified in gameplay; mapping-generation test added but not run]`
-- **Game-directory updates are debounced by 30 ms.** Bursts of filesystem notifications now trigger
-  one asynchronous rescan instead of repeatedly clearing and rebuilding the library. Manual and
-  settings-driven refreshes remain immediate. `[unverified under an OS filesystem watcher]`
+  against a partially updated map, and a lockstep test pins that every completed page-table
+  operation (map, sparse map, unmap, remap) advances the generation. Adapted from Orchid's
+  `buffer_cache: reuse storage bindings while GPU mappings are stable` change. `[verified:
+  mapping-generation and lockstep unit tests; unverified: gameplay effect on target hardware]`
+- **Game-directory updates are debounced by 30 ms.** Watcher bursts of both kinds (game
+  directories and external content) are tracked independently and coalesce into one asynchronous
+  rescan instead of repeatedly clearing and rebuilding the library. Manual and settings-driven
+  refreshes remain immediate. `[verified: coalescer unit tests; unverified: under an OS
+  filesystem watcher]`
+- **The library refresh is incremental.** Rows are cached in memory for the session keyed by
+  canonical path, file size and modification time, so a refresh re-parses only new or modified
+  files. Play time is re-read when a row is rebuilt, boot support never depends on the cache, and
+  the cache is cleared when keys or firmware are installed. Every refresh logs
+  `library refresh: N entries, X reused, Y parsed, Z ms (reason: ...)`. `[verified: cache unit
+  tests; unverified: large-library timing on target hardware]`
 - **Diagnostic logs redact private identifiers**, including emulated console serials, device and
   account names, network-interface labels, configured endpoints, controller/audio identifiers, IP
-  addresses, and MAC addresses. `[unverified: tests added but not run]`
+  addresses, and MAC addresses. Address redaction is a single-pass scanner that no longer
+  mistakes Vulkan/driver version numbers for IPv4 addresses (the old regexes redacted
+  `Vulkan 1.3.280` and `551.86.0.0`). `[verified: 18-case unit test and a 100k-line benchmark
+  printed in the CI log (locally 1578 ms regexes vs 46 ms scanner)]`
+- **A built-in performance summary** for honest FPS measurement: Debug > Performance Summary
+  (off / 10 s / 30 s), Ctrl+F10 for an on-demand window, or `VESHIRU_PERF_SUMMARY=<seconds>`.
+  One fixed-format Info line per window with native FPS, nearest-rank frame-time percentiles,
+  1%/0.1% lows, slow-frame counts, synchronous-readback waits, pipeline builds and generated
+  presents. Off by default; a single branch when off. `[verified: format definitions and flag
+  plumbing compile in CI; unverified: measured on target hardware]`
+
+### Known issues
+
+- Discord Rich Presence requires a user-supplied Application ID in Settings and is Windows-only in
+  this build; it is off by default.
+- The Windows production build of PR #22 was broken (`isRowHidden`, missing include); this release
+  restores it. Main carried the broken commit, so 2.3.0 is the first release whose artifacts are
+  expected to build since 2.2.0.
+
+### Verified
+- Unit tests run by the CI test job on the release head: Discord payload construction, escaping
+  and version derivation (`src/tests/common/discord_payload.cpp`, 8 cases); watcher refresh
+  coalescing (`src/tests/qt_common/refresh_coalescer.cpp`, 2 cases); the game-list version
+  resolver (`src/tests/qt_common/game_version.cpp`, 5 cases); address redaction
+  (`src/tests/common/address_redaction.cpp`, 18 cases plus a printed benchmark); the
+  mapping-generation lockstep (`src/tests/video_core/memory_manager_runs.cpp`); the parse cache
+  (`src/tests/qt_common/game_list_parse_cache.cpp`, 3 cases).
+- The Windows clang-cl production build and the full test suite on the exact release commit.
+
+### Unverified
+- Live Discord behavior on a real desktop (no Application ID was supplied; none is bundled).
+- GUI behavior of the Versioned List badge, the Debug > Performance Summary menu and Ctrl+F10.
+- Watcher-driven refreshes under a real OS filesystem watcher, and large-library refresh timing.
+- Any gameplay or FPS effect: no target-hardware measurement exists for this release.
+
+### Off by default
+- Discord Rich Presence (opt-in; requires a user-supplied Application ID in Settings).
+- The periodic performance summary (off / 10 s / 30 s; Ctrl+F10 and VESHIRU_PERF_SUMMARY also
+  available). When off it costs one atomic load per present.
+- No experimental performance change from the 2.3 review is enabled in this release.
 
 ### Performance status
 

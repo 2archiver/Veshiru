@@ -36,6 +36,8 @@
 #include "core/loader/nx.h"
 
 #include "qt_common/config/uisettings.h"
+#include "qt_common/game_list/game_version.h"
+#include "qt_common/game_list/parse_cache.h"
 #include "qt_common/qt_common.h"
 
 #include "qt_common/game_list/game_list_p.h"
@@ -262,13 +264,14 @@ QString FormatPatchNameVersions(const FileSys::PatchManager& patch_manager,
     return out;
 }
 
-QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::string& name,
-                                        const std::size_t size, const std::vector<u8>& icon,
-                                        Loader::AppLoader& loader, u64 program_id,
-                                        const PlayTime::PlayTimeManager& play_time_manager,
-                                        const FileSys::PatchManager& patch) {
+// The expensive half of a row: container stays closed after this. The result is plain data,
+// so it can be cached and the row rebuilt without touching the file again.
+GameListParseCache::EntryData MakeEntryData(const std::string& path, const std::string& name,
+                                            const std::size_t size, const std::vector<u8>& icon,
+                                            Loader::AppLoader& loader, u64 program_id,
+                                            const FileSys::PatchManager& patch) {
     auto const file_type = loader.GetFileType();
-    auto const file_type_string = QString::fromStdString(Loader::GetFileTypeString(file_type));
+    auto const file_type_string = Loader::GetFileTypeString(file_type);
 
     QString patch_versions = GetGameListCachedObject(
         fmt::format("{:016X}", patch.GetTitleID()), "pv.txt", [&patch, &loader] {
@@ -293,15 +296,52 @@ QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::stri
         }
     }
 
-    u64 play_time = play_time_manager.GetPlayTime(program_id);
-    return QList<QStandardItem*>{
-        new GameListItemPath(FormatGameName(path), icon, QString::fromStdString(name),
-                             file_type_string, program_id, play_time, patch_versions),
-        new GameListItem(file_type_string),
-        new GameListItemSize(size),
-        new GameListItemPlayTime(play_time),
-        new GameListItem(patch_versions),
-    };
+    const QString game_version = QString::fromStdString(
+        GameListVersion::Resolve(patch_versions.toStdString(), patch, loader));
+
+    GameListParseCache::EntryData data;
+    data.path = path;
+    data.name = name;
+    data.icon = icon;
+    data.file_type_string = file_type_string;
+    data.program_id = program_id;
+    data.size = size;
+    data.patch_versions = patch_versions.toStdString();
+    data.game_version = game_version.toStdString();
+    data.loose_dump = IsExtractedNCAMain(path);
+    return data;
+}
+
+QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::string& name,
+                                        const std::size_t size, const std::vector<u8>& icon,
+                                        Loader::AppLoader& loader, u64 program_id,
+                                        const PlayTime::PlayTimeManager& play_time_manager,
+                                        const FileSys::PatchManager& patch) {
+    const auto data = MakeEntryData(path, name, size, icon, loader, program_id, patch);
+    return GameListWorker::BuildRow(data, play_time_manager.GetPlayTime(program_id));
+}
+
+// A file's identity for the parse cache: the discovery path is canonical by construction
+// (it is always built by walking the configured game directories), and size + mtime catch
+// every edit that matters to the row.
+struct FileFingerprint {
+    bool valid = false;
+    u64 size = 0;
+    s64 mtime_ns = 0;
+};
+
+FileFingerprint FingerprintFile(const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec) {
+        return {};
+    }
+    const auto mtime = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+        return {};
+    }
+    return {true, size,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(mtime.time_since_epoch()).count()};
 }
 } // Anonymous namespace
 
@@ -309,12 +349,31 @@ GameListWorker::GameListWorker(FileSys::VirtualFilesystem vfs_,
                                FileSys::ManualContentProvider* provider_,
                                QVector<UISettings::GameDir>& game_dirs_,
                                const PlayTime::PlayTimeManager& play_time_manager_,
-                               Core::System& system_)
+                               Core::System& system_, GameListRefreshReason reason_)
     : vfs{std::move(vfs_)}, provider{provider_}, game_dirs{game_dirs_},
-      play_time_manager{play_time_manager_},
-      system{system_} {
+      play_time_manager{play_time_manager_}, system{system_}, reason{reason_} {
     // We want the game list to manage our lifetime.
     setAutoDelete(false);
+}
+
+QList<QStandardItem*> GameListWorker::BuildRow(const GameListParseCache::EntryData& data,
+                                               u64 play_time) {
+    QList<QStandardItem*> entry{
+        new GameListItemPath(
+            FormatGameName(data.path), data.icon, QString::fromStdString(data.name),
+            QString::fromStdString(data.file_type_string), data.program_id, play_time,
+            QString::fromStdString(data.patch_versions), QString::fromStdString(data.game_version)),
+        new GameListItem(QString::fromStdString(data.file_type_string)),
+        new GameListItemSize(data.size),
+        new GameListItemPlayTime(play_time),
+        new GameListItem(QString::fromStdString(data.patch_versions)),
+    };
+    if (data.loose_dump) {
+        entry[GameListModel::COLUMN_SIZE]->setText(tr("Not scanned"));
+        entry[GameListModel::COLUMN_SIZE]->setToolTip(
+            tr("Folder size is not calculated during game discovery."));
+    }
+    return entry;
 }
 
 GameListWorker::~GameListWorker() {
@@ -428,6 +487,7 @@ void GameListWorker::AddTitlesToGameList(GameListDir* parent_dir, GameListItemTy
                                        program_id, play_time_manager, patch);
         auto pending = std::make_shared<PendingRow>(std::move(entry));
         RecordEvent([=](GameListModel* model) { model->AddEntry(pending->Release(), parent_dir); });
+        ++parsed_entries;
     }
 }
 
@@ -436,6 +496,32 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
     const auto process_candidate = [this, target,
                                     parent_dir](const std::filesystem::path& path) {
         const auto physical_name = Common::FS::PathToUTF8String(path);
+
+        // The incremental refresh, list pass: a file whose path, size and modification time
+        // match the last scan reuses its parsed row, so only new or modified files pay the
+        // container parse at all. Play time is looked up now, not cached: it changes while
+        // the file does not. (The provider pass below never takes this branch.)
+        FileFingerprint fingerprint{};
+        if (target == ScanTarget::PopulateGameList) {
+            fingerprint = FingerprintFile(path);
+            if (fingerprint.valid) {
+                const auto* cached = GameListParseCache::Global().Find(
+                    physical_name, fingerprint.size, fingerprint.mtime_ns);
+                if (cached != nullptr) {
+                    auto pending = std::make_shared<PendingRow>(
+                        BuildRow(*cached, play_time_manager.GetPlayTime(cached->program_id)));
+                    RecordEvent([=](GameListModel* model) {
+                        model->AddEntry(pending->Release(), parent_dir);
+                    });
+                    // Remember it for the next scan: see ReportMissingGames.
+                    std::scoped_lock event_lock(lock);
+                    listed_this_scan.insert(physical_name);
+                    ++reused_entries;
+                    return;
+                }
+            }
+        }
+
         const auto file = vfs->OpenFile(physical_name, FileSys::OpenMode::Read);
         if (!file) {
             return;
@@ -490,6 +576,7 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
             RecordEvent([=](GameListModel* model) {
                 model->AddEntry(pending->Release(), parent_dir);
             });
+            ++parsed_entries;
             return;
         }
 
@@ -528,9 +615,9 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
             std::vector<u64> program_ids;
             loader->ReadProgramIds(program_ids);
 
-            const auto addEntry = [this, physical_name,
-                                   parent_dir](std::unique_ptr<Loader::AppLoader>& app_loader,
-                                               const u64 id) {
+            const auto addEntry = [this, physical_name, parent_dir,
+                                   fingerprint](std::unique_ptr<Loader::AppLoader>& app_loader,
+                                                const u64 id) {
                 std::vector<u8> icon;
                 if (id != 0) {
                     icon = Common::ArtworkCache::ReadCachedArtwork(id);
@@ -569,21 +656,20 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
                 const bool loose_dump = IsExtractedNCAMain(physical_name);
                 const u64 size = loose_dump ? 0 : Common::FS::GetSize(physical_name);
 
-                auto entry = MakeGameListEntry(physical_name, name, size, icon, *app_loader, id,
-                                               play_time_manager, patch);
-
-                if (loose_dump) {
-                    entry[GameListModel::COLUMN_SIZE]->setText(tr("Not scanned"));
-                    entry[GameListModel::COLUMN_SIZE]->setToolTip(
-                        tr("Folder size is not calculated during game discovery."));
+                auto data = MakeEntryData(physical_name, name, size, icon, *app_loader, id, patch);
+                if (fingerprint.valid) {
+                    GameListParseCache::Global().Store(data, fingerprint.size,
+                                                       fingerprint.mtime_ns);
                 }
-                auto pending = std::make_shared<PendingRow>(std::move(entry));
+                auto pending =
+                    std::make_shared<PendingRow>(BuildRow(data, play_time_manager.GetPlayTime(id)));
                 RecordEvent([=](GameListModel* model) {
                     model->AddEntry(pending->Release(), parent_dir);
                 });
                 // Remember it for the next scan: see ReportMissingGames.
                 std::scoped_lock event_lock(lock);
                 listed_this_scan.insert(physical_name);
+                ++parsed_entries;
             };
 
             if (res2 == Loader::ResultStatus::Success && program_ids.size() > 1 &&
@@ -624,6 +710,8 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
 void GameListWorker::run() {
     const auto started = std::chrono::steady_clock::now();
     watch_list.clear();
+    reused_entries = 0;
+    parsed_entries = 0;
     provider->ClearAllEntries();
 
     const auto DirEntryReady = [&](GameListDir* game_list_dir) {
@@ -688,10 +776,14 @@ void GameListWorker::run() {
     ReportMissingGames(first_scanned_dir);
 
     watch_list.removeDuplicates();
-    LOG_INFO(Frontend, "Game discovery finished: elapsed_ms={} watched={} cancelled={}",
-             std::chrono::duration_cast<std::chrono::milliseconds>(
-                 std::chrono::steady_clock::now() - started).count(),
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - started)
+                                .count();
+    LOG_INFO(Frontend, "Game discovery finished: elapsed_ms={} watched={} cancelled={}", elapsed_ms,
              watch_list.size(), stop_requested.load());
+    LOG_INFO(Frontend, "library refresh: {} entries, {} reused, {} parsed, {} ms (reason: {})",
+             reused_entries + parsed_entries, reused_entries, parsed_entries, elapsed_ms,
+             ToString(reason));
     RecordEvent([this](GameListModel* model) { model->DonePopulating(watch_list); });
     processing_completed.Set();
 }

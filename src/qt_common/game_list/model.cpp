@@ -34,18 +34,30 @@ GameListModel::GameListModel(std::shared_ptr<FileSys::VfsFilesystem> vfs_,
     refresh_timer.setSingleShot(true);
     refresh_timer.setInterval(30);
     connect(&refresh_timer, &QTimer::timeout, this, [this] {
-        const bool external = refresh_external_pending;
-        refresh_external_pending = false;
-        if (external) {
-            RefreshExternalContent();
-        } else {
-            RefreshGameDirectory();
+        // Both kinds of event can land inside one debounce window: run whichever were
+        // requested, each exactly once, with a single repopulate at the end.
+        const auto requested = pending_refreshes.Take();
+        if (!requested.external && !requested.game_dir) {
+            return;
+        }
+        if (requested.external) {
+            LOG_INFO(Frontend, "External content directory changed. Clearing metadata cache.");
+            QtCommon::Game::ResetMetadata(false);
+        }
+        if (requested.game_dir) {
+            ResetExternalWatcher();
+            LOG_INFO(Frontend, "Change detected in the games directory. Reloading game list.");
+        }
+        if (!UISettings::values.game_dirs.empty() && current_worker != nullptr) {
+            Repopulate();
         }
     });
-    connect(watcher, &QFileSystemWatcher::directoryChanged, this,
-            [this] { refresh_timer.start(); });
+    connect(watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
+        pending_refreshes.OnGameDir();
+        refresh_timer.start();
+    });
     connect(external_watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
-        refresh_external_pending = true;
+        pending_refreshes.OnExternal();
         refresh_timer.start();
     });
 
@@ -68,7 +80,8 @@ void GameListModel::SetScanEnabled(bool enabled) {
     }
 }
 
-void GameListModel::PopulateAsync(QVector<UISettings::GameDir>& game_dirs) {
+void GameListModel::PopulateAsync(QVector<UISettings::GameDir>& game_dirs,
+                                  GameListRefreshReason reason) {
     if (!scan_enabled || system.IsPoweredOn()) {
         return;
     }
@@ -77,8 +90,8 @@ void GameListModel::PopulateAsync(QVector<UISettings::GameDir>& game_dirs) {
     StopWorker();
     removeRows(0, rowCount());
 
-    current_worker = std::make_unique<GameListWorker>(vfs, provider, game_dirs,
-                                                      play_time_manager, system);
+    current_worker = std::make_unique<GameListWorker>(vfs, provider, game_dirs, play_time_manager,
+                                                      system, reason);
 
     connect(current_worker.get(), &GameListWorker::DataAvailable, this, &GameListModel::WorkerEvent,
             Qt::QueuedConnection);
@@ -207,7 +220,7 @@ void GameListModel::Repopulate() {
 
     StopWorker();
     QtCommon::system->GetFileSystemController().CreateFactories(*QtCommon::vfs);
-    PopulateAsync(UISettings::values.game_dirs);
+    PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Watcher);
 }
 
 void GameListModel::RefreshGameDirectory() {

@@ -19,9 +19,9 @@
 #include "common/settings_enums.h"
 #include "core/core.h"
 #include "core/core_timing.h"
-#include "core/gpu_dirty_memory_manager.h"
 #include "core/frontend/emu_window.h"
 #include "core/frontend/graphics_context.h"
+#include "core/gpu_dirty_memory_manager.h"
 #include "core/hle/service/nvdrv/nvdata.h"
 #include "core/perf_stats.h"
 #include "video_core/cdma_pusher.h"
@@ -33,11 +33,9 @@
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/kepler_memory.h"
 #include "video_core/engines/maxwell_3d.h"
-#include "video_core/nx2_fast_draw.h"
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
-#include "video_core/pending_maps.h"
 #include "video_core/gpu_thread.h"
 #include "video_core/gpu_timestamp.h"
 #include "video_core/host1x/host1x.h"
@@ -46,7 +44,10 @@
 #include "video_core/nx2.h"
 #include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_backx.h"
+#include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/pending_maps.h"
+#include "video_core/perf_summary.h"
 #include "video_core/renderer_base.h"
 #include "video_core/shader_notify.h"
 
@@ -363,6 +364,7 @@ struct GPU::Impl {
             gpu_thread.TickGPU(is_async);
             WaitForSyncOperation(fence);
             sync_wait_ns = AsyncReadback::Now() - wait_start;
+            VideoCore::PerfSummary::CountSyncWait(sync_wait_ns);
         }
         // The GPU thread submitted the downloads without waiting for the host GPU: this thread
         // waits for them and writes them to guest memory, while the GPU thread goes on.

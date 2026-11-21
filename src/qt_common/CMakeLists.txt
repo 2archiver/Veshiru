@@ -33,6 +33,9 @@ add_library(qt_common STATIC
     game_list/model.h game_list/model.cpp
     game_list/worker.h game_list/worker.cpp
     game_list/game_list_p.h
+    game_list/game_version.h game_list/game_version.cpp
+    game_list/refresh_coalescer.h
+    game_list/parse_cache.h
 
     qt_string_lookup.h
     qt_compat.h

@@ -91,21 +91,24 @@ public:
                                                             text_rect.width()));
 
         const QString version = index.data(GameListItemPath::VersionRole).toString();
-        const QString version_label = QObject::tr("Version %1").arg(version);
-        const QFontMetrics badge_metrics(option.font);
-        const int badge_width = badge_metrics.horizontalAdvance(version_label) + 24;
-        const QRect badge(row.right() - badge_width - 14, row.center().y() - 14,
-                          badge_width, 28);
-        QColor badge_color = selected ? option.palette.highlightedText().color()
-                                      : option.palette.highlight().color();
-        badge_color.setAlpha(selected ? 35 : 28);
-        painter->setPen(Qt::NoPen);
-        painter->setBrush(badge_color);
-        painter->drawRoundedRect(badge, 14, 14);
-        painter->setFont(option.font);
-        painter->setPen(selected ? option.palette.highlightedText().color()
-                                 : option.palette.highlight().color());
-        painter->drawText(badge, Qt::AlignCenter, version_label);
+        if (!version.isEmpty()) {
+            // Unknown versions render no badge at all, never an empty "Version ".
+            const QString version_label = QObject::tr("Version %1").arg(version);
+            const QFontMetrics badge_metrics(option.font);
+            const int badge_width = badge_metrics.horizontalAdvance(version_label) + 24;
+            const QRect badge(row.right() - badge_width - 14, row.center().y() - 14, badge_width,
+                              28);
+            QColor badge_color = selected ? option.palette.highlightedText().color()
+                                          : option.palette.highlight().color();
+            badge_color.setAlpha(selected ? 35 : 28);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(badge_color);
+            painter->drawRoundedRect(badge, 14, 14);
+            painter->setFont(option.font);
+            painter->setPen(selected ? option.palette.highlightedText().color()
+                                     : option.palette.highlight().color());
+            painter->drawText(badge, Qt::AlignCenter, version_label);
+        }
         painter->restore();
     }
 

@@ -22,6 +22,7 @@
 #include "core/file_sys/registered_cache.h"
 #include "frontend_common/play_time_manager.h"
 #include "qt_common/config/uisettings.h"
+#include "qt_common/game_list/parse_cache.h"
 
 namespace Core {
 class System;
@@ -49,7 +50,7 @@ public:
                             FileSys::ManualContentProvider* provider_,
                             QVector<UISettings::GameDir>& game_dirs_,
                             const PlayTime::PlayTimeManager& play_time_manager_,
-                            Core::System& system_);
+                            Core::System& system_, GameListRefreshReason reason_);
     ~GameListWorker() override;
 
     /// Starts the processing of directory tree information.
@@ -57,6 +58,10 @@ public:
 
     /// Requests the worker to stop and blocks until processing has finished.
     void Stop();
+
+    /// Builds the game-list row for entry data extracted earlier (possibly from the parse
+    /// cache). `play_time` is looked up by the caller so a reused row stays current.
+    static QList<QStandardItem*> BuildRow(const GameListParseCache::EntryData& data, u64 play_time);
 
 public:
     /**
@@ -108,5 +113,13 @@ private:
     std::atomic_bool stop_requested = false;
     Common::Event processing_completed;
 
+    /// Refresh statistics for the summary log line: rows reused from the parse cache,
+    /// rows parsed from scratch, and why this refresh ran.
+    std::size_t reused_entries = 0;
+    std::size_t parsed_entries = 0;
+
     Core::System& system;
+
+    /// Why this refresh ran; declared after system to match the constructor's init list.
+    GameListRefreshReason reason;
 };

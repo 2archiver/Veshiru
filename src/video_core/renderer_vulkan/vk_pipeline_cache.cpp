@@ -26,11 +26,11 @@
 #include <vector>
 #include "common/cityhash.h"
 #include "common/fs/file_lock.h"
-#include "common/settings.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/memory_detect.h"
 #include "common/scope_exit.h"
+#include "common/settings.h"
 #include "common/shutdown_progress.h"
 #include "common/thread.h"
 #include "common/thread_worker.h"
@@ -47,9 +47,11 @@
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
+#include "video_core/perf_summary.h"
 #include "video_core/pipeline_cache_files.h"
 #include "video_core/renderer_vulkan/async_draw_policy.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
@@ -74,7 +76,6 @@
 #include "video_core/shader_cache.h"
 #include "video_core/shader_cache_v2/cache_file.h"
 #include "video_core/shader_cache_v2/records.h"
-#include "video_core/nx2_fast_draw.h"
 #include "video_core/shader_environment.h"
 #include "video_core/shader_notify.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
@@ -3291,6 +3292,7 @@ std::string FormatRuntimeBuilds(const RuntimeBuildCounts& counts) {
 void ReportRuntimePipeline(RuntimeBuild kind, std::chrono::steady_clock::duration elapsed,
                            std::string_view shaders, std::chrono::nanoseconds translation_wait,
                            std::chrono::nanoseconds stage_translation) {
+    VideoCore::PerfSummary::CountPipelineBuild();
     auto& builds = runtime_builds;
     std::scoped_lock lock{builds.mutex};
     const size_t index = static_cast<size_t>(kind);

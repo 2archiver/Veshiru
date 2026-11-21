@@ -44,6 +44,7 @@
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
 #include "veshiru/game/carousel.h"
+#include "veshiru/game/common.h"
 #include "veshiru/game/game_grid.h"
 #include "veshiru/game/game_list.h"
 #include "veshiru/game/game_tree.h"
@@ -148,10 +149,14 @@ QString GameList::GetLastFilterResultItem() const {
         return tree_view->GetLastFilterResultItem();
     }
 
+    // The flat views keep no public row-hidden state: the same filter match OnTextChanged
+    // counts with decides which entries they show, so the last match is the last entry.
     QString file_path;
+    const QString filter = search_field->filterText();
     for (int row = 0; row < item_model->rowCount(); ++row) {
-        if (!m_currentView->isRowHidden(row)) {
-            file_path = item_model->item(row, 0)->data(GameListItemPath::FullPathRole).toString();
+        const QStandardItem* item = item_model->item(row, 0);
+        if (item && Veshiru::FilterMatches(filter, item)) {
+            file_path = item->data(GameListItemPath::FullPathRole).toString();
         }
     }
     return file_path;
@@ -195,8 +200,9 @@ void GameList::OnPopulate() {
     }
 }
 
-void GameList::PopulateAsync(QVector<UISettings::GameDir>& game_dirs) {
-    item_model->PopulateAsync(game_dirs);
+void GameList::PopulateAsync(QVector<UISettings::GameDir>& game_dirs,
+                             GameListRefreshReason reason) {
+    item_model->PopulateAsync(game_dirs, reason);
 }
 
 void GameList::SetScanEnabled(bool enabled) {
@@ -289,7 +295,8 @@ void GameList::ResetViewMode() {
         m_isTreeMode = newTreeMode;
         item_model->SetFlat(!m_isTreeMode);
         if (!UISettings::values.game_dirs.empty()) {
-            item_model->PopulateAsync(UISettings::values.game_dirs);
+            item_model->PopulateAsync(UISettings::values.game_dirs,
+                                      GameListRefreshReason::Settings);
         }
     }
 }
@@ -802,13 +809,13 @@ void GameList::AddCustomDirPopup(QMenu& context_menu, QModelIndex selected) {
 
     connect(deep_scan, &QAction::triggered, this, [this, &game_dir] {
         game_dir.deep_scan = !game_dir.deep_scan;
-        PopulateAsync(UISettings::values.game_dirs);
+        PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
     });
     connect(delete_dir, &QAction::triggered, this, [this, &game_dir] {
         UISettings::values.game_dirs.removeOne(game_dir);
         // Repopulate instead of removing the row: a running worker adds games under the
         // directory rows it created, and the other rows' GameDirRole indices would shift.
-        PopulateAsync(UISettings::values.game_dirs);
+        PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
     });
 }
 

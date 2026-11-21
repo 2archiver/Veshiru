@@ -21,6 +21,7 @@
 #include "frontend_common/play_time_manager.h"
 #include "qt_common/config/uisettings.h"
 #include "qt_common/game_list/model.h"
+#include "qt_common/game_list/parse_cache.h"
 #include "qt_common/util/game.h"
 
 class QVariantAnimation;
@@ -76,7 +77,7 @@ public:
     void SetFilterVisible(bool visibility);
     bool IsEmpty() const;
 
-    void PopulateAsync(QVector<UISettings::GameDir>& game_dirs);
+    void PopulateAsync(QVector<UISettings::GameDir>& game_dirs, GameListRefreshReason reason);
     void SetScanEnabled(bool enabled);
     void SetReportableProgramId(u64 program_id);
 

@@ -135,6 +135,56 @@ TEST_CASE("Mapping generation is unavailable until page-table updates complete",
     CHECK(*completed_generation > *initial_generation);
 }
 
+TEST_CASE("Every mapping change advances the generation the binding cache keys on",
+          "[memory_manager]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    Core::DeviceMemory physical;
+    Tegra::MaxwellDeviceMemoryManager device_memory{physical};
+    NullRasterizer rasterizer;
+    Tegra::MemoryManager memory{system, device_memory, 32, 1ULL << 31, 16};
+    memory.BindRasterizer(&rasterizer);
+
+    // The storage-binding cache consults its entries only when StableMappingGeneration returns
+    // a value, and compares the stored serial against it. Any completed page-table operation
+    // must therefore change the generation, or a cached binding could be reused against the
+    // old map. MapSerial() must stay in lockstep with the completed-op count: a bump that
+    // skipped PageTableOp/BigPageTableOp would leave the fallback serial behind and let a
+    // mid-update binding masquerade as current.
+    const auto generation = [&] {
+        const auto value = memory.StableMappingGeneration();
+        REQUIRE(value.has_value());
+        return *value;
+    };
+
+    const u64 start = generation();
+    CHECK(memory.MapSerial() == start);
+
+    memory.Map(0x100000, 0x1000, 0x2000, Tegra::PTEKind::PITCH, false);
+    CHECK(generation() == start + 1);
+    CHECK(memory.MapSerial() == start + 1);
+
+    memory.MapSparse(0x200000, 0x2000, true);
+    CHECK(generation() == start + 2);
+    CHECK(memory.MapSerial() == start + 2);
+
+    // Unmap runs BigPageTableOp and PageTableOp over the range: two tracked operations.
+    memory.Unmap(0x100000, 0x2000);
+    CHECK(generation() == start + 4);
+    CHECK(memory.MapSerial() == start + 4);
+
+    // A remap over live pages is tracked like any other operation.
+    memory.Map(0x300000, 0x1000, 0x1000, Tegra::PTEKind::PITCH, true);
+    memory.Map(0x300000, 0x2000, 0x1000, Tegra::PTEKind::PITCH, true);
+    CHECK(generation() == start + 6);
+    CHECK(memory.MapSerial() == start + 6);
+
+    // A range refused for lying outside the address space changes neither counter.
+    memory.Map(1ULL << 33, 0x1000, 0x1000, Tegra::PTEKind::PITCH, false);
+    CHECK(generation() == start + 6);
+    CHECK(memory.MapSerial() == start + 6);
+}
+
 TEST_CASE("Device space freed and mapped again every frame stays in place", "[memory_manager]") {
     Core::DeviceMemory physical;
     Tegra::MaxwellDeviceMemoryManager device_memory{physical};
