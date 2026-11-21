@@ -34,18 +34,30 @@ GameListModel::GameListModel(std::shared_ptr<FileSys::VfsFilesystem> vfs_,
     refresh_timer.setSingleShot(true);
     refresh_timer.setInterval(30);
     connect(&refresh_timer, &QTimer::timeout, this, [this] {
-        const bool external = refresh_external_pending;
-        refresh_external_pending = false;
-        if (external) {
-            RefreshExternalContent();
-        } else {
-            RefreshGameDirectory();
+        // Both kinds of event can land inside one debounce window: run whichever were
+        // requested, each exactly once, with a single repopulate at the end.
+        const auto requested = pending_refreshes.Take();
+        if (!requested.external && !requested.game_dir) {
+            return;
+        }
+        if (requested.external) {
+            LOG_INFO(Frontend, "External content directory changed. Clearing metadata cache.");
+            QtCommon::Game::ResetMetadata(false);
+        }
+        if (requested.game_dir) {
+            ResetExternalWatcher();
+            LOG_INFO(Frontend, "Change detected in the games directory. Reloading game list.");
+        }
+        if (!UISettings::values.game_dirs.empty() && current_worker != nullptr) {
+            Repopulate();
         }
     });
-    connect(watcher, &QFileSystemWatcher::directoryChanged, this,
-            [this] { refresh_timer.start(); });
+    connect(watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
+        pending_refreshes.OnGameDir();
+        refresh_timer.start();
+    });
     connect(external_watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
-        refresh_external_pending = true;
+        pending_refreshes.OnExternal();
         refresh_timer.start();
     });
 

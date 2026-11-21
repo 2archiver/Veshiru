@@ -8,6 +8,7 @@ add_executable(tests
     common/artwork_cache.cpp
     common/discord_payload.cpp
     ../qt_common/discord/discord_payload.cpp
+    qt_common/refresh_coalescer.cpp
     video_core/scaled_image_fits.cpp
     video_core/stale_targets.cpp
     video_core/superseded_images.cpp

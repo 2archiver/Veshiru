@@ -13,6 +13,7 @@
 #include "common/common_types.h"
 #include "frontend_common/play_time_manager.h"
 #include "qt_common/config/uisettings.h"
+#include "qt_common/game_list/refresh_coalescer.h"
 
 namespace Core {
 class System;
@@ -94,5 +95,5 @@ private:
     QFileSystemWatcher* watcher = nullptr;
     QFileSystemWatcher* external_watcher = nullptr;
     QTimer refresh_timer;
-    bool refresh_external_pending = false;
+    GameListRefresh::Coalescer pending_refreshes;
 };
