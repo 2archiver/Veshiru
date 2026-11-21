@@ -19,9 +19,8 @@ std::optional<std::string> EnabledUpdateVersion(std::string_view lines) {
     std::size_t begin = 0;
     while (begin < lines.size()) {
         const std::size_t end = lines.find('\n', begin);
-        const std::string_view line =
-            lines.substr(begin, end == std::string_view::npos ? std::string_view::npos
-                                                             : end - begin);
+        const std::string_view line = lines.substr(
+            begin, end == std::string_view::npos ? std::string_view::npos : end - begin);
         if (line.starts_with("Update (") && line.ends_with(")") && line.size() > 9) {
             return std::string{line.substr(8, line.size() - 9)};
         }

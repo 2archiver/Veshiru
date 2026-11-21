@@ -58,10 +58,10 @@ struct EntryData {
     std::vector<u8> icon;         ///< icon bytes as ReadIcon produced them
     std::string file_type_string; ///< Loader::GetFileTypeString result
     u64 program_id{};
-    u64 size{};                   ///< row size (0 for loose dumps, which show "Not scanned")
-    std::string patch_versions;   ///< newline-joined patch names, as the UI expects
-    std::string game_version;     ///< GameListVersion::Resolve result
-    bool loose_dump{};            ///< an extracted NCA main, not a container
+    u64 size{};                 ///< row size (0 for loose dumps, which show "Not scanned")
+    std::string patch_versions; ///< newline-joined patch names, as the UI expects
+    std::string game_version;   ///< GameListVersion::Resolve result
+    bool loose_dump{};          ///< an extracted NCA main, not a container
 };
 
 /// The session cache. Find and Store are called from the worker thread only; the game-list

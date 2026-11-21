@@ -199,10 +199,9 @@ public:
         // parsed back out of this tooltip; empty means unknown and renders no badge.
         const auto version_line =
             game_version.isEmpty() ? QString{} : QObject::tr("Version: %1").arg(game_version);
-        const auto tooltip =
-            version_line.isEmpty()
-                ? readable_play_time
-                : QStringLiteral("%1\n%2").arg(readable_play_time, version_line);
+        const auto tooltip = version_line.isEmpty()
+                                 ? readable_play_time
+                                 : QStringLiteral("%1\n%2").arg(readable_play_time, version_line);
 
         setData(game_version, VersionRole);
         setData(tooltip, Qt::ToolTipRole);

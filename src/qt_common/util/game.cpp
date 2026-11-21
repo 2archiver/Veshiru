@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "qt_common/util/game.h"
 #include "qt_common/game_list/parse_cache.h"
+#include "qt_common/util/game.h"
 
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"

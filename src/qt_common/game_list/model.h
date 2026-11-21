@@ -52,8 +52,7 @@ public:
     void AddEntry(const QList<QStandardItem*>& entry_items, GameListDir* parent);
     void DonePopulating(const QStringList& watch_list);
 
-    void PopulateAsync(QVector<UISettings::GameDir>& game_dirs,
-                       GameListRefreshReason reason);
+    void PopulateAsync(QVector<UISettings::GameDir>& game_dirs, GameListRefreshReason reason);
     void WorkerEvent();
     void SetScanEnabled(bool enabled);
 

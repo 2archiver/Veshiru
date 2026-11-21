@@ -14,23 +14,18 @@
 namespace Redact = Common::Log::AddressRedaction;
 
 TEST_CASE("The address scanner redacts IPv4, IPv6 and MAC addresses", "[logging]") {
-    const auto redact = [](std::string_view line) {
-        return Redact::RedactAddresses(line);
-    };
+    const auto redact = [](std::string_view line) { return Redact::RedactAddresses(line); };
 
     CHECK(redact("connected to 192.168.1.20 for sync") == "connected to <ip> for sync");
     CHECK(redact("peer 10.0.0.1:443 closed") == "peer <ip>:443 closed");
-    CHECK(redact("listening on [fe80::1ff:fe23:4567:890a]:53") ==
-          "listening on [<ip>]:53");
+    CHECK(redact("listening on [fe80::1ff:fe23:4567:890a]:53") == "listening on [<ip>]:53");
     CHECK(redact("adapter 2001:db8:85a3:0:0:8a2e:370:7334 up") == "adapter <ip> up");
     CHECK(redact("mac=AA:BB:CC:DD:EE:FF") == "mac=<mac>");
     CHECK(redact("mac 00-1A-2B-3C-4D-5E paired") == "mac <mac> paired");
 }
 
 TEST_CASE("The address scanner leaves versions and identifiers alone", "[logging]") {
-    const auto redact = [](std::string_view line) {
-        return Redact::RedactAddresses(line);
-    };
+    const auto redact = [](std::string_view line) { return Redact::RedactAddresses(line); };
 
     // Driver, API and Vulkan versions: dotted quads a version word precedes.
     CHECK(redact("Vulkan 1.3.280.0 driver") == "Vulkan 1.3.280.0 driver");
@@ -50,11 +45,9 @@ TEST_CASE("The address scanner leaves versions and identifiers alone", "[logging
     CHECK(redact("fe80::1") == "fe80::1");
 }
 
-TEST_CASE("The address scanner stays quiet on text without address separators",
-          "[logging]") {
+TEST_CASE("The address scanner stays quiet on text without address separators", "[logging]") {
     CHECK(Redact::RedactAddresses("no addresses here").find("<ip>") == std::string::npos);
-    CHECK(Redact::RedactAddresses("Game 0100ABCD00000000 started").find("<") ==
-          std::string::npos);
+    CHECK(Redact::RedactAddresses("Game 0100ABCD00000000 started").find("<") == std::string::npos);
 }
 
 TEST_CASE("The address scanner is cheaper than the regexes it replaced", "[logging]") {

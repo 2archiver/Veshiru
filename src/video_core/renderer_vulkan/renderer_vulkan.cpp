@@ -13,9 +13,9 @@
 
 #include <fmt/ranges.h>
 
+#include <ranges>
 #include "common/display_hdr.h"
 #include "common/logging.h"
-#include <ranges>
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/core_timing.h"
@@ -25,7 +25,6 @@
 #include "video_core/nx2_profile.h"
 #include "video_core/perf_summary.h"
 #include "video_core/present.h"
-#include "video_core/render_trace.h"
 #include "video_core/render_trace.h"
 #include "video_core/renderer_vulkan/present/util.h"
 #ifdef HAS_RESHADE

@@ -137,7 +137,7 @@ struct FrameRing {
 };
 
 inline FrameRing g_frames;
-inline u32 g_generated_presents{};       ///< Generated frames queued in the window (GPU thread)
+inline u32 g_generated_presents{}; ///< Generated frames queued in the window (GPU thread)
 inline std::chrono::steady_clock::time_point g_window_start{};
 inline std::chrono::steady_clock::time_point g_last_present{};
 inline bool g_window_started{};
@@ -171,9 +171,8 @@ inline void OnPresent(u32 generated) {
     g_last_present = now;
     g_generated_presents += generated;
 
-    const auto window_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now -
-                                                                                g_window_start)
-                               .count();
+    const auto window_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now - g_window_start).count();
     if (!dump_requested && window_ns < static_cast<s64>(window) * 1'000'000'000LL) {
         return;
     }
@@ -191,8 +190,8 @@ inline void OnPresent(u32 generated) {
     std::vector<float> sorted(ring.ms.begin(), ring.ms.begin() + frames);
     std::sort(sorted.begin(), sorted.end());
     const auto nearest_rank = [&](double percentile) {
-        const std::size_t rank = static_cast<std::size_t>(
-            std::ceil(percentile * static_cast<double>(frames)));
+        const std::size_t rank =
+            static_cast<std::size_t>(std::ceil(percentile * static_cast<double>(frames)));
         return sorted[(std::max<std::size_t>)(rank, 1) - 1];
     };
     // The mean of the slowest fraction of frames, nearest-rank: the "1% low".

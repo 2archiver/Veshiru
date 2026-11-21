@@ -61,8 +61,7 @@ public:
 
     /// Builds the game-list row for entry data extracted earlier (possibly from the parse
     /// cache). `play_time` is looked up by the caller so a reused row stays current.
-    static QList<QStandardItem*> BuildRow(const GameListParseCache::EntryData& data,
-                                          u64 play_time);
+    static QList<QStandardItem*> BuildRow(const GameListParseCache::EntryData& data, u64 play_time);
 
 public:
     /**

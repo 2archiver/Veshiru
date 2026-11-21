@@ -515,8 +515,7 @@ MainWindow::MainWindow(const QStringList& launch_arguments)
     if (Settings::values.use_dev_keys.GetValue()) {
         Core::Crypto::KeyManager::Instance().ReloadKeys();
     }
-    game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Startup);
+    game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Startup);
 
     if (whats_new_pending && !UISettings::values.first_start.GetValue() &&
         UISettings::values.show_whats_new.GetValue()) {
@@ -1365,8 +1364,7 @@ void MainWindow::InitializeDebugWidgets() {
     const auto add_perf_summary_option = [&](const QString& label, u32 seconds) {
         QAction* action = perf_summary_menu->addAction(label);
         action->setCheckable(true);
-        action->setChecked(
-            UISettings::values.perf_summary_seconds.GetValue() == seconds);
+        action->setChecked(UISettings::values.perf_summary_seconds.GetValue() == seconds);
         action->setActionGroup(perf_summary_group);
         connect(action, &QAction::triggered, this, [seconds] {
             UISettings::values.perf_summary_seconds = seconds;
@@ -1628,8 +1626,7 @@ void MainWindow::ConnectWidgetEvents() {
         if (!close_pending) {
             QtCommon::Game::ResetMetadata(false);
             game_list->SetScanEnabled(true);
-            game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Settings);
+            game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
         }
     });
     connect(game_list, &GameList::ConvertToNxRequested, this,
@@ -2220,8 +2217,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
                  emulation_running);
         if (!emulation_running && !close_pending) {
             game_list->SetScanEnabled(true);
-            game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Settings);
+            game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
         }
         if (close_pending) {
             QTimer::singleShot(0, this, &QWidget::close);
@@ -2833,8 +2829,7 @@ void MainWindow::OnEmulationStopped() {
         QTimer::singleShot(0, this, &QWidget::close);
     } else if (!boot_in_progress) {
         game_list->SetScanEnabled(true);
-        game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Settings);
+        game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
     }
 }
 
@@ -3087,8 +3082,7 @@ void MainWindow::OnGameListRemoveInstalledEntry(u64 program_id,
     Common::FS::RemoveDirRecursively(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
                                      "game_list");
     GameListParseCache::Invalidate();
-    game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Settings);
+    game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
 }
 
 void MainWindow::OnGameListRemoveFile(u64 program_id, QtCommon::Game::GameListRemoveTarget target,
@@ -3142,8 +3136,7 @@ void MainWindow::OnGameListSetPlayTime(u64 program_id) {
     if (dialog.exec() == QDialog::Accepted) {
         const u64 total_seconds = dialog.GetTotalSeconds();
         play_time_manager->SetPlayTime(program_id, total_seconds);
-        game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Settings);
+        game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
     }
 }
 
@@ -3155,8 +3148,7 @@ void MainWindow::OnGameListRemovePlayTimeData(u64 program_id) {
     }
 
     play_time_manager->ResetProgramPlayTime(program_id);
-    game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Settings);
+    game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
 }
 
 void MainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_path,
@@ -3341,8 +3333,7 @@ void MainWindow::OnGameListAddDirectory() {
     UISettings::GameDir game_dir{dir_path.toStdString(), false, true};
     if (!UISettings::values.game_dirs.contains(game_dir)) {
         UISettings::values.game_dirs.append(game_dir);
-        game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Settings);
+        game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
     } else {
         LOG_WARNING(Frontend, "Selected directory is already in the game list");
     }
@@ -3605,8 +3596,7 @@ void MainWindow::OnMenuInstallToNAND() {
     Common::FS::RemoveDirRecursively(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
                                      "game_list");
     GameListParseCache::Invalidate();
-    game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Settings);
+    game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
     ui->action_Install_File_NAND->setEnabled(true);
 }
 
@@ -4200,8 +4190,7 @@ void MainWindow::OnConfigure() {
 
     const auto reload = UISettings::values.is_game_list_reload_pending.exchange(false);
     if (reload || Settings::values.language_index.GetValue() != old_language_index) {
-        game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Settings);
+        game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
     }
 
     UISettings::values.configuration_applied = false;
@@ -4635,8 +4624,7 @@ void MainWindow::OnInstallDecryptionKeys() {
     // New keys can change what a dump resolves to: the next scan must start from the files.
     GameListParseCache::Invalidate();
 
-    game_list->PopulateAsync(UISettings::values.game_dirs,
-                                                GameListRefreshReason::Settings);
+    game_list->PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
     OnCheckFirmwareDecryption();
 }
 

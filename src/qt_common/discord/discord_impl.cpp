@@ -196,8 +196,7 @@ bool ReadFrame(HANDLE pipe, DWORD timeout_ms) {
 /// Opens one of discord-ipc-0..9 and completes the handshake. Returns the connected pipe.
 HANDLE ConnectAndHandshake(std::string_view application_id) {
     for (int pipe_index = 0; pipe_index < 10; ++pipe_index) {
-        const std::wstring pipe_name =
-            L"\\\\.\\pipe\\discord-ipc-" + std::to_wstring(pipe_index);
+        const std::wstring pipe_name = L"\\\\.\\pipe\\discord-ipc-" + std::to_wstring(pipe_index);
         if (!WaitNamedPipeW(pipe_name.c_str(), 20)) {
             continue;
         }

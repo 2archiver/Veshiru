@@ -43,8 +43,8 @@
 #include "qt_common/game_list/model.h"
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
-#include "veshiru/game/common.h"
 #include "veshiru/game/carousel.h"
+#include "veshiru/game/common.h"
 #include "veshiru/game/game_grid.h"
 #include "veshiru/game/game_list.h"
 #include "veshiru/game/game_tree.h"
@@ -296,7 +296,7 @@ void GameList::ResetViewMode() {
         item_model->SetFlat(!m_isTreeMode);
         if (!UISettings::values.game_dirs.empty()) {
             item_model->PopulateAsync(UISettings::values.game_dirs,
-                                       GameListRefreshReason::Settings);
+                                      GameListRefreshReason::Settings);
         }
     }
 }

@@ -96,8 +96,8 @@ public:
             const QString version_label = QObject::tr("Version %1").arg(version);
             const QFontMetrics badge_metrics(option.font);
             const int badge_width = badge_metrics.horizontalAdvance(version_label) + 24;
-            const QRect badge(row.right() - badge_width - 14, row.center().y() - 14,
-                              badge_width, 28);
+            const QRect badge(row.right() - badge_width - 14, row.center().y() - 14, badge_width,
+                              28);
             QColor badge_color = selected ? option.palette.highlightedText().color()
                                           : option.palette.highlight().color();
             badge_color.setAlpha(selected ? 35 : 28);

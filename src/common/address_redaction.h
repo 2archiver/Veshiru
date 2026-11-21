@@ -47,8 +47,7 @@ inline bool VersionWordNearby(std::string_view window) {
         }
         const bool left = at == 0 || !(IsLetter(window[at - 1]) || IsDigit(window[at - 1]));
         const std::size_t end = at + word.size();
-        const bool right =
-            end == window.size() || !(IsLetter(window[end]) || IsDigit(window[end]));
+        const bool right = end == window.size() || !(IsLetter(window[end]) || IsDigit(window[end]));
         return left && right;
     };
     const auto contains_word = [&](char first, std::string_view word) {

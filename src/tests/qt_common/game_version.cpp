@@ -46,8 +46,7 @@ TEST_CASE("The loader's display version is the next fallback", "[game_list]") {
           }) == "2.0.0");
 }
 
-TEST_CASE("A base NACP without a version reports 1.0.0; no NACP reports nothing",
-          "[game_list]") {
+TEST_CASE("A base NACP without a version reports 1.0.0; no NACP reports nothing", "[game_list]") {
     CHECK(GameListVersion::Resolve(Inputs{
               .patch_versions = "",
               .control_metadata_version = "",
