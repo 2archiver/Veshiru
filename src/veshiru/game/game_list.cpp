@@ -43,6 +43,7 @@
 #include "qt_common/game_list/model.h"
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
+#include "veshiru/game/common.h"
 #include "veshiru/game/carousel.h"
 #include "veshiru/game/game_grid.h"
 #include "veshiru/game/game_list.h"
@@ -150,7 +151,7 @@ QString GameList::GetLastFilterResultItem() const {
 
     QString file_path;
     for (int row = 0; row < item_model->rowCount(); ++row) {
-        if (!m_currentView->isRowHidden(row)) {
+        if (!m_currentView->isIndexHidden(item_model->index(row, 0))) {
             file_path = item_model->item(row, 0)->data(GameListItemPath::FullPathRole).toString();
         }
     }
