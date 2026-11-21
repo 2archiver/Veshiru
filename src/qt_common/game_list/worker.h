@@ -118,7 +118,9 @@ private:
     /// rows parsed from scratch, and why this refresh ran.
     std::size_t reused_entries = 0;
     std::size_t parsed_entries = 0;
-    GameListRefreshReason reason;
 
     Core::System& system;
+
+    /// Why this refresh ran; declared after system to match the constructor's init list.
+    GameListRefreshReason reason;
 };
