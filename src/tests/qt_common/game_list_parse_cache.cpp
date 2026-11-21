@@ -83,8 +83,7 @@ TEST_CASE("The parse cache is cleared when keys or firmware change", "[game_list
 }
 
 TEST_CASE("Refresh reasons report themselves in the summary log line", "[game_list]") {
-    using GameList::GameListRefreshReason;
-    CHECK(GameList::ToString(GameListRefreshReason::Startup) == "startup");
-    CHECK(GameList::ToString(GameListRefreshReason::Settings) == "settings");
-    CHECK(GameList::ToString(GameListRefreshReason::Watcher) == "watcher");
+    CHECK(ToString(GameListRefreshReason::Startup) == "startup");
+    CHECK(ToString(GameListRefreshReason::Settings) == "settings");
+    CHECK(ToString(GameListRefreshReason::Watcher) == "watcher");
 }

@@ -27,9 +27,9 @@
 // firmware are installed and wherever the on-disk metadata cache is cleared, because a
 // re-parsed file can then produce a different row. It is never written to disk.
 
-namespace GameList {
-
-/// Why a game-list refresh was started; reported in the refresh log line.
+/// Why a game-list refresh was started; reported in the refresh log line. Global like the
+/// GameListWorker / GameListModel types it is passed between (the view class named GameList
+/// would shadow a namespace-qualified spelling inside its own members).
 enum class GameListRefreshReason {
     Startup,  ///< the initial scan after the window opens
     Settings, ///< a settings, tool or emulation-lifecycle change asked for a rescan
@@ -48,6 +48,7 @@ enum class GameListRefreshReason {
     return "unknown";
 }
 
+namespace GameList {
 namespace ParseCache {
 
 /// Everything needed to rebuild a game-list row without touching the file again. Plain

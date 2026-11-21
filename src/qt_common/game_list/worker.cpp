@@ -786,7 +786,7 @@ void GameListWorker::run() {
              elapsed_ms, watch_list.size(), stop_requested.load());
     LOG_INFO(Frontend, "library refresh: {} entries, {} reused, {} parsed, {} ms (reason: {})",
              reused_entries + parsed_entries, reused_entries, parsed_entries, elapsed_ms,
-             GameList::ToString(reason));
+             ToString(reason));
     RecordEvent([this](GameListModel* model) { model->DonePopulating(watch_list); });
     processing_completed.Set();
 }
