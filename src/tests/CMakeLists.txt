@@ -8,6 +8,7 @@ add_executable(tests
     common/artwork_cache.cpp
     common/discord_payload.cpp
     ../qt_common/discord/discord_payload.cpp
+    common/address_redaction.cpp
     qt_common/refresh_coalescer.cpp
     qt_common/game_version.cpp
     ../qt_common/game_list/game_version.cpp
