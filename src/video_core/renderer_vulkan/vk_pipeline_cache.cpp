@@ -50,6 +50,7 @@
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
+#include "video_core/perf_summary.h"
 #include "video_core/pipeline_cache_files.h"
 #include "video_core/renderer_vulkan/async_draw_policy.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
@@ -3291,6 +3292,7 @@ std::string FormatRuntimeBuilds(const RuntimeBuildCounts& counts) {
 void ReportRuntimePipeline(RuntimeBuild kind, std::chrono::steady_clock::duration elapsed,
                            std::string_view shaders, std::chrono::nanoseconds translation_wait,
                            std::chrono::nanoseconds stage_translation) {
+    VideoCore::PerfSummary::CountPipelineBuild();
     auto& builds = runtime_builds;
     std::scoped_lock lock{builds.mutex};
     const size_t index = static_cast<size_t>(kind);

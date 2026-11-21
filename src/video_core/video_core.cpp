@@ -22,6 +22,7 @@
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
+#include "video_core/perf_summary.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_null/renderer_null.h"
 #ifdef HAS_OPENGL
@@ -63,6 +64,8 @@ void CreateGPU(std::optional<Tegra::GPU>& gpu, Core::Frontend::EmuWindow& emu_wi
     VideoCommon::Nx2DownloadTrace::ReadSwitch();
     VideoCommon::ListMacroTrace::ReadSwitch();
     VideoCore::AsyncReadback::ReadSwitch();
+    VideoCore::PerfSummary::ReadSwitch();
+    VideoCore::PerfSummary::LogFlags();
     VideoCommon::Nx2Perf::ReadSwitch();
     VideoCommon::BackX::ReadSwitch();
     Core::GPUDirtyMemoryManager::count_collects = VideoCommon::BackX::g_verify;

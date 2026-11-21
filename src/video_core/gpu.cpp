@@ -37,9 +37,10 @@
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
-#include "video_core/pending_maps.h"
 #include "video_core/gpu_thread.h"
 #include "video_core/gpu_timestamp.h"
+#include "video_core/perf_summary.h"
+#include "video_core/pending_maps.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/host1x/syncpoint_manager.h"
 #include "video_core/memory_manager.h"
@@ -363,6 +364,7 @@ struct GPU::Impl {
             gpu_thread.TickGPU(is_async);
             WaitForSyncOperation(fence);
             sync_wait_ns = AsyncReadback::Now() - wait_start;
+            VideoCore::PerfSummary::CountSyncWait(sync_wait_ns);
         }
         // The GPU thread submitted the downloads without waiting for the host GPU: this thread
         // waits for them and writes them to guest memory, while the GPU thread goes on.

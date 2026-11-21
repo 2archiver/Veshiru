@@ -110,6 +110,7 @@
 // Qt Common //
 #include "qt_common/config/shared_translation.h"
 #include "qt_common/config/uisettings.h"
+#include "video_core/perf_summary.h"
 
 #include "qt_common/abstract/frontend.h"
 
@@ -1355,6 +1356,29 @@ void MainWindow::InitializeDebugWidgets() {
     controller_dialog = new ControllerDialog(QtCommon::system->HIDCore(), input_subsystem, this);
     controller_dialog->hide();
     debug_menu->addAction(controller_dialog->toggleViewAction());
+
+    // The periodic performance summary: one greppable Info line per window (Ctrl+F10 dumps one
+    // on demand). Off by default: it costs nothing but a branch when no window is set.
+    auto* perf_summary_menu = new QMenu(tr("Performance Summary"), this);
+    auto* perf_summary_group = new QActionGroup(this);
+    const auto add_perf_summary_option = [&](const QString& label, u32 seconds) {
+        QAction* action = perf_summary_menu->addAction(label);
+        action->setCheckable(true);
+        action->setChecked(
+            UISettings::values.perf_summary_seconds.GetValue() == seconds);
+        action->setActionGroup(perf_summary_group);
+        connect(action, &QAction::triggered, this, [seconds] {
+            UISettings::values.perf_summary_seconds = seconds;
+            VideoCore::PerfSummary::SetWindow(seconds);
+        });
+    };
+    add_perf_summary_option(tr("Off"), 0);
+    add_perf_summary_option(tr("Every 10 s"), 10);
+    add_perf_summary_option(tr("Every 30 s"), 30);
+    debug_menu->addMenu(perf_summary_menu);
+    QAction* perf_summary_dump = debug_menu->addAction(tr("Dump Performance Summary Now"));
+    connect(perf_summary_dump, &QAction::triggered, this,
+            [] { VideoCore::PerfSummary::RequestDump(); });
 }
 
 void MainWindow::InitializeRecentFileMenuActions() {
@@ -1441,6 +1465,8 @@ void MainWindow::InitializeHotkeys() {
                 Qt::QueuedConnection);
     };
 
+    connect_shortcut(QStringLiteral("Dump Performance Summary"),
+                     [] { VideoCore::PerfSummary::RequestDump(); });
     connect_shortcut(QStringLiteral("Exit Fullscreen"), [&] {
         if (emulation_running && ui->action_Fullscreen->isChecked()) {
             ui->action_Fullscreen->setChecked(false);
@@ -2155,6 +2181,9 @@ bool MainWindow::ConfirmLowRamBoot(const QString& filename,
 
 void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletParameters params,
                           StartGameType type) {
+    // The performance summary window the player chose; VESHIRU_PERF_SUMMARY overrides it in
+    // VideoCore::CreateGPU when the environment sets one.
+    VideoCore::PerfSummary::SetWindow(UISettings::values.perf_summary_seconds.GetValue());
 #ifdef VESHIRU_NX_TOOLS
     if (nx_metadata_write_in_progress) {
         QMessageBox::information(this, tr("NX Archive"),

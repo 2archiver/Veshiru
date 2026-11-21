@@ -23,7 +23,9 @@
 #include "video_core/capture.h"
 #include "video_core/gpu.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/perf_summary.h"
 #include "video_core/present.h"
+#include "video_core/render_trace.h"
 #include "video_core/render_trace.h"
 #include "video_core/renderer_vulkan/present/util.h"
 #ifdef HAS_RESHADE
@@ -365,6 +367,11 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
 
     gpu.RendererFrameEndNotify();
     rasterizer.TickFrame();
+#ifdef HAS_LSFG
+    VideoCore::PerfSummary::OnPresent(static_cast<u32>(queued));
+#else
+    VideoCore::PerfSummary::OnPresent(0);
+#endif
     if (trace) {
         const auto end = std::chrono::steady_clock::now();
         const auto ms = [](auto duration) {

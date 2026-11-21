@@ -158,6 +158,9 @@ struct Values {
                                            Category::UiGeneral};
 #endif
 
+    // The periodic performance summary: 0 = off, otherwise seconds per window.
+    Setting<u32> perf_summary_seconds{linkage, 0, "perf_summary_seconds", Category::Ui};
+
     // Discord Rich Presence is disabled until the user supplies their own application ID.
     Setting<bool> enable_discord_presence{linkage, false, "enable_discord_presence", Category::Ui};
     Setting<std::string> discord_application_id{linkage, DEFAULT_DISCORD_APPLICATION_ID,
@@ -256,7 +259,7 @@ void SaveWindowState();
 void RestoreWindowState(std::unique_ptr<QtConfig>& qtConfig);
 
 // sync with uisettings.cpp
-extern const std::array<Shortcut, 32> default_hotkeys;
+extern const std::array<Shortcut, 33> default_hotkeys;
 
 } // namespace UISettings
 
