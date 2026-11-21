@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <exception>
+#include <functional>
 #include <limits>
 #include <random>
 #include <thread>
@@ -51,7 +52,11 @@ public:
     }
     void InvalidateGPUCache() override {}
     void UnmapMemory(DAddr, u64) override {}
-    void ModifyGPUMemory(size_t, GPUVAddr, u64) override {}
+    void ModifyGPUMemory(size_t, GPUVAddr, u64) override {
+        if (on_modify) {
+            on_modify();
+        }
+    }
     void FlushAndInvalidateRegion(DAddr, u64, VideoCommon::CacheType) override {}
     void WaitForIdle() override {}
     void FragmentBarrier() override {}
@@ -62,6 +67,8 @@ public:
         std::terminate();
     }
     void AccelerateInlineToMemory(GPUVAddr, size_t, std::span<const u8>) override {}
+
+    std::function<void()> on_modify;
 };
 
 } // namespace
@@ -99,6 +106,33 @@ TEST_CASE("A 40-bit address space maps Switch 2 VA past 128 GiB", "[memory_manag
     // released backing after this would free memory the page table still points at.
     memory.Unmap(last_page, 0x2000);
     REQUIRE(memory.GpuToCpuAddress(last_page) == last_dev);
+}
+
+TEST_CASE("Mapping generation is unavailable until page-table updates complete",
+          "[memory_manager]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    Core::DeviceMemory physical;
+    Tegra::MaxwellDeviceMemoryManager device_memory{physical};
+    NullRasterizer rasterizer;
+    Tegra::MemoryManager memory{system, device_memory, 32, 1ULL << 31, 16};
+    memory.BindRasterizer(&rasterizer);
+
+    const auto initial_generation = memory.StableMappingGeneration();
+    REQUIRE(initial_generation.has_value());
+    CHECK(*initial_generation == 0);
+
+    bool observed_update = false;
+    rasterizer.on_modify = [&] {
+        observed_update = true;
+        CHECK_FALSE(memory.StableMappingGeneration().has_value());
+    };
+    memory.Map(0x10000, 0x1000, 0x1000, Tegra::PTEKind::PITCH, false);
+
+    CHECK(observed_update);
+    const auto completed_generation = memory.StableMappingGeneration();
+    REQUIRE(completed_generation.has_value());
+    CHECK(*completed_generation > *initial_generation);
 }
 
 TEST_CASE("Device space freed and mapped again every frame stays in place", "[memory_manager]") {

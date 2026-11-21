@@ -640,10 +640,6 @@ if (NOT VESHIRU_STATIC_ROOM)
         find_package(SDL3)
     endif()
 
-    if (USE_DISCORD_PRESENCE)
-        find_package(DiscordRPC)
-    endif()
-
     if (ENABLE_CUBEB)
         find_package(cubeb)
     endif()

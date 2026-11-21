@@ -39,6 +39,8 @@ extern template class Setting<unsigned long long>;
 
 namespace UISettings {
 
+inline constexpr char DEFAULT_DISCORD_APPLICATION_ID[] = "";
+
 bool IsDarkTheme();
 
 struct ContextualShortcut {
@@ -156,8 +158,11 @@ struct Values {
                                            Category::UiGeneral};
 #endif
 
-    // Discord RPC
+    // Discord Rich Presence is disabled until the user supplies their own application ID.
     Setting<bool> enable_discord_presence{linkage, false, "enable_discord_presence", Category::Ui};
+    Setting<std::string> discord_application_id{linkage, DEFAULT_DISCORD_APPLICATION_ID,
+                                               "discord_application_id",
+                                               Category::Ui};
 
     // Screenshots
     Setting<bool> enable_screenshot_save_as{linkage, true, "enable_screenshot_save_as",

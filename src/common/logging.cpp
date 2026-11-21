@@ -198,6 +198,10 @@ std::string SanitizeLogMessageImpl(std::string_view message, bool censor_usernam
             std::regex::icase};
         text = std::regex_replace(text, credential, "$1$2<redacted>");
     }
+    static const std::regex ipv4_address{R"(\b(?:\d{1,3}\.){3}\d{1,3}\b)"};
+    static const std::regex mac_address{R"(\b(?:[[:xdigit:]]{2}[:-]){5}[[:xdigit:]]{2}\b)"};
+    text = std::regex_replace(text, ipv4_address, "<ip>");
+    text = std::regex_replace(text, mac_address, "<mac>");
 #ifndef __ANDROID__
     if (censor_username) {
         static const std::string username = [] {

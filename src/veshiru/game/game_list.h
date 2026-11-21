@@ -29,6 +29,7 @@ class GameCard;
 class GameListModel;
 class GameTree;
 class GameGrid;
+class GameVersionList;
 class GameListSearchField;
 class ControllerNavigation;
 class GameListWorker;
@@ -167,6 +168,7 @@ private:
     GameTree* tree_view = nullptr;
     GameGrid* grid_view = nullptr;
     GameCarousel* carousel_view = nullptr;
+    GameVersionList* version_list_view = nullptr;
     GameListModel* item_model = nullptr;
     Settings::GameListMode game_list_mode;
 

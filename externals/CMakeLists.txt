@@ -105,20 +105,6 @@ AddDependentPackages(vulkan-headers vulkan-utility-libraries)
 # frozen
 AddJsonPackage(frozen)
 
-# DiscordRPC
-if (USE_DISCORD_PRESENCE)
-    if (ARCHITECTURE_arm64)
-        add_compile_definitions(RAPIDJSON_ENDIAN=RAPIDJSON_LITTLEENDIAN)
-    endif()
-
-    AddJsonPackage(discord-rpc)
-
-    if (DiscordRPC_ADDED)
-        target_include_directories(discord-rpc INTERFACE ${DiscordRPC_SOURCE_DIR}/include)
-        add_library(DiscordRPC::discord-rpc ALIAS discord-rpc)
-    endif()
-endif()
-
 # SimpleIni
 AddJsonPackage(simpleini)
 

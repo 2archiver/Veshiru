@@ -51,13 +51,9 @@ if (USE_DISCORD_PRESENCE)
     target_sources(qt_common PRIVATE
         discord/discord_impl.cpp
         discord/discord_impl.h
+        discord/discord_payload.cpp
+        discord/discord_payload.h
     )
-    target_link_libraries(qt_common PUBLIC DiscordRPC::discord-rpc httplib::httplib)
-
-    if (VESHIRU_USE_BUNDLED_OPENSSL)
-        target_link_libraries(qt_common PUBLIC OpenSSL::SSL OpenSSL::Crypto)
-    endif()
-
     target_compile_definitions(qt_common PUBLIC USE_DISCORD_PRESENCE)
 endif()
 

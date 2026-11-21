@@ -77,6 +77,10 @@ void ConfigureWeb::SetConfiguration() {
     VerifyLogin();
 
     ui->toggle_discordrpc->setChecked(UISettings::values.enable_discord_presence.GetValue());
+    ui->discordApplicationIdEdit->setText(
+        QString::fromStdString(UISettings::values.discord_application_id.GetValue()));
+    ui->discordApplicationIdEdit->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(QStringLiteral("[0-9]{0,32}")), ui->discordApplicationIdEdit));
 }
 
 void ConfigureWeb::GenerateToken() {
@@ -94,6 +98,7 @@ void ConfigureWeb::GenerateToken() {
 
 void ConfigureWeb::ApplyConfiguration() {
     UISettings::values.enable_discord_presence = ui->toggle_discordrpc->isChecked();
+    UISettings::values.discord_application_id = ui->discordApplicationIdEdit->text().toStdString();
     Settings::values.eden_username = ui->edit_username->text().toStdString();
     Settings::values.eden_token = ui->edit_token->text().toStdString();
 }

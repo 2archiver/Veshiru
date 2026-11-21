@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Veshiru Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: 2018 Citra Emulator Project
@@ -8,6 +8,7 @@
 
 #include "discord.h"
 
+#include <cstdint>
 #include <string>
 
 namespace Core {
@@ -16,21 +17,21 @@ class System;
 
 namespace DiscordRPC {
 
-class DiscordImpl : public DiscordInterface {
+class DiscordImpl final : public DiscordInterface {
 public:
-    DiscordImpl(Core::System& system_);
+    DiscordImpl(Core::System& system_, std::string application_id);
     ~DiscordImpl() override;
 
     void Pause() override;
     void Update() override;
 
 private:
-    std::string GetGameString(const std::string& title);
-    void UpdateGameStatus(std::string_view game_url, bool use_default);
+    void SetBrowsing();
 
-    std::string game_title{};
-    std::string game_version{};
     Core::System& system;
+    std::string application_id;
+    std::string current_game_key;
+    std::int64_t game_started_at{};
 };
 
 } // namespace DiscordRPC

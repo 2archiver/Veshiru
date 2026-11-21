@@ -6,6 +6,37 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+### Added
+
+- **Discord Rich Presence over a local IPC client.** Presence is opt-in, uses a user-supplied
+  Discord Application ID (none is bundled), and only sends the game title, version and elapsed-time
+  timestamp plus the required local IPC metadata. Artwork lookups and the third-party RPC library
+  were removed. `[payload tests added but not run; Windows IPC and live Discord behavior unverified]`
+- **Versioned List game-library mode.** A new compact, keyboard/controller-friendly card list shows
+  cover art, title, content type, play time and the installed game version at a glance.
+  `[unverified in a running GUI]`
+
+### Changed
+
+- **Vulkan storage-binding cache reads only stable GPU mapping generations.** Cache hits are
+  bypassed while a page-table update is in progress, so a service thread cannot reuse a binding
+  against a partially updated map. Adapted from Orchid's `buffer_cache: reuse storage bindings
+  while GPU mappings are stable` change. `[unverified in gameplay; mapping-generation test added but not run]`
+- **Game-directory updates are debounced by 30 ms.** Bursts of filesystem notifications now trigger
+  one asynchronous rescan instead of repeatedly clearing and rebuilding the library. Manual and
+  settings-driven refreshes remain immediate. `[unverified under an OS filesystem watcher]`
+- **Diagnostic logs redact private identifiers**, including emulated console serials, device and
+  account names, network-interface labels, configured endpoints, controller/audio identifiers, IP
+  addresses, and MAC addresses. `[unverified: tests added but not run]`
+
+### Performance status
+
+- The supplied 2.2.0 log shows the native game rate varying well below 30 FPS in gameplay even while
+  frame generation queues extra presents. Its frame and GPU-readback diagnostics point to runtime
+  workload bottlenecks, not a proven single fix. No general emulator-core optimization is claimed
+  or a 30 FPS result promised without a repeatable scene benchmark. See
+  [the 2.3 performance review](docs/2.3-performance-review.md).
+
 ## [2.2.0] - 2026-11-20
 
 Every entry carries a tag. `[verified: <how>]` means it was run, or a CI job proved it; a green

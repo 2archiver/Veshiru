@@ -4489,9 +4489,10 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
         (is_written ? 1U : 0U) | (native_pointer ? 2U : 0U) | (table_pointer ? 4U : 0U) |
         (compute ? 8U : 0U);
     const size_t owner = gpu_memory->GetID() + 1;
-    const u64 serial = gpu_memory->MapSerial();
+    const auto generation = gpu_memory->StableMappingGeneration();
+    const u64 serial = generation.value_or(gpu_memory->MapSerial());
     auto& set = binding_cache[((gpu_addr ^ next_qword ^ flags) * 0x9E3779B97F4A7C15ULL) >> 55];
-    for (size_t way = 0; way < ways; ++way) {
+    for (size_t way = 0; generation && way < ways; ++way) {
         const CachedBinding& cached = set[way];
         if (cached.owner == owner && cached.gpu_addr == gpu_addr &&
             cached.next_qword == next_qword && cached.serial == serial &&
@@ -4607,8 +4608,10 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
             .buffer_id = BufferId{},
         };
     }();
-    std::rotate(set.begin(), set.end() - 1, set.end());
-    set[0] = {owner, gpu_addr, next_qword, serial, alignment, flags, binding};
+    if (generation) {
+        std::rotate(set.begin(), set.end() - 1, set.end());
+        set[0] = {owner, gpu_addr, next_qword, serial, alignment, flags, binding};
+    }
     return binding;
 }
 
