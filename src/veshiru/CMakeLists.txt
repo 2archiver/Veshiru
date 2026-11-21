@@ -252,6 +252,7 @@ add_executable(veshiru
     data_widget.ui
     eglantine_dialog.h eglantine_dialog.cpp
     main_window.h main_window.cpp main.ui
+    notification_center.h notification_center.cpp
 
     configuration/system/new_user_dialog.h configuration/system/new_user_dialog.cpp configuration/system/new_user_dialog.ui
     configuration/system/profile_avatar_dialog.h configuration/system/profile_avatar_dialog.cpp
@@ -284,15 +285,6 @@ if (WIN32 AND ENABLE_RENHDRUM AND RENHDRUM_DLL)
             "${RENHDRUM_DLL}" "$<TARGET_FILE_DIR:veshiru>/renhdrum.dll"
         COMMENT "Bundling renhdrum.dll next to the emulator"
         VERBATIM)
-endif()
-
-if (VESHIRU_CRASH_DUMPS)
-    target_sources(veshiru PRIVATE
-        breakpad.cpp
-        breakpad.h)
-
-    target_link_libraries(veshiru PRIVATE libbreakpad_client)
-    target_compile_definitions(veshiru PRIVATE VESHIRU_CRASH_DUMPS)
 endif()
 
 if (ENABLE_RESHADE)

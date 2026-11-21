@@ -331,8 +331,6 @@ cmake_dependent_option(VESHIRU_ROOM_STANDALONE "Enable standalone room executabl
 
 cmake_dependent_option(VESHIRU_CMD "Compile the veshiru-cmd executable" ON "NOT ANDROID" OFF)
 
-cmake_dependent_option(VESHIRU_CRASH_DUMPS "Compile crash dump (Minidump) support" OFF "WIN32 OR LINUX" OFF)
-
 option(VESHIRU_DOWNLOAD_TIME_ZONE_DATA "Always download time zone binaries" ON)
 set(VESHIRU_TZDB_PATH "" CACHE STRING "Path to a pre-downloaded timezone database")
 
@@ -723,19 +721,6 @@ if (NOT VESHIRU_STATIC_ROOM AND NOT (VESHIRU_USE_BUNDLED_FFMPEG OR VESHIRU_USE_E
     set_property(GLOBAL APPEND PROPERTY CPM_PACKAGE_NAMES FFmpeg)
     set_property(GLOBAL APPEND PROPERTY CPM_PACKAGE_SHAS "unknown (system)")
     set_property(GLOBAL APPEND PROPERTY CPM_PACKAGE_URLS "https://github.com/FFmpeg/FFmpeg")
-endif()
-
-if (WIN32 AND VESHIRU_CRASH_DUMPS)
-    message(STATUS "VESHIRU_CRASH_DUMPS is unimplemented on Windows. Check back later.")
-    # set(BREAKPAD_VER "breakpad-c89f9dd")
-    # download_bundled_external("breakpad/" ${BREAKPAD_VER} "breakpad-win" BREAKPAD_PREFIX "c89f9dd")
-
-    # set(BREAKPAD_CLIENT_INCLUDE_DIR "${BREAKPAD_PREFIX}/include")
-    # set(BREAKPAD_CLIENT_LIBRARY "${BREAKPAD_PREFIX}/lib/libbreakpad_client.lib")
-
-    # add_library(libbreakpad_client INTERFACE IMPORTED)
-    # target_link_libraries(libbreakpad_client INTERFACE "${BREAKPAD_CLIENT_LIBRARY}")
-    # target_include_directories(libbreakpad_client INTERFACE "${BREAKPAD_CLIENT_INCLUDE_DIR}")
 endif()
 
 # Include source code

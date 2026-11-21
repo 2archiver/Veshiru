@@ -3,9 +3,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <string>
 
 #include "common/scm_rev.h"
+#include "qt_common/discord/discord_application.h"
 #include "qt_common/discord/discord_payload.h"
 
 TEST_CASE("Discord presence payload includes only approved game fields") {
@@ -24,10 +27,34 @@ TEST_CASE("Discord presence payload includes only approved game fields") {
     CHECK(payload.find("\"timestamps\":{\"start\":1800000000}") != std::string::npos);
     CHECK(payload.find("\"pid\":42") != std::string::npos);
     CHECK(payload.find("\"nonce\":\"nonce-1\"") != std::string::npos);
-    CHECK(payload.find("assets") == std::string::npos);
+    // The only asset is Veshiru's own icon; no box art, user avatar or local file is attached.
+    CHECK(payload.find("\"assets\":{\"large_image\":\"" +
+                       std::string(DiscordRPC::PresenceIconUrl()) +
+                       "\",\"large_text\":\"Veshiru\"}") != std::string::npos);
     CHECK(payload.find("party") == std::string::npos);
     CHECK(payload.find("secrets") == std::string::npos);
     CHECK(DiscordRPC::BuildPresencePayload(activity).started_at == 1'800'000'000);
+}
+
+TEST_CASE("Discord omits the version when the game has none") {
+    const DiscordRPC::ActivityData activity{
+        .browsing = false,
+        .game_title = "Example Adventure",
+        .game_version = "",
+        .started_at = 0,
+    };
+    const std::string payload = DiscordRPC::BuildSetActivityPayload(activity, 1, "n");
+    CHECK(payload.find("Version ") == std::string::npos);
+    CHECK(payload.find("\"state\":\"" + DiscordRPC::PresenceName() + "\"") !=
+          std::string::npos);
+}
+
+TEST_CASE("Discord ships its own application id so users configure nothing") {
+    const std::string id = DiscordRPC::VESHIRU_DISCORD_APPLICATION_ID;
+    CHECK_FALSE(id.empty());
+    CHECK(id.size() <= 32);
+    CHECK(std::all_of(id.begin(), id.end(),
+                      [](unsigned char c) { return std::isdigit(c) != 0; }));
 }
 
 TEST_CASE("Discord browsing payload does not disclose game details") {

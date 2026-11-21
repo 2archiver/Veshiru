@@ -10628,7 +10628,7 @@ Ao selecionar &quot;Do Eden&quot;, os dados salvos anteriores armazenados no Egl
     <message>
         <location filename="../../src/veshiru/updater/update_dialog.ui" line="20"/>
         <location filename="../../src/veshiru/updater/update_dialog.cpp" line="31"/>
-        <source>&lt;a href=&quot;%1&quot;&gt;View on Forgejo&lt;/a&gt;</source>
+        <source>&lt;a href=&quot;%1&quot;&gt;View on GitHub&lt;/a&gt;</source>
         <translation type="unfinished"/>
     </message>
     <message>

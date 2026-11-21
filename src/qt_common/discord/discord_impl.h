@@ -19,7 +19,7 @@ namespace DiscordRPC {
 
 class DiscordImpl final : public DiscordInterface {
 public:
-    DiscordImpl(Core::System& system_, std::string application_id);
+    explicit DiscordImpl(Core::System& system_);
     ~DiscordImpl() override;
 
     void Pause() override;
@@ -29,7 +29,6 @@ private:
     void SetBrowsing();
 
     Core::System& system;
-    std::string application_id;
     std::string current_game_key;
     std::int64_t game_started_at{};
 };

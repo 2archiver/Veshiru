@@ -13,8 +13,6 @@
 #include <intrin.h>
 #include <windows.h>
 
-#include <dbghelp.h>
-
 #include "common/logging.h"
 #include "common/windows/crash_handler.h"
 
@@ -23,18 +21,12 @@
 namespace Common::Windows {
 namespace {
 
-using MiniDumpWriteDumpFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
-                                          PMINIDUMP_EXCEPTION_INFORMATION,
-                                          PMINIDUMP_USER_STREAM_INFORMATION,
-                                          PMINIDUMP_CALLBACK_INFORMATION);
 using GetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PWSTR*);
 
 // Everything the handler needs is resolved at install: loading a DLL from a crashed process can
 // deadlock on the loader lock.
-MiniDumpWriteDumpFn write_dump{};
 GetThreadDescriptionFn get_thread_description{};
 LPTOP_LEVEL_EXCEPTION_FILTER previous_filter{};
-wchar_t dump_path[MAX_PATH]{};
 std::atomic<DWORD> reporting_thread{};
 
 struct CodeAddress {
@@ -102,26 +94,13 @@ void Report(EXCEPTION_POINTERS* pointers, const char* fail_fast) {
                   thread_name, stack);
     }
 
-    if (!write_dump) {
-        return;
-    }
-    const HANDLE file = CreateFileW(dump_path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                    FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        return;
-    }
-    MINIDUMP_EXCEPTION_INFORMATION information{GetCurrentThreadId(), pointers, FALSE};
-    const BOOL written = write_dump(GetCurrentProcess(), GetCurrentProcessId(), file,
-                                    MiniDumpWithThreadInfo, &information, nullptr, nullptr);
-    const DWORD error = written ? 0 : GetLastError();
-    CloseHandle(file);
-    LOG_CRASH("Host crash: minidump of process {} {} ({:#x})", GetCurrentProcessId(),
-              written ? "written next to the log as eden_crash.dmp" : "failed", error);
+    // FmtCrashMessage writes this line straight to the log file and flushes it, so the crash
+    // report survives without a dump file or a second log flush here.
 }
 
-// Reports a fail-fast. The dump gets the context that RtlCaptureContext captures here, as a
-// 0xC0000409 exception at `address`, the C runtime's call into the handler. A debugger walks from
-// here up through the C runtime frames to the failing caller.
+// Reports a fail-fast with the context RtlCaptureContext captures here, as a 0xC0000409 exception
+// at `address`, the C runtime's call into the handler. The logged stack walks from here up through
+// the C runtime frames to the failing caller.
 void ReportFailFast(const char* failure, void* address) {
     CONTEXT context{};
     RtlCaptureContext(&context);
@@ -175,15 +154,7 @@ void OnInvalidParameter(const wchar_t* expression, const wchar_t* function, cons
 
 } // Anonymous namespace
 
-void InstallCrashHandler(const std::filesystem::path& dump_directory) {
-    const std::wstring path = (dump_directory / "eden_crash.dmp").wstring();
-    if (path.size() < MAX_PATH) {
-        std::wmemcpy(dump_path, path.c_str(), path.size() + 1);
-        if (const HMODULE dbghelp = LoadLibraryW(L"dbghelp.dll")) {
-            write_dump = reinterpret_cast<MiniDumpWriteDumpFn>(
-                reinterpret_cast<void*>(GetProcAddress(dbghelp, "MiniDumpWriteDump")));
-        }
-    }
+void InstallCrashHandler() {
     get_thread_description = reinterpret_cast<GetThreadDescriptionFn>(reinterpret_cast<void*>(
         GetProcAddress(GetModuleHandleW(L"KernelBase.dll"), "GetThreadDescription")));
     previous_filter = SetUnhandledExceptionFilter(OnUnhandledException);

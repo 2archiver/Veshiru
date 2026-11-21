@@ -345,7 +345,7 @@ void FixProfiles() {
            "delete all orphaned profiles, and move your copied contents to the good "
            "profile.<br><br>"
            "Still confused? See the <a "
-           "href='https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/"
+           "href='https://github.com/2archiver/Veshiru/blob/main/docs/user/"
            "Orphaned.md'>help page</a>.<br>")
             .arg(qorphaned, qgood));
 

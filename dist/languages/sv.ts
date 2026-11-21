@@ -10690,8 +10690,8 @@ Om du väljer ”Från Eden” tas tidigare sparade data bort som lagrats i Egla
     <message>
         <location filename="../../src/veshiru/updater/update_dialog.ui" line="20"/>
         <location filename="../../src/veshiru/updater/update_dialog.cpp" line="31"/>
-        <source>&lt;a href=&quot;%1&quot;&gt;View on Forgejo&lt;/a&gt;</source>
-        <translation>&lt;a href=&quot;%1&quot;&gt;Visa på Forgejo&lt;/a&gt;</translation>
+        <source>&lt;a href=&quot;%1&quot;&gt;View on GitHub&lt;/a&gt;</source>
+        <translation>&lt;a href=&quot;%1&quot;&gt;Visa på GitHub&lt;/a&gt;</translation>
     </message>
     <message>
         <location filename="../../src/veshiru/updater/update_dialog.ui" line="33"/>

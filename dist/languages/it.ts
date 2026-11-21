@@ -10662,7 +10662,7 @@ Selezionando &quot;Da Eden&quot;, i dati di salvataggio pre-esistenti in Eglanti
     <message>
         <location filename="../../src/veshiru/updater/update_dialog.ui" line="20"/>
         <location filename="../../src/veshiru/updater/update_dialog.cpp" line="31"/>
-        <source>&lt;a href=&quot;%1&quot;&gt;View on Forgejo&lt;/a&gt;</source>
+        <source>&lt;a href=&quot;%1&quot;&gt;View on GitHub&lt;/a&gt;</source>
         <translation type="unfinished"/>
     </message>
     <message>

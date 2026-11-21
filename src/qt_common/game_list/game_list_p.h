@@ -177,6 +177,9 @@ public:
     static constexpr int FileTypeRole = SortRole + 4;
     static constexpr int HasIconRole = SortRole + 5;
     static constexpr int VersionRole = SortRole + 6;
+    /// True on the row the worker keeps for a game whose file moved or was deleted, so a view
+    /// can mark it without comparing a translated string.
+    static constexpr int MissingRole = SortRole + 7;
 
     GameListItemPath() = default;
     GameListItemPath(const QString& game_path, const std::vector<u8>& picture_data,

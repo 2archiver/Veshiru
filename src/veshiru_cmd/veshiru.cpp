@@ -518,11 +518,7 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     Common::Log::SetColorConsoleBackendEnabled(true);
     Common::Log::Start();
 #ifdef _WIN32
-    // EDEN_NX2_CRASH_DUMP=<dir> puts the dump somewhere other than the log directory.
-    const char* const crash_dump_dir = std::getenv("EDEN_NX2_CRASH_DUMP");
-    Common::Windows::InstallCrashHandler(
-        crash_dump_dir ? std::filesystem::path{crash_dump_dir}
-                       : Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir));
+    Common::Windows::InstallCrashHandler();
 #endif
 
     if (argc > 1 && std::string_view{argv[1]} == "--build-warm") {
