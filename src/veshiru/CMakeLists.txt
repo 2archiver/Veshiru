@@ -154,6 +154,8 @@ add_executable(veshiru
     configuration/configure_ui.cpp
     configuration/configure_ui.h
     configuration/configure_ui.ui
+    configuration/configure_hd_rumble.cpp
+    configuration/configure_hd_rumble.h
     configuration/configure_vibration.cpp
     configuration/configure_vibration.h
     configuration/configure_vibration.ui
@@ -268,6 +270,20 @@ add_custom_command(TARGET veshiru POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${PROJECT_SOURCE_DIR}/dist/nx2_switches.txt" "$<TARGET_FILE_DIR:veshiru>/nx2_switches.txt"
     VERBATIM)
+
+# RenHDrum is loaded at run time from next to the executable (input_common/drivers/renhdrum_pad).
+# RENHDRUM_DLL is the library the packager bundles; without it the build is the same, and the
+# controllers keep the standard rumble until a user adds the file.
+if (WIN32 AND ENABLE_RENHDRUM AND RENHDRUM_DLL)
+    if (NOT EXISTS "${RENHDRUM_DLL}")
+        message(FATAL_ERROR "RENHDRUM_DLL does not exist: ${RENHDRUM_DLL}")
+    endif()
+    add_custom_command(TARGET veshiru POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${RENHDRUM_DLL}" "$<TARGET_FILE_DIR:veshiru>/renhdrum.dll"
+        COMMENT "Bundling renhdrum.dll next to the emulator"
+        VERBATIM)
+endif()
 
 if (VESHIRU_CRASH_DUMPS)
     target_sources(veshiru PRIVATE

@@ -8,8 +8,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 #include "common/container/unordered_map.h"
 
 #include <SDL3/SDL.h>
@@ -22,6 +24,7 @@ union SDL_Event;
 
 namespace InputCommon {
 
+class RenHDrumPad;
 class SDLJoystick;
 
 using ButtonBindings =
@@ -37,8 +40,13 @@ public:
     /// Unregisters SDL device factories and shut them down.
     ~SDLDriver() override;
 
-    /// Pumps SDL events and restarts the motion sensors of controllers whose reports stopped.
+    /// Pumps SDL events, sends the HD rumble writes that are due, and restarts the motion sensors
+    /// of controllers whose reports stopped.
     void PumpEvents();
+
+    /// Emulation paused or stopped: silences every controller HD rumble is playing. Safe from any
+    /// thread.
+    void StopHdRumble();
 
     /// Handle SDL_Events for joysticks from SDL_PollEvent
     void HandleGameControllerEvent(const SDL_Event& event);
@@ -78,6 +86,9 @@ private:
 
     /// Needs to be called before SDL_QuitSubSystem.
     void CloseJoysticks();
+
+    std::vector<std::shared_ptr<RenHDrumPad>> CollectHdRumblePads();
+    void TickHdRumble();
 
     /// Takes all vibrations from the queue and sends the command to the controller
     void SendVibrations();

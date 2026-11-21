@@ -206,3 +206,16 @@ License: MIT
 Files: third_party_notices/Practical-RIFE.txt
 Copyright: 2021 hzwer
 License: MIT
+
+Files: externals/renhdrum/renhdrum.h
+Copyright: 2026 Three-Dola
+License: MIT OR Apache-2.0
+Comment: Public C ABI header of RenHDrum v0.5.0, https://github.com/trzz1214/RenHDrum
+
+Files: third_party_notices/RenHDrum.txt
+Copyright: 2026 Three-Dola
+           2001-2023 Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry,
+           CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo, Mozilla, Amazon
+License: MIT AND BSD-3-Clause
+Comment: Notices for the prebuilt renhdrum.dll (RenHDrum v0.5.0, which statically links
+         libopus 1.5.2) that the Windows release packages include

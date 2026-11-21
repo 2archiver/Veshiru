@@ -104,6 +104,7 @@ add_executable(tests
     video_core/framebuffer_clear_layers.cpp
     video_core/framebuffer_limits.cpp
     video_core/texture_swizzle.cpp
+    video_core/sparse_spill_report.cpp
     video_core/unbacked_fallback.cpp
     video_core/eviction_age.cpp
     video_core/host_memory_limit.cpp
@@ -215,6 +216,7 @@ add_executable(tests
     core/nextendo_redirect.cpp
     core/thread_startup_policy.cpp
     core/home_menu_content.cpp
+    core/add_on_content_index.cpp
     core/nup_writer.cpp
     core/nup_metadata.cpp
     core/nup_read_bench.cpp
@@ -390,7 +392,8 @@ add_test(NAME shader_translation_tests COMMAND shader_translation_tests)
 
 if (NOT ANDROID)
     target_sources(tests PRIVATE input_common/joycon_subcommand_response.cpp
-                                 input_common/rumble_mapping.cpp)
+                                 input_common/rumble_mapping.cpp
+                                 input_common/xbox_hd_rumble.cpp)
     target_link_libraries(tests PRIVATE SDL3::SDL3)
 
     add_executable(config_tests

@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -216,7 +218,22 @@ MemoryAllocator::MemoryAllocator(const Device &device_)
     }
 }
 
-MemoryAllocator::~MemoryAllocator() = default;
+MemoryAllocator::~MemoryAllocator() {
+    // The warning is only logged when a spill happens, so the last interval's counters would
+    // otherwise never be printed.
+    SparseSpillReport::Counters total;
+    {
+        std::scoped_lock lock{sparse_spill_mutex};
+        total = sparse_spill_report.Total();
+    }
+    if (total.tiles != 0 || total.failed != 0) {
+        LOG_INFO(Render_Vulkan,
+                 "Sparse texture tiles outside device-local memory this session: {} tiles "
+                 "({:.1f} MiB), {} that no heap had room for",
+                 total.tiles, static_cast<double>(total.bytes) / (1024.0 * 1024.0),
+                 total.failed);
+    }
+}
 
 vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo &ci, bool dedicated) const
 {
@@ -439,6 +456,7 @@ VmaAllocation MemoryAllocator::AllocateSparseMemory(const VkMemoryRequirements &
         if (spill.memoryTypeBits != 0) {
             result = vmaAllocateMemory(allocator, &requirements, &spill, &allocation, &info);
         }
+        NoteSparseSpill(requirements.size, result == VK_SUCCESS);
     }
     if (result != VK_SUCCESS) {
         return VK_NULL_HANDLE;
@@ -446,6 +464,30 @@ VmaAllocation MemoryAllocator::AllocateSparseMemory(const VkMemoryRequirements &
     memory = info.deviceMemory;
     offset = info.offset;
     return allocation;
+}
+
+void MemoryAllocator::NoteSparseSpill(VkDeviceSize size, bool placed) const {
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    const s64 now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    std::optional<SparseSpillReport::Report> report;
+    {
+        std::scoped_lock lock{sparse_spill_mutex};
+        report = sparse_spill_report.Record(now_ms, size, placed);
+    }
+    if (!report) {
+        return;
+    }
+    // Counters only. What a tile outside video memory costs in frame time has not been measured.
+    constexpr double MiB = 1024.0 * 1024.0;
+    LOG_WARNING(Render_Vulkan,
+                "Video memory is full: sparse texture tiles are going to a non-device-local "
+                "heap. Since the last report: {} tiles ({:.1f} MiB) placed there, {} that no "
+                "heap had room for. This session: {} tiles ({:.1f} MiB), {} not placed. Reported "
+                "at most every {} s.",
+                report->interval.tiles, static_cast<double>(report->interval.bytes) / MiB,
+                report->interval.failed, report->total.tiles,
+                static_cast<double>(report->total.bytes) / MiB, report->total.failed,
+                SparseSpillReport::IntervalMs / 1000);
 }
 
 void MemoryAllocator::FreeSparseMemory(VmaAllocation allocation) const {

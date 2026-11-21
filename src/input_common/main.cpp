@@ -330,6 +330,12 @@ struct InputSubsystem::Impl {
 #endif
     }
 
+    void StopHdRumble() const {
+#ifdef HAVE_SDL3
+        sdl->StopHdRumble();
+#endif
+    }
+
     void RegisterInput(const MappingData& data) {
         mapping_factory->RegisterInput(data);
     }
@@ -489,6 +495,10 @@ void InputSubsystem::StopMapping() const {
 
 void InputSubsystem::PumpEvents() const {
     impl->PumpEvents();
+}
+
+void InputSubsystem::StopHdRumble() const {
+    impl->StopHdRumble();
 }
 
 std::string GenerateKeyboardParam(int key_code) {

@@ -38,7 +38,7 @@ jobs:
       contents: read
     steps:
       - name: Check out source and tags
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -91,7 +91,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -104,7 +104,7 @@ jobs:
           test -s "${{ matrix.profile }}"
 
       - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       # clang-cl compiles against the MSVC headers, libraries and SDK that the previous step put
       # on PATH; only the compiler, linker and archiver come from this LLVM.
@@ -113,7 +113,7 @@ jobs:
         run: ./tools/windows/install-llvm.ps1
 
       - name: Install Qt on Windows
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4
         with:
           version: "6.8.3"
           host: windows
@@ -149,7 +149,7 @@ jobs:
 
       - name: Restore CPM downloads
         id: cpm-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .cache/cpm
           key: cpm-${{ matrix.platform }}-v2-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'CMakeModules/CPM*.cmake', 'externals/**/CMakeLists.txt', 'src/**/CMakeLists.txt') }}
@@ -159,7 +159,7 @@ jobs:
 
       - name: Restore compiler objects
         id: compiler-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             .ccache
@@ -170,6 +170,52 @@ jobs:
           restore-keys: |
             objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v2-${{ github.sha }}-
             objects-${{ matrix.platform }}${{ matrix.profile && format('-{0}', hashFiles(matrix.profile)) || '' }}-v2-
+
+      # HD rumble is played by RenHDrum (https://github.com/trzz1214/RenHDrum), a third-party
+      # library that Veshiru loads at run time when renhdrum.dll sits next to the executable. The
+      # packages ship its prebuilt v0.5.0 binary. The hash is pinned here, not read from the
+      # release's own SHA256SUMS.txt, so a replaced release asset fails this step instead of
+      # being packaged. Notices: third_party_notices/RenHDrum.txt.
+      - name: Download RenHDrum
+        shell: pwsh
+        env:
+          RENHDRUM_URL: https://github.com/trzz1214/RenHDrum/releases/download/v0.5.0/renhdrum.dll
+          RENHDRUM_SHA256: C6859C17AD0F9F689FFA00028AB0066454D199C25A98E3FB68F136D1D0049669
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'renhdrum'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $dll = Join-Path $dir 'renhdrum.dll'
+          Invoke-WebRequest -OutFile $dll $env:RENHDRUM_URL
+          $actualSha = (Get-FileHash -Algorithm SHA256 -Path $dll).Hash
+          if ($actualSha -ne $env:RENHDRUM_SHA256) {
+            throw "renhdrum.dll SHA-256 mismatch: expected $env:RENHDRUM_SHA256, got $actualSha"
+          }
+          "RENHDRUM_DLL=$($dll -replace '\\', '/')" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # Veshiru resolves these by name when it loads the library. A build of RenHDrum without one
+      # of the first ten leaves HD rumble silently unavailable in the package; without one of the
+      # others, the Xbox mix, the Switch 2 mode or DualSense over Bluetooth. Fail here instead.
+      - name: Check renhdrum.dll is 64-bit and exports what Veshiru resolves
+        shell: pwsh
+        run: |
+          $headers = (& "$env:LLVM_ROOT/bin/llvm-readobj.exe" --file-headers $env:RENHDRUM_DLL) -join "`n"
+          if ($LASTEXITCODE -ne 0 -or $headers -notmatch 'IMAGE_FILE_MACHINE_AMD64') {
+            throw "renhdrum.dll is not an x86-64 PE file"
+          }
+          $exports = (& "$env:LLVM_ROOT/bin/llvm-readobj.exe" --coff-exports $env:RENHDRUM_DLL) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "llvm-readobj could not read the export table" }
+          $needed = @(
+            'renhdrum_engine_create', 'renhdrum_engine_destroy', 'renhdrum_engine_apply_settings',
+            'renhdrum_engine_push_half_sample', 'renhdrum_engine_tick', 'renhdrum_settings_resolve',
+            'renhdrum_dualsense_dsp_create', 'renhdrum_dualsense_dsp_destroy',
+            'renhdrum_dualsense_dsp_set_half_target', 'renhdrum_dualsense_dsp_fill_f32',
+            'renhdrum_settings_resolve_pure', 'renhdrum_set_nx2_mode',
+            'renhdrum_dualsense_dsp_build_bt_report', 'renhdrum_xbox_rumble_create',
+            'renhdrum_xbox_rumble_destroy', 'renhdrum_xbox_rumble_push_half_sample',
+            'renhdrum_xbox_rumble_tick', 'renhdrum_xbox_rumble_resend')
+          $missing = $needed | Where-Object { $exports -notmatch "Name: $([regex]::Escape($_))\b" }
+          if ($missing) { throw "renhdrum.dll does not export: $($missing -join ', ')" }
+          Write-Host "renhdrum.dll exports all $($needed.Count) functions Veshiru resolves"
 
       # A profile older than the source only warns: functions changed since training lose their
       # profile data and are optimized as in the ThinLTO build. clang-cl 22 reads LLVM's indexed
@@ -201,6 +247,8 @@ jobs:
             "-DVESHIRU_BUILD_TAG=${build_tag}" \
             -DVESHIRU_BUILD_PLATFORM=${{ matrix.platform }} \
             -DUSE_DISCORD_PRESENCE=OFF \
+            -DENABLE_RENHDRUM=ON \
+            "-DRENHDRUM_DLL=$RENHDRUM_DLL" \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             "-DCMAKE_C_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
@@ -212,7 +260,7 @@ jobs:
 
       - name: Save CPM downloads
         if: steps.cpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .cache/cpm
           key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
@@ -231,7 +279,7 @@ jobs:
 
       - name: Save compiler objects
         if: always()
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             .ccache
@@ -245,6 +293,12 @@ jobs:
             if (-not (Test-Path "build/release/bin/$exe")) {
               throw "build/release/bin/$exe was not produced"
             }
+          }
+          # The copy the build made next to the executable must still be the pinned file
+          $packagedSha = (Get-FileHash -Algorithm SHA256 -Path build/release/bin/renhdrum.dll).Hash
+          $pinnedSha = (Get-FileHash -Algorithm SHA256 -Path $env:RENHDRUM_DLL).Hash
+          if ($packagedSha -ne $pinnedSha) {
+            throw "build/release/bin/renhdrum.dll is not the file that was downloaded and checked"
           }
           windeployqt --release --dir build/release/bin --libdir build/release/bin --plugindir build/release/bin/plugins --no-compiler-runtime --no-opengl-sw --no-system-d3d-compiler --no-translations build/release/bin/veshiru.exe
 
@@ -280,7 +334,7 @@ jobs:
       # The artifact is the bin folder itself: GitHub zips artifacts on download, and uploading a
       # zip gave a zip inside a zip. The release job zips it once for the release.
       - name: Upload Windows binary
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: veshiru-${{ matrix.platform }}-${{ github.sha }}
           path: build/release/bin/
@@ -296,7 +350,7 @@ jobs:
       contents: read
     steps:
       - name: Download binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: veshiru-*-${{ github.sha }}
           path: artifacts
@@ -326,7 +380,7 @@ jobs:
           (cd release-dist && sha256sum -- *.zip > SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
 
       - name: Upload verified archives
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: veshiru-package-${{ inputs.release_tag }}-${{ github.sha }}
           path: release-dist/
@@ -344,13 +398,13 @@ jobs:
       contents: write
     steps:
       - name: Check out source and tags
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Download verified archives
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: veshiru-package-${{ inputs.release_tag }}-${{ github.sha }}
           path: release-dist

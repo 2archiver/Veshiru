@@ -128,6 +128,11 @@ enum class ThreadPlacement : u32 {
 };
 
 void SetCurrentThreadPriority(ThreadPriority new_priority);
+/// Sets the priority of another thread, by its std::thread::native_handle(). Only where that is a
+/// Windows thread handle: elsewhere a thread's nice value needs its id, and cannot be lowered
+/// again without privileges.
+/// @return True when the priority was set.
+bool SetNativeThreadPriority(std::thread::native_handle_type thread, ThreadPriority new_priority);
 void SetCurrentThreadName(const char* name);
 void SetCurrentThreadToPerformanceCores();
 void SetCurrentThreadToEfficiencyCores();

@@ -626,19 +626,33 @@ void SetCurrentThreadAffinity(const std::vector<u32>& cpus) {
 
 namespace Common {
 
+#ifdef _WIN32
+static int WindowsThreadPriority(ThreadPriority priority) {
+    switch (priority) {
+    case ThreadPriority::Low: return THREAD_PRIORITY_BELOW_NORMAL;
+    case ThreadPriority::Normal: return THREAD_PRIORITY_NORMAL;
+    case ThreadPriority::High: return THREAD_PRIORITY_ABOVE_NORMAL;
+    case ThreadPriority::VeryHigh: return THREAD_PRIORITY_HIGHEST;
+    case ThreadPriority::Critical: return THREAD_PRIORITY_TIME_CRITICAL;
+    default: return THREAD_PRIORITY_NORMAL;
+    }
+}
+#endif
+
+bool SetNativeThreadPriority(std::thread::native_handle_type thread, ThreadPriority new_priority) {
+#if defined(_WIN32) && defined(_MSC_VER)
+    // The MSVC standard library's native handle is the thread's HANDLE.
+    return SetThreadPriority(static_cast<HANDLE>(thread), WindowsThreadPriority(new_priority)) != 0;
+#else
+    (void)thread;
+    (void)new_priority;
+    return false;
+#endif
+}
+
 void SetCurrentThreadPriority(ThreadPriority new_priority) {
 #ifdef _WIN32
-    int windows_priority = [&]() {
-        switch (new_priority) {
-        case ThreadPriority::Low: return THREAD_PRIORITY_BELOW_NORMAL;
-        case ThreadPriority::Normal: return THREAD_PRIORITY_NORMAL;
-        case ThreadPriority::High: return THREAD_PRIORITY_ABOVE_NORMAL;
-        case ThreadPriority::VeryHigh: return THREAD_PRIORITY_HIGHEST;
-        case ThreadPriority::Critical: return THREAD_PRIORITY_TIME_CRITICAL;
-        default: return THREAD_PRIORITY_NORMAL;
-        }
-    }();
-    SetThreadPriority(GetCurrentThread(), windows_priority);
+    SetThreadPriority(GetCurrentThread(), WindowsThreadPriority(new_priority));
 #elif defined(__HAIKU__)
     // TODO: We have priorities for 3D rendering applications - may help lavapipe?
     int priority = [&]() {

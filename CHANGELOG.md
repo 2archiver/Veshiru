@@ -6,6 +6,96 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-20
+
+Every entry carries a tag. `[verified: <how>]` means it was run, or a CI job proved it; a green
+CI means the code builds and the tests pass, not that a game or a controller behaves. `[unverified]`
+means nobody has observed it.
+
+### Added
+
+- **HD rumble (off by default), for Xbox-style pads, Pro Controller / Joy-Con and DualSense.**
+  The **HD Rumble...** button in the vibration settings opens it. Ported from Octelly's Eglantine
+  `hdrumble-mvp` branch (samaBR85, hermes) and played by Three-Dola's RenHDrum v0.5.0, whose
+  prebuilt `renhdrum.dll` now ships in the Windows packages (third-party binary, SHA-256 pinned
+  in the release workflow, notices in `third_party_notices/RenHDrum.txt`). With the switch off,
+  or without the DLL, rumble is played by the same code as in 2.1.0. Details and limits:
+  [HD rumble on Xbox-style pads](https://github.com/2archiver/Veshiru/blob/v2.2.0/docs/Veshiru.md#hd-rumble-on-xbox-style-pads).
+  - Xbox-style pads get a "Direct" mode mapped by Veshiru itself (low band to the heavy motor,
+    high band to the light one) and RenHDrum's own mix as the alternative.
+    `[verified: 14 unit test cases for the Direct mapping and the write scheduler, run by CI]`
+    `[unverified on hardware]`: nobody has felt it on a controller, the PowerA wired Xbox One pad
+    included. Eccentric-mass motors cannot reproduce HD rumble frequencies or very short ticks.
+  - Motors are zeroed on pause, stop, exit, disconnect and when the feature is switched off, and
+    every write expires after one second. `[verified: scheduler unit tests]` for the stop and the
+    expiry logic; `[unverified]` on a real pad.
+  - One Info log line per Xbox-style pad names the SDL input path and whether trigger motors are
+    available; refused rumble writes are logged at most once every 10 seconds. `[unverified]`
+  - RenHDrum mix, Pro Controller / Joy-Con and DualSense paths. `[unverified]`: the mapping is
+    inside the DLL and none of these controllers was available.
+
+### Changed
+
+- **Mario Kart World, sparse texture tiles outside video memory are now reported.** When
+  device-local memory runs out and tiles go to a non-device-local heap (the 2.1.0 behaviour,
+  unchanged), the log gets a warning at most once every 10 seconds with the tiles and MiB placed
+  there since the last report, the tiles no heap had room for, and the session totals; the totals
+  are logged once more at shutdown. Counters only: no claim about frame rate is made, because
+  none was measured. `[verified: 4 unit test cases for the counting and the rate limit, run by
+  CI]` `[unverified]` in a game: nobody has seen the line in a Mario Kart World log yet.
+
+- **`aoc:u` PrepareAddOnContent says whether the add-on exists.** It still always reports
+  success, exactly as the stub did, so no title behaves differently. The log now has an Info line
+  when the index names an add-on that ListAddOnContent lists for the calling title, and a warning
+  with the number of listed add-ons when it does not (or when add-ons are disabled for the
+  title). `[verified: 3 unit test cases for the index check, run by CI]` `[unverified]` in a
+  game: no title that calls it was run.
+
+- **Shader builds that a draw is waiting for run at normal thread priority (Windows).** Shader
+  workers run below normal priority so that background builds give way to the game. A build was
+  already moved to the front of the queue once a draw waited for it, but one that had started
+  kept the low priority while the GPU thread was blocked on it. The worker running such a build
+  is now raised until that stage ends; builds nothing has waited for are untouched. Taken from
+  an owner's Donkey Kong Bananza log on a GTX 1650 laptop, where draws were held 48.5 s out of
+  833 s for pipelines still building on a first run with an empty shader cache.
+  `[verified: 6 unit test cases for when a worker is raised and when that ends, run by CI; the
+  scheduler's 31 cases also pass under ThreadSanitizer in a Linux build]` `[unverified]` in a
+  game: no frame time was measured before or after, and the log cannot say how much of the
+  waiting was priority.
+  It does not change the frame rate once shaders are built: that log's 14 FPS in gameplay is
+  time on the GPU command threads, which this release does not address.
+  [What the log shows](https://github.com/2archiver/Veshiru/blob/v2.2.0/docs/bananza-2.2-log-review.md).
+
+### Build and packaging
+
+- **The Windows packages bundle a third-party binary, `renhdrum.dll` (RenHDrum v0.5.0).** The
+  release workflow that builds the packages fails unless the downloaded file has the SHA-256
+  pinned in the workflow, is an x86-64 PE, exports the 18 functions Veshiru resolves by name, and
+  is byte-for-byte the copy that ends up next to `veshiru.exe`. `[verified: those checks are
+  steps of the workflow run that produced the packages of this release]` `[unverified]`: the
+  library was never loaded or called by anyone working on this release.
+- Every GitHub Action in the three workflows is pinned to a commit. `[verified: grep; the
+  workflows ran]`
+
+### Documentation
+
+- The "`main.npdm` is parsed rather than assumed" entry was listed under 1.5.0, 1.6.0 and 1.8.0
+  as well as 2.0.0. The fix first shipped in 2.0.0; the other three entries are removed.
+  `[verified: commit range]`
+- `docs/CI.md` said `build-check` runs the `tools/nx2` scripts. It does not, and the page now
+  says so. `[verified: the workflow file]`
+
+### Known gaps in this release
+
+- The written brief for 2.2.0 was lost while the work was in progress and could not be recovered
+  from the repository. Its sections 3 and 7, part of 6 and 8, and its release gates G1 to G6 are
+  unknown, so nothing was implemented for them and nothing here claims they were met. The owner
+  chose to release without them, against a substitute list of six checks.
+  [The 2.2.0 report](https://github.com/2archiver/Veshiru/blob/v2.2.0/docs/2.2-report.md)
+  lists what is known, what is not, and those checks.
+- Nothing in this release was tried on a controller or in a game, and no performance figure
+  was measured for it.
+
 ## [2.1.0] - 2026-11-20
 
 ### Fixed (source-level verification)
@@ -245,14 +335,6 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   prefaulting and faster Windows memory/zero-page queries, GPU-only region tracking, VP9 range
   encoder fixes, and `nx2:gsv` service stability improvements.
 
-### Boot
-
-- **`main.npdm` is parsed rather than assumed**: the NCA loader read the eight bytes at offset
-  0x28 as a heap size without checking the `META` magic, and the supplied HOME Menu log shows a
-  file where that read produced `0x7463656c` — the ASCII bytes of a text field — as a 1.8 GiB heap,
-  which then sized the pointer buffer for a heap that does not exist. The heap size is now read
-  only from a real NPDM, and anything unreasonable falls back to the default pointer buffer.
-
 ### Tests
 
 - Added and expanded Catch2 test coverage for large cyclic readback rings and forward-windowed
@@ -329,14 +411,6 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
     the validated, CA-checked request path.
   - Successful artwork resolutions are logged (`Artwork lookup ... resolved from <source>`) so the
     startup console and session log show where each icon came from.
-
-### Boot
-
-- **`main.npdm` is parsed rather than assumed**: the NCA loader read the eight bytes at offset
-  0x28 as a heap size without checking the `META` magic, and the supplied HOME Menu log shows a
-  file where that read produced `0x7463656c` — the ASCII bytes of a text field — as a 1.8 GiB heap,
-  which then sized the pointer buffer for a heap that does not exist. The heap size is now read
-  only from a real NPDM, and anything unreasonable falls back to the default pointer buffer.
 
 ### Tests
 
@@ -435,14 +509,6 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
     overwrite stale wrong `TitleRole` values (`force_title = true`).
   - Propagated `package.title_id` through `FileSys::Nup::ProbeNupMetadata` into
     `NupEditDialog::FindIcon()` so NUP metadata icon lookups use the exact Program ID.
-
-### Boot
-
-- **`main.npdm` is parsed rather than assumed**: the NCA loader read the eight bytes at offset
-  0x28 as a heap size without checking the `META` magic, and the supplied HOME Menu log shows a
-  file where that read produced `0x7463656c` — the ASCII bytes of a text field — as a 1.8 GiB heap,
-  which then sized the pointer buffer for a heap that does not exist. The heap size is now read
-  only from a real NPDM, and anything unreasonable falls back to the default pointer buffer.
 
 ### Tests
 
