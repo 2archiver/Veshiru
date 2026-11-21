@@ -12,6 +12,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <boost/container/flat_set.hpp>
 #include <boost/container/small_vector.hpp>
@@ -484,25 +485,30 @@ std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias,
 std::optional<StorageBufferAddr> TrackAddend(const IR::Value& value) {
     std::optional<StorageBufferAddr> result;
     bool ambiguous{};
-    const auto visit{[&](const auto& self, const IR::Value& term) -> void {
-        if (term.IsImmediate() || ambiguous) {
-            return;
+    // Explicit stack, not recursion: a long IAdd32 chain would take one host frame per addition
+    // (the same overflow as CollectIteratorWords). Pushing Arg(1) first keeps Arg(0) first.
+    // Ported from Lichii nx2 19dcffea (GPL-3.0-or-later).
+    std::vector<IR::Value> pending{value};
+    while (!pending.empty() && !ambiguous) {
+        const IR::Value term{pending.back()};
+        pending.pop_back();
+        if (term.IsImmediate()) {
+            continue;
         }
         const IR::Inst* const inst{term.InstRecursive()};
         if (inst->GetOpcode() == IR::Opcode::IAdd32) {
-            self(self, inst->Arg(0));
-            self(self, inst->Arg(1));
-            return;
+            pending.push_back(inst->Arg(1));
+            pending.push_back(inst->Arg(0));
+            continue;
         }
         if (inst->GetOpcode() != IR::Opcode::GetCbufU32 || !inst->Arg(0).IsImmediate() ||
             !inst->Arg(1).IsImmediate() || !Common::IsAligned(inst->Arg(1).U32(), 8)) {
-            return;
+            continue;
         }
         const StorageBufferAddr found{.index = inst->Arg(0).U32(), .offset = inst->Arg(1).U32()};
         ambiguous = result.has_value();
         result = found;
-    }};
-    visit(visit, value);
+    }
     return ambiguous ? std::nullopt : result;
 }
 
