@@ -6,6 +6,8 @@
 add_executable(tests
     common/addon_config.cpp
     common/artwork_cache.cpp
+    common/discord_payload.cpp
+    ../qt_common/discord/discord_payload.cpp
     video_core/scaled_image_fits.cpp
     video_core/stale_targets.cpp
     video_core/superseded_images.cpp

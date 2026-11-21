@@ -176,6 +176,7 @@ public:
     static constexpr int ProgramIdRole = SortRole + 3;
     static constexpr int FileTypeRole = SortRole + 4;
     static constexpr int HasIconRole = SortRole + 5;
+    static constexpr int VersionRole = SortRole + 6;
 
     GameListItemPath() = default;
     GameListItemPath(const QString& game_path, const std::vector<u8>& picture_data,
@@ -206,6 +207,7 @@ public:
 
         const auto tooltip = QStringLiteral("%1\n%2").arg(readable_play_time, enabled_update);
 
+        setData(enabled_update.section(QLatin1Char(' '), 1), VersionRole);
         setData(tooltip, Qt::ToolTipRole);
 
         const u32 size = UISettings::CurrentGameIconSize().GetValue();
@@ -279,7 +281,8 @@ public:
             }
             case Settings::GameListMode::GridView:
             case Settings::GameListMode::CarouselView:
-                return row1;
+            case Settings::GameListMode::VersionListView:
+                return role == SortRole ? row1.toLower() : QVariant{row1};
             default:
                 break;
             }

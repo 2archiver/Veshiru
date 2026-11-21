@@ -47,6 +47,7 @@
 #include "veshiru/game/game_grid.h"
 #include "veshiru/game/game_list.h"
 #include "veshiru/game/game_tree.h"
+#include "veshiru/game/game_version_list.h"
 #include "veshiru/game/search_field.h"
 #include "veshiru/main_window.h"
 #include "veshiru/shader_warm_dialog.h"
@@ -85,6 +86,10 @@ GameList::GameList(FileSys::VirtualFilesystem vfs_, FileSys::ManualContentProvid
 
     connect(carousel_view, &QListView::activated, this, &GameList::ValidateEntry);
     connect(carousel_view, &QListView::customContextMenuRequested, this, &GameList::PopupContextMenu);
+
+    connect(version_list_view, &QListView::activated, this, &GameList::ValidateEntry);
+    connect(version_list_view, &QListView::customContextMenuRequested, this,
+            &GameList::PopupContextMenu);
 
     connect(controller_navigation, &ControllerNavigation::TriggerKeyboardEvent, this,
             [this](Qt::Key key) {
@@ -130,14 +135,26 @@ void GameList::SetupViews() {
     tree_view = new GameTree(this);
     grid_view = new GameGrid(this);
     carousel_view = new GameCarousel(this);
+    version_list_view = new GameVersionList(this);
 
     tree_view->SetModel(item_model);
     grid_view->SetModel(item_model);
     carousel_view->SetModel(item_model);
+    version_list_view->SetModel(item_model);
 }
 
 QString GameList::GetLastFilterResultItem() const {
-    return tree_view->GetLastFilterResultItem();
+    if (m_isTreeMode) {
+        return tree_view->GetLastFilterResultItem();
+    }
+
+    QString file_path;
+    for (int row = 0; row < item_model->rowCount(); ++row) {
+        if (!m_currentView->isRowHidden(row)) {
+            file_path = item_model->item(row, 0)->data(GameListItemPath::FullPathRole).toString();
+        }
+    }
+    return file_path;
 }
 
 void GameList::ClearFilter() {
@@ -171,6 +188,9 @@ void GameList::OnPopulate() {
         break;
     case Settings::GameListMode::CarouselView:
         carousel_view->UpdateIconSize();
+        break;
+    case Settings::GameListMode::VersionListView:
+        version_list_view->UpdateLayout();
         break;
     }
 }
@@ -224,6 +244,11 @@ void GameList::ResetViewMode() {
         newTreeMode = false;
 
         break;
+    case Settings::GameListMode::VersionListView:
+        m_currentView = version_list_view;
+        newTreeMode = false;
+
+        break;
     default:
         UNREACHABLE();
     }
@@ -231,10 +256,12 @@ void GameList::ResetViewMode() {
     tree_view->setVisible(false);
     grid_view->setVisible(false);
     carousel_view->setVisible(false);
+    version_list_view->setVisible(false);
 
     tree_view->setEnabled(false);
     grid_view->setEnabled(false);
     carousel_view->setEnabled(false);
+    version_list_view->setEnabled(false);
 
     m_currentView->setVisible(true);
     // MainWindow switches the view right after starting the first populate; keep it disabled
@@ -272,8 +299,21 @@ void GameList::OnTextChanged(const QString& new_text) {
 
     if (m_isTreeMode) {
         tree_view->ApplyFilter(edit_filter_text, item_model);
+    } else if (game_list_mode == Settings::GameListMode::VersionListView) {
+        version_list_view->ApplyFilter(edit_filter_text, item_model);
     } else {
         grid_view->ApplyFilter(edit_filter_text, item_model);
+    }
+
+    if (!m_isTreeMode) {
+        int visible = 0;
+        for (int row = 0; row < item_model->rowCount(); ++row) {
+            const auto* item = item_model->item(row, 0);
+            if (item && Veshiru::FilterMatches(edit_filter_text, item)) {
+                ++visible;
+            }
+        }
+        search_field->setFilterResult(visible, item_model->rowCount());
     }
 }
 
@@ -350,8 +390,12 @@ void GameList::OnPopulatingCompleted(const QStringList& watch_list) {
     m_currentView->setEnabled(true);
 
     int children_total = 0;
-    for (int i = 1; i < item_model->rowCount() - 1; ++i) {
-        children_total += item_model->item(i, 0)->rowCount();
+    if (m_isTreeMode) {
+        for (int i = 1; i < item_model->rowCount() - 1; ++i) {
+            children_total += item_model->item(i, 0)->rowCount();
+        }
+    } else {
+        children_total = item_model->rowCount();
     }
 
     search_field->setFilterResult(children_total, children_total);
@@ -390,6 +434,9 @@ void GameList::UpdateIconSizes() {
         carousel_view->UpdateIconSize();
         break;
     case Settings::GameListMode::TreeView:
+        break;
+    case Settings::GameListMode::VersionListView:
+        version_list_view->UpdateLayout();
         break;
     }
 }

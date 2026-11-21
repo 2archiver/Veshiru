@@ -1687,6 +1687,7 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Grid_View, &MainWindow::SetGridView);
     connect_menu(ui->action_Tree_View, &MainWindow::SetTreeView);
     connect_menu(ui->action_Carousel_View, &MainWindow::SetCarouselView);
+    connect_menu(ui->action_Versioned_List_View, &MainWindow::SetVersionedListView);
 
     game_size_actions = new QActionGroup(this);
     game_size_actions->setExclusive(true);
@@ -4011,9 +4012,11 @@ void MainWindow::SetGameListMode(Settings::GameListMode mode) {
     ui->action_Grid_View->setChecked(mode == Settings::GameListMode::GridView);
     ui->action_Tree_View->setChecked(mode == Settings::GameListMode::TreeView);
     ui->action_Carousel_View->setChecked(mode == Settings::GameListMode::CarouselView);
+    ui->action_Versioned_List_View->setChecked(mode == Settings::GameListMode::VersionListView);
 
     UISettings::values.game_list_mode = mode;
-    ui->action_Show_Game_Name->setEnabled(mode != Settings::GameListMode::TreeView);
+    ui->action_Show_Game_Name->setEnabled(mode != Settings::GameListMode::TreeView &&
+                                          mode != Settings::GameListMode::VersionListView);
 
     CheckIconSize();
     game_list->ResetViewMode();
@@ -4029,6 +4032,10 @@ void MainWindow::SetTreeView() {
 
 void MainWindow::SetCarouselView() {
     SetGameListMode(Settings::GameListMode::CarouselView);
+}
+
+void MainWindow::SetVersionedListView() {
+    SetGameListMode(Settings::GameListMode::VersionListView);
 }
 
 void MainWindow::CheckIconSize() {
@@ -4068,6 +4075,7 @@ void MainWindow::ToggleShowGameName() {
 void MainWindow::OnConfigure() {
     const auto old_theme = UISettings::values.theme;
     const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
+    const auto old_discord_application_id = UISettings::values.discord_application_id.GetValue();
     const auto old_language_index = Settings::values.language_index.GetValue();
     const bool old_gamemode = UISettings::values.enable_gamemode.GetValue();
 #ifdef __unix__
@@ -4131,7 +4139,8 @@ void MainWindow::OnConfigure() {
     if (UISettings::values.theme != old_theme) {
         UpdateUITheme();
     }
-    if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence) {
+    if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence ||
+        UISettings::values.discord_application_id.GetValue() != old_discord_application_id) {
         SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
     }
     if (UISettings::values.enable_gamemode.GetValue() != old_gamemode) {
@@ -6391,7 +6400,8 @@ void MainWindow::OnLanguageChanged(const QString& locale) {
 void MainWindow::SetDiscordEnabled([[maybe_unused]] bool state) {
 #ifdef USE_DISCORD_PRESENCE
     if (state)
-        discord_rpc = std::make_unique<DiscordRPC::DiscordImpl>(*QtCommon::system);
+        discord_rpc = std::make_unique<DiscordRPC::DiscordImpl>(
+            *QtCommon::system, UISettings::values.discord_application_id.GetValue());
     else
         discord_rpc = std::make_unique<DiscordRPC::NullImpl>();
 #else

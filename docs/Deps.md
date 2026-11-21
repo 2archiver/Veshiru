@@ -65,7 +65,6 @@ Vulkan 1.3.274+ is also needed:
 Certain other dependencies will be fetched by CPM regardless. System packages *can* be used for these libraries, but many are either not packaged by most distributions OR have issues when used by the system:
 
 * [SimpleIni](https://github.com/brofield/simpleini)
-* [DiscordRPC](https://github.com/eden-emulator/discord-rpc)
 * [cubeb](https://github.com/mozilla/cubeb)
 * [libusb](https://github.com/libusb/libusb)
 * [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator)

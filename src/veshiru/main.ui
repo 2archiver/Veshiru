@@ -112,6 +112,7 @@
      <addaction name="action_Tree_View"/>
      <addaction name="action_Grid_View"/>
      <addaction name="action_Carousel_View"/>
+     <addaction name="action_Versioned_List_View"/>
     </widget>
     <widget class="QMenu" name="menuGame_Icon_Size">
      <property name="title">
@@ -644,6 +645,14 @@
    </property>
    <property name="text">
     <string>&amp;Carousel View</string>
+   </property>
+  </action>
+  <action name="action_Versioned_List_View">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Versioned &amp;List</string>
    </property>
   </action>
  </widget>

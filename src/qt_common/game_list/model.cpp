@@ -31,10 +31,23 @@ GameListModel::GameListModel(std::shared_ptr<FileSys::VfsFilesystem> vfs_,
     watcher = new QFileSystemWatcher(this);
     external_watcher = new QFileSystemWatcher(this);
 
+    refresh_timer.setSingleShot(true);
+    refresh_timer.setInterval(30);
+    connect(&refresh_timer, &QTimer::timeout, this, [this] {
+        const bool external = refresh_external_pending;
+        refresh_external_pending = false;
+        if (external) {
+            RefreshExternalContent();
+        } else {
+            RefreshGameDirectory();
+        }
+    });
     connect(watcher, &QFileSystemWatcher::directoryChanged, this,
-            &GameListModel::RefreshGameDirectory);
-    connect(external_watcher, &QFileSystemWatcher::directoryChanged, this,
-            &GameListModel::RefreshExternalContent);
+            [this] { refresh_timer.start(); });
+    connect(external_watcher, &QFileSystemWatcher::directoryChanged, this, [this] {
+        refresh_external_pending = true;
+        refresh_timer.start();
+    });
 
     ResetExternalWatcher();
 

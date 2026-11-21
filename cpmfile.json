@@ -55,13 +55,6 @@
         "repo": "mozilla/cubeb",
         "version": "fa02160712"
     },
-    "discord-rpc": {
-        "find_args": "MODULE",
-        "hash": "8d680b3a16d6f6bf292ad823cf8635595ff986f2a49f758e3009f505b540a9d75194a8cf44cddea75736a8c3e3b5160166e716a0939ce3f18cc463cf648753fe",
-        "package": "DiscordRPC",
-        "repo": "eden-emulator/discord-rpc",
-        "version": "76616d8675"
-    },
     "enet": {
         "find_args": "MODULE",
         "hash": "a0d2fa8c957704dd49e00a726284ac5ca034b50b00d2b20a94fa1bbfbb80841467834bfdc84aa0ed0d6aab894608fd6c86c3b94eee46343f0e6d9c22e391dbf9",

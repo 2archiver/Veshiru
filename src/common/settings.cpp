@@ -9,6 +9,8 @@
 #include <exception>
 #include <stdexcept>
 #endif
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <compare>
 #include <cstddef>
@@ -162,22 +164,34 @@ std::string GetTimeZoneString(TimeZone time_zone) {
 }
 
 void LogSettings() {
+    const std::array sensitive_setting_ids{
+        values.eden_token.Id(), values.serial_unit.Id(), values.serial_battery.Id(),
+        values.network_interface.Id(), values.eden_username.Id(), values.device_name.Id(),
+        values.nextendo_server_ip.Id(), values.nextendo_nat_ip.Id(),
+        values.nextendo_client_id.Id(), values.online_redirect_hosts.Id(),
+        values.online_redirect_server.Id(), values.online_redirect_ca.Id(), values.web_api_url.Id(),
+        values.recommended_settings_backup.Id(), values.audio_output_device_id.Id(),
+        values.audio_input_device_id.Id(), values.udp_input_servers.Id(),
+        values.ir_sensor_device.Id(),
+    };
     std::deque<std::string> settings_list;
     for (auto& [category, settings] : values.linkage.by_category) {
         for (const auto& setting : settings) {
-            // Hide the token secret, for security reasons.
-            if (setting->Id() != values.eden_token.Id()) {
-                auto const is_default = setting->ToString() == setting->DefaultToString();
-                auto const name = fmt::format(
-                    "{:c}{:c} {}.{}",
-                    is_default ? '-' : 'M',
-                    setting->UsingGlobal() ? '-' : 'C', TranslateCategory(category),
-                    setting->GetLabel());
-                if (is_default)
-                    settings_list.push_back(fmt::format("{}: {}", name, setting->Canonicalize()));
-                else
-                    settings_list.push_front(fmt::format("{}: {}", name, setting->Canonicalize()));
-            }
+            const auto id = setting->Id();
+            const bool sensitive =
+                std::find(sensitive_setting_ids.begin(), sensitive_setting_ids.end(), id) !=
+                sensitive_setting_ids.end();
+            auto const is_default = setting->ToString() == setting->DefaultToString();
+            auto const name = fmt::format(
+                "{:c}{:c} {}.{}",
+                is_default ? '-' : 'M',
+                setting->UsingGlobal() ? '-' : 'C', TranslateCategory(category),
+                setting->GetLabel());
+            const auto value = sensitive ? std::string{"<redacted>"} : setting->Canonicalize();
+            if (is_default)
+                settings_list.push_back(fmt::format("{}: {}", name, value));
+            else
+                settings_list.push_front(fmt::format("{}: {}", name, value));
         }
     }
     LOG_INFO(Config, "Eden Configuration:");

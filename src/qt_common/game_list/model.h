@@ -6,6 +6,7 @@
 #include <memory>
 #include <QFileSystemWatcher>
 #include <QStandardItemModel>
+#include <QTimer>
 #include <QStringList>
 #include <QVector>
 
@@ -92,4 +93,6 @@ private:
     std::unique_ptr<GameListWorker> current_worker;
     QFileSystemWatcher* watcher = nullptr;
     QFileSystemWatcher* external_watcher = nullptr;
+    QTimer refresh_timer;
+    bool refresh_external_pending = false;
 };

@@ -11,6 +11,7 @@
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/logging.h"
+#include "common/scope_exit.h"
 #include "core/core.h"
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_process.h"
@@ -118,6 +119,11 @@ inline void MemoryManager::SetBigPageContinuous(size_t big_page_index, bool valu
         (~(1ULL << sub_index) & continuous_mask) | (value ? 1ULL << sub_index : 0);
 }
 
+auto MemoryManager::TrackMappingUpdate() {
+    mapping_updates_started.fetch_add(1, std::memory_order_acq_rel);
+    return SCOPE_GUARD { mapping_updates_completed.fetch_add(1, std::memory_order_acq_rel); };
+}
+
 /// Maps, reserves, or frees small pages in [gpu_addr, +size). A range that does not lie
 /// entirely in the address space is left unchanged.
 GPUVAddr MemoryManager::PageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr dev_addr, size_t size, PTEKind kind, MemoryManager::EntryType entry_type) {
@@ -126,6 +132,7 @@ GPUVAddr MemoryManager::PageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr de
                   gpu_addr, size, address_space_size);
         return gpu_addr;
     }
+    [[maybe_unused]] const auto update = TrackMappingUpdate();
     [[maybe_unused]] u64 remaining_size{size};
     if (entry_type == EntryType::Mapped) {
         page_table.ReserveRange(gpu_addr, size);
@@ -178,6 +185,7 @@ GPUVAddr MemoryManager::BigPageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr
                   gpu_addr, size, address_space_size);
         return gpu_addr;
     }
+    [[maybe_unused]] const auto update = TrackMappingUpdate();
     [[maybe_unused]] u64 remaining_size{size};
     GPUVAddr modified_start{};
     u64 modified_size{};

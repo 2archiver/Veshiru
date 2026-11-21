@@ -47,6 +47,12 @@ TEST_CASE("Console sanitisation removes personal paths and credential-like value
     CHECK(truncated.find("two words") == std::string::npos);
 
     // Relative source locations and title IDs remain useful diagnostics.
+    const auto network = SanitizeLogMessage("peer=192.168.1.42 mac=00:1a:2b:3c:4d:5e");
+    CHECK(network.find("192.168.1.42") == std::string::npos);
+    CHECK(network.find("00:1a:2b:3c:4d:5e") == std::string::npos);
+    CHECK(network.find("<ip>") != std::string::npos);
+    CHECK(network.find("<mac>") != std::string::npos);
+
     const auto relative = SanitizeLogMessage("core/loader/loader.cpp: 0100ABCD00000000");
     CHECK(relative.find("core/loader/loader.cpp") != std::string::npos);
     CHECK(relative.find("0100ABCD00000000") != std::string::npos);
