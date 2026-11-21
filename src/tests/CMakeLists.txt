@@ -9,6 +9,8 @@ add_executable(tests
     common/discord_payload.cpp
     ../qt_common/discord/discord_payload.cpp
     qt_common/refresh_coalescer.cpp
+    qt_common/game_version.cpp
+    ../qt_common/game_list/game_version.cpp
     video_core/scaled_image_fits.cpp
     video_core/stale_targets.cpp
     video_core/superseded_images.cpp

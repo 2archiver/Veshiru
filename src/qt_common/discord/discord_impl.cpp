@@ -37,6 +37,7 @@
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/loader/loader.h"
+#include "qt_common/game_list/game_version.h"
 
 namespace DiscordRPC {
 namespace {
@@ -515,11 +516,10 @@ void DiscordImpl::Update() {
     const u64 program_id = system.GetApplicationProcessProgramID();
     const FileSys::PatchManager patch_manager{program_id, system.GetFileSystemController(),
                                               system.GetContentProvider()};
-    const auto metadata = patch_manager.GetControlMetadata();
-    std::string version = metadata.first != nullptr ? metadata.first->GetVersionString() : "";
-    if (version.empty()) {
-        system.GetAppLoader().ReadDisplayVersion(version);
-    }
+    // The same resolver the game-list worker uses for the version badge, so the presence and
+    // the library can never disagree. A running game's control metadata already reflects a
+    // registered update; empty only when nothing at all is known.
+    std::string version = GameListVersion::Resolve({}, patch_manager, system.GetAppLoader());
     if (version.empty()) {
         version = "1.0.0";
     }

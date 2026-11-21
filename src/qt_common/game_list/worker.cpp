@@ -36,6 +36,7 @@
 #include "core/loader/nx.h"
 
 #include "qt_common/config/uisettings.h"
+#include "qt_common/game_list/game_version.h"
 #include "qt_common/qt_common.h"
 
 #include "qt_common/game_list/game_list_p.h"
@@ -294,9 +295,11 @@ QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::stri
     }
 
     u64 play_time = play_time_manager.GetPlayTime(program_id);
+    const QString game_version = QString::fromStdString(
+        GameListVersion::Resolve(patch_versions.toStdString(), patch, loader));
     return QList<QStandardItem*>{
         new GameListItemPath(FormatGameName(path), icon, QString::fromStdString(name),
-                             file_type_string, program_id, play_time, patch_versions),
+                             file_type_string, program_id, play_time, patch_versions, game_version),
         new GameListItem(file_type_string),
         new GameListItemSize(size),
         new GameListItemPlayTime(play_time),
