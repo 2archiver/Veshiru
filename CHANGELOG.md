@@ -9,8 +9,9 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 ## [2.4.0] - 2026-11-21
 
 Versioned List, Discord Rich Presence, crash dumps, the HOME Menu news applet, notification icons
-and the About wordmark. Every entry says how it was verified; a build in this environment was not
-possible (no Qt, no Windows toolchain), so rendering and Windows behaviour are marked unverified.
+and the About wordmark. The Windows clang-cl production build and ctest passed on CI (run
+44887537553, commit 4dc37f0, `-DENABLE_WERROR=ON`). GUI rendering and live Discord/crash behaviour
+still need a desktop run, so those entries are marked unverified.
 
 ### Added
 
@@ -62,6 +63,11 @@ possible (no Qt, no Windows toolchain), so rendering and Windows behaviour are m
 
 ### Verified
 
+- Windows clang-cl production build and tests: CI run
+  [44887537553](https://github.com/2archiver/Veshiru/actions/runs/44887537553) passed configure,
+  `cmake --build build` with `ENABLE_WERROR=ON`, the console-subsystem and import checks, and
+  `ctest --test-dir build --output-on-failure --no-tests=error`. The exact configure line is in
+  `.github/workflows/build-check.yml`.
 - Discord payload/application-ID logic: standalone host `g++ -std=c++20` build of
   `discord_payload.cpp` with all assertions passing (`ALL CHECKS PASSED (0)`).
 - Contrast values above, computed from the exact `VeshiruPalette()` colours and the delegate's
@@ -72,9 +78,8 @@ possible (no Qt, no Windows toolchain), so rendering and Windows behaviour are m
 
 ### Unverified
 
-- Any build: the agent environment has no Qt, CMake, clang-cl or Windows SDK, so the Windows
-  clang-cl build and ctest were not run. This release must not be called built until CI passes.
-- GUI rendering of the Versioned List, the tray icon/toasts and the About dialog.
+- GUI rendering of the Versioned List, the tray icon/toasts and the About dialog: CI proves it
+  compiles and the tests pass, not how it looks.
 - Live Discord presence with the client open and closed.
 - A forced host crash on Windows writing no `.dmp` while still flushing the log line.
 - The HOME Menu news applet's new button and link.
