@@ -13,6 +13,7 @@
 #include "common/common_types.h"
 #include "frontend_common/play_time_manager.h"
 #include "qt_common/config/uisettings.h"
+#include "qt_common/game_list/parse_cache.h"
 #include "qt_common/game_list/refresh_coalescer.h"
 
 namespace Core {
@@ -51,7 +52,8 @@ public:
     void AddEntry(const QList<QStandardItem*>& entry_items, GameListDir* parent);
     void DonePopulating(const QStringList& watch_list);
 
-    void PopulateAsync(QVector<UISettings::GameDir>& game_dirs);
+    void PopulateAsync(QVector<UISettings::GameDir>& game_dirs,
+                       GameListRefreshReason reason);
     void WorkerEvent();
     void SetScanEnabled(bool enabled);
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "qt_common/util/game.h"
+#include "qt_common/game_list/parse_cache.h"
 
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
@@ -386,6 +387,9 @@ void ResetMetadata(bool show_message) {
         if (show_message)
             QtCommon::Frontend::Information(rootObject, title,
                                             tr("The operation completed successfully."));
+        // The in-memory parse cache must not outlive the on-disk metadata cache it was
+        // built alongside: drop it so the next scan re-parses every file.
+        GameList::ParseCache::Invalidate();
         UISettings::values.is_game_list_reload_pending.exchange(true);
     } else {
         if (show_message)

@@ -196,8 +196,9 @@ void GameList::OnPopulate() {
     }
 }
 
-void GameList::PopulateAsync(QVector<UISettings::GameDir>& game_dirs) {
-    item_model->PopulateAsync(game_dirs);
+void GameList::PopulateAsync(QVector<UISettings::GameDir>& game_dirs,
+                             GameListRefreshReason reason) {
+    item_model->PopulateAsync(game_dirs, reason);
 }
 
 void GameList::SetScanEnabled(bool enabled) {
@@ -290,7 +291,8 @@ void GameList::ResetViewMode() {
         m_isTreeMode = newTreeMode;
         item_model->SetFlat(!m_isTreeMode);
         if (!UISettings::values.game_dirs.empty()) {
-            item_model->PopulateAsync(UISettings::values.game_dirs);
+            item_model->PopulateAsync(UISettings::values.game_dirs,
+                                       GameListRefreshReason::Settings);
         }
     }
 }
@@ -803,13 +805,13 @@ void GameList::AddCustomDirPopup(QMenu& context_menu, QModelIndex selected) {
 
     connect(deep_scan, &QAction::triggered, this, [this, &game_dir] {
         game_dir.deep_scan = !game_dir.deep_scan;
-        PopulateAsync(UISettings::values.game_dirs);
+        PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
     });
     connect(delete_dir, &QAction::triggered, this, [this, &game_dir] {
         UISettings::values.game_dirs.removeOne(game_dir);
         // Repopulate instead of removing the row: a running worker adds games under the
         // directory rows it created, and the other rows' GameDirRole indices would shift.
-        PopulateAsync(UISettings::values.game_dirs);
+        PopulateAsync(UISettings::values.game_dirs, GameListRefreshReason::Settings);
     });
 }
 
