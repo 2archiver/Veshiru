@@ -181,7 +181,7 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
         }.start()
     }
 
-    // TODO(crueter): body, "View on Forgejo" button
+    // TODO(crueter): body, "View on GitHub" button
     private fun showUpdateDialog(release: NativeLibrary.UpdateResult) {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.update_available)

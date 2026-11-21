@@ -58,7 +58,7 @@ Verified during this development pass:
   `R16G16B16A16_SFLOAT` HDR swapchain preservation and native asynchronous pipeline compilation.
 - Lichii (`#948`–`#1907`): current compatibility/renderer baseline, NUP container/validation,
   budget-aware texture collection, `ShaderCacheV2`, Maxwell/Ampere shader lowering, `SET_SCISSOR`
-  stride, `RenderTargetState` layout sync, NCZ bounds validation and Windows crash/minidump work.
+  stride, `RenderTargetState` layout sync, NCZ bounds validation and Windows crash reporting work.
 - Nemyu (GitLab `nemyu-emulator/nemyu`, GitHub mirror `PlayerJV55/DeckEmuV2OOT`): NUP base-title
   peek, decompression-cache override, damaged-member fallback and slow-decompression diagnostics.
 - Deadly-pro/Open-Frame-gen (`Copyright (c) 2026 Prithivi Nair, Prajwal R, Madhav S, Rashmi N Ugarakhod`,

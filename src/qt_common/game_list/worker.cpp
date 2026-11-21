@@ -850,6 +850,7 @@ void GameListWorker::ReportMissingGames(GameListDir* parent_dir) {
         LOG_WARNING(Frontend, "Game no longer found: {}", path.toStdString());
         auto* const path_item =
             new GameListItemPath(QDir::toNativeSeparators(path), {}, name, {}, 0, 0, {});
+        path_item->setData(true, GameListItemPath::MissingRole);
         path_item->setData(tr("This game's file is no longer where it was, so it is not in the "
                               "list any more.\n\n%1\n\nIf it was deleted by accident, put the "
                               "file back: its saves are kept in the NAND save data, not in the "

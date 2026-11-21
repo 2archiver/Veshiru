@@ -6,6 +6,79 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-21
+
+Versioned List, Discord Rich Presence, crash dumps, the HOME Menu news applet, notification icons
+and the About wordmark. Every entry says how it was verified; a build in this environment was not
+possible (no Qt, no Windows toolchain), so rendering and Windows behaviour are marked unverified.
+
+### Added
+
+- **Versioned List rebuilt from the active theme palette.** The 2.3 view painted its rows from
+  `QPalette::Base`, the near-black `#07111F` app background, which read as a black panel inside
+  the dark blue window. The new delegate takes every colour from `QPalette` (row surface
+  `QPalette::Mid` = `#132D46` on Deep Current), enforces WCAG AA at paint time, and adds a version
+  pill, dimmed title ID, file size, play time, hover/selected accent bar and a marked `Missing`
+  row that keeps the old path in its model tooltip. No raw background or text hex value remains in
+  the mode. `[verified: contrast computed from the shipped palette — title 12.66:1, secondary
+  7.68:1, badge 5.37:1 after the runtime adjustment, selected title 8.95:1, row surface 1.34:1
+  against the window; unverified: rendering in a running GUI]`
+- **Discord Rich Presence ships its own application ID.** The user-facing Application ID field is
+  gone; presence is on by default behind one checkbox in Configure → Web. The build handshakes
+  with the constant in `src/qt_common/discord/discord_application.h`, sends "Playing <game>",
+  the resolved game version, elapsed time and the Veshiru icon, and stays at Debug when Discord
+  is missing. `[verified: payload built and asserted by a host g++ harness, including the assets
+  object, escaping and the digits-only ID; unverified: live Discord on a desktop]`
+- **Notification-area icon and toasts use the embedded Veshiru icon.** A tray icon is created from
+  `:/img/veshiru.ico` (never a relative path), the application window icon is set at startup, and
+  update-available, install-finished, game-started (only while the window is inactive) and Qt
+  critical-error toasts all pass that icon explicitly. `[unverified: tray/toast appearance on a
+  real desktop]`
+
+### Changed
+
+- **Crash dumps removed.** `eden_crash.dmp`, the Breakpad integration and the `crash_dumps`
+  directory are gone; the Windows handler still logs the exception code, faulting module+offset,
+  thread name and stack as one Critical line, written and flushed directly by
+  `TryWriteCrash`. Ordinary logging and the sanitised Export diagnostics zip are unchanged.
+  `[verified: no source, CMake or installer reference to eden_crash/breakpad/CrashDumpsDir remains; the crash line
+  path is unchanged and flushes per line; unverified: forced crash on Windows]`
+- **HOME Menu news applet opens GitHub.** "Open Forgejo" → "Open GitHub", "View more on GitHub",
+  the link allow-list now accepts `github.com`, the news author/topic is Veshiru, and the update
+  dialog plus the remaining user-facing Eden-Forgejo links point at
+  `https://github.com/2archiver/Veshiru`. `.forgejo` CI is untouched.
+  `[unverified: the in-emulator news applet]`
+- **No performance or frame-generation code changed in 2.4.** Source comparison against Lichii
+  `nx2` `b198feb` shows the reduced-resolution flow pass, hitch skip, pacer and VRAM cap already
+  present and more developed than Lichii's. Without a GPU to measure on, changing them would be a
+  guess. See [the 2.4 comparison](docs/2.4-lichii-comparison.md). `[source-level only]`
+
+### Fixed
+
+- **The About dialog showed the Lichii wordmark.** `dist/veshiru_wordmark.png` and its 2x variant
+  were the upstream project's artwork; both are regenerated as a Veshiru wordmark in the Deep
+  Current accent colours. `[verified: asset inspected at 1x and 2x on dark and light backgrounds;
+  unverified: the dialog in a running GUI]`
+
+### Verified
+
+- Discord payload/application-ID logic: standalone host `g++ -std=c++20` build of
+  `discord_payload.cpp` with all assertions passing (`ALL CHECKS PASSED (0)`).
+- Contrast values above, computed from the exact `VeshiruPalette()` colours and the delegate's
+  compositing/adjustment rules.
+- A source/CMake grep for `eden_crash`, `breakpad`, `CrashDumpsDir` and
+  `VESHIRU_CRASH_DUMPS` finds no hits outside this changelog.
+- The regenerated wordmark rendered on `#07111F` and `#F3F6FA` and inspected.
+
+### Unverified
+
+- Any build: the agent environment has no Qt, CMake, clang-cl or Windows SDK, so the Windows
+  clang-cl build and ctest were not run. This release must not be called built until CI passes.
+- GUI rendering of the Versioned List, the tray icon/toasts and the About dialog.
+- Live Discord presence with the client open and closed.
+- A forced host crash on Windows writing no `.dmp` while still flushing the log line.
+- The HOME Menu news applet's new button and link.
+
 ## [2.3.0] - 2026-11-21
 
 Every entry carries a tag. `[verified: <how>]` means it was run, or a CI job proved it; a green

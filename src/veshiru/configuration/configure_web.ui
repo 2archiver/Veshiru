@@ -150,23 +150,14 @@
        </widget>
       </item>
       <item>
-       <layout class="QHBoxLayout" name="discordApplicationIdLayout">
-        <item>
-         <widget class="QLabel" name="discordApplicationIdLabel">
-          <property name="text">
-           <string>Discord Application ID:</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QLineEdit" name="discordApplicationIdEdit">
-          <property name="maxLength"><number>32</number></property>
-          <property name="placeholderText">
-           <string>Enter your Discord application ID</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
+       <widget class="QLabel" name="discordHint">
+        <property name="text">
+         <string>Veshiru connects to Discord by itself. Only the game title, its version and how long you have been playing are sent.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
       </item>
      </layout>
     </widget>

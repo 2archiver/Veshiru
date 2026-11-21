@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "qt_common/discord/discord_impl.h"
+#include "qt_common/discord/discord_application.h"
 #include "qt_common/discord/discord_payload.h"
 
 #include <algorithm>
@@ -282,15 +283,17 @@ private:
         std::string connected_id;
         std::optional<bool> reported; ///< Last availability state logged, if any
 
+        // Discord closed is the normal case, not an error: these stay at Debug so a machine
+        // without Discord produces no log noise at the default level.
         const auto note_unavailable = [&] {
             if (!reported.has_value() || *reported) {
-                LOG_INFO(Frontend, "discord: unavailable");
+                LOG_DEBUG(Frontend, "discord: unavailable");
             }
             reported = false;
         };
         const auto note_connected = [&] {
             if (!reported.has_value() || !*reported) {
-                LOG_INFO(Frontend, "discord: connected");
+                LOG_DEBUG(Frontend, "discord: connected");
             }
             reported = true;
         };
@@ -474,18 +477,13 @@ std::string CleanTitle(std::string title) {
 
 } // namespace
 
-DiscordImpl::DiscordImpl(Core::System& system_, std::string application_id)
-    : system{system_}, application_id{std::move(application_id)} {
-    if (this->application_id.empty()) {
-        LOG_WARNING(Frontend,
-                    "Discord Rich Presence is enabled but no Discord Application ID is configured; "
-                    "RPC is disabled until one is supplied in Web settings.");
-    } else if (!IsApplicationId(this->application_id)) {
-        LOG_WARNING(Frontend,
-                    "Discord Application ID must contain only decimal digits; Rich Presence is "
-                    "disabled.");
+DiscordImpl::DiscordImpl(Core::System& system_) : system{system_} {
+    // Shipped with the build; the user has nothing to configure. A malformed constant leaves
+    // presence off without a warning, exactly like a missing Discord client.
+    if (!IsApplicationId(VESHIRU_DISCORD_APPLICATION_ID)) {
+        LOG_DEBUG(Frontend, "discord: embedded application id is not usable; presence stays off");
     }
-    Worker().SetApplicationId(this->application_id);
+    Worker().SetApplicationId(VESHIRU_DISCORD_APPLICATION_ID);
 }
 
 DiscordImpl::~DiscordImpl() {
@@ -519,9 +517,6 @@ void DiscordImpl::Update() {
     // the library can never disagree. A running game's control metadata already reflects a
     // registered update; empty only when nothing at all is known.
     std::string version = GameListVersion::Resolve({}, patch_manager, system.GetAppLoader());
-    if (version.empty()) {
-        version = "1.0.0";
-    }
 
     const std::string game_key = fmt::format("{:016X}:{}:{}", program_id, title, version);
     if (current_game_key != game_key || game_started_at == 0) {

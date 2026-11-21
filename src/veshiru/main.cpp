@@ -16,10 +16,8 @@
 #include "common/scope_exit.h"
 #include "diagnostics_options.h"
 #include "native_console.h"
+#include "notification_center.h"
 #include "qt_common/qt_common.h"
-#ifdef VESHIRU_CRASH_DUMPS
-#include "breakpad.h"
-#endif
 #include "nx2_switches.h"
 #include "startup_checks.h"
 
@@ -168,6 +166,8 @@ static void QtLogHandler(QtMsgType type, const QMessageLogContext&, const QStrin
         break;
     case QtCriticalMsg:
         LOG_ERROR(Frontend, "Qt: {}", message.toStdString());
+        Veshiru::NotificationCenter::Instance().Notify(QStringLiteral("Veshiru error"),
+                                                       message.left(300));
         break;
     case QtFatalMsg:
         LOG_CRITICAL(Frontend, "Qt fatal error: {}", message.toStdString());
@@ -180,9 +180,6 @@ static void QtLogHandler(QtMsgType type, const QMessageLogContext&, const QStrin
 }
 
 static int RunFrontend(int argc, char* argv[]) {
-#ifdef VESHIRU_CRASH_DUMPS
-    Breakpad::InstallCrashHandler();
-#endif
 
     // Init settings params
     QCoreApplication::setOrganizationName(QStringLiteral("eden"));
@@ -265,6 +262,10 @@ static int RunFrontend(int argc, char* argv[]) {
 #endif
 
     QApplication app(argc, argv);
+
+    // Set before any window exists: Qt then uses the embedded icon for every top-level window,
+    // the taskbar button and any notification it raises, independent of the working directory.
+    QApplication::setWindowIcon(Veshiru::AppIcon());
 
 #ifdef _WIN32
     OverrideWindowsFont();
@@ -356,8 +357,7 @@ int main(int argc, char* argv[]) try {
             }
             qInstallMessageHandler(QtLogHandler);
 #ifdef _WIN32
-            Common::Windows::InstallCrashHandler(
-                Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir));
+            Common::Windows::InstallCrashHandler();
 #endif
             QtCommon::LogStartupInfo();
         }

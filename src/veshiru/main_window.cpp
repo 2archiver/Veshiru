@@ -54,6 +54,7 @@
 #include "core/file_sys/registered_cache.h"
 #include "veshiru/nx_tools.h"
 #endif
+#include "veshiru/notification_center.h"
 
 #include "applets/qt_amiibo_settings.h"
 #include "applets/qt_controller.h"
@@ -312,9 +313,6 @@ static void RemoveTitlebarFilter() {
 
 #endif
 
-#ifdef VESHIRU_CRASH_DUMPS
-#include "veshiru/breakpad.h"
-#endif
 
 using namespace Common::Literals;
 
@@ -475,6 +473,7 @@ MainWindow::MainWindow(const QStringList& launch_arguments)
     UpdateWindowTitle();
 
     show();
+    Veshiru::NotificationCenter::Instance().Initialize(this);
 
 #ifdef ENABLE_UPDATE_CHECKER
     if (UISettings::values.check_for_updates) {
@@ -2091,7 +2090,7 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
                 this, tr("An error occurred initializing the video core."),
                 tr("This is usually caused by outdated GPU drivers. "
                    "Please see the log for more details. See: "
-                   "<a href='https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/HowToAccessLogs.md'>"
+                   "<a href='https://github.com/2archiver/Veshiru/blob/main/docs/user/HowToAccessLogs.md'>"
                    "How to access log files</a>."));
             break;
         default:
@@ -3593,6 +3592,8 @@ void MainWindow::OnMenuInstallToNAND() {
                                 : tr("%n file(s) failed to install\n", "", failed_files.size()));
 
     QMessageBox::information(this, tr("Install Results"), install_results);
+    Veshiru::NotificationCenter::Instance().Notify(tr("Install finished"),
+                                                   install_results.simplified());
     Common::FS::RemoveDirRecursively(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
                                      "game_list");
     GameListParseCache::Invalidate();
@@ -3673,6 +3674,16 @@ void MainWindow::OnStartGame() {
 
     play_time_manager->SetProgramId(QtCommon::system->GetApplicationProcessProgramID());
     play_time_manager->Start();
+
+    if (!isActiveWindow() || isMinimized()) {
+        std::string title;
+        QtCommon::system->GetAppLoader().ReadTitle(title);
+        if (!title.empty()) {
+            Veshiru::NotificationCenter::Instance().Notify(
+                tr("Playing %1").arg(QString::fromStdString(title)),
+                QStringLiteral("Veshiru"));
+        }
+    }
 
     discord_rpc->Update();
     Common::FeralGamemode::Start();
@@ -3865,7 +3876,7 @@ void MainWindow::OnOpenModsPage() {
 }
 
 void MainWindow::OnOpenUserHandbook() {
-    OpenURL(QUrl(QStringLiteral("https://git.eden-emu.dev/eden-emu/eden/src/branch/master/docs/user/README.md")));
+    OpenURL(QUrl(QStringLiteral("https://github.com/2archiver/Veshiru/blob/main/docs/user/README.md")));
 }
 
 void MainWindow::ToggleFullscreen() {
@@ -4105,7 +4116,6 @@ void MainWindow::ToggleShowGameName() {
 void MainWindow::OnConfigure() {
     const auto old_theme = UISettings::values.theme;
     const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
-    const auto old_discord_application_id = UISettings::values.discord_application_id.GetValue();
     const auto old_language_index = Settings::values.language_index.GetValue();
     const bool old_gamemode = UISettings::values.enable_gamemode.GetValue();
 #ifdef __unix__
@@ -4169,8 +4179,7 @@ void MainWindow::OnConfigure() {
     if (UISettings::values.theme != old_theme) {
         UpdateUITheme();
     }
-    if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence ||
-        UISettings::values.discord_application_id.GetValue() != old_discord_application_id) {
+    if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence) {
         SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
     }
     if (UISettings::values.enable_gamemode.GetValue() != old_gamemode) {
@@ -5391,6 +5400,10 @@ void MainWindow::OnEmulatorUpdateAvailable() {
         return;
     }
 
+    Veshiru::NotificationCenter::Instance().Notify(
+        tr("Update available"),
+        tr("Veshiru %1 is ready to download.").arg(QString::fromStdString(release.tag)));
+
     UpdateDialog dialog(release, this);
     switch (dialog.exec()) {
     case UpdateDialog::SkipVersion:
@@ -6436,8 +6449,7 @@ void MainWindow::OnLanguageChanged(const QString& locale) {
 void MainWindow::SetDiscordEnabled([[maybe_unused]] bool state) {
 #ifdef USE_DISCORD_PRESENCE
     if (state)
-        discord_rpc = std::make_unique<DiscordRPC::DiscordImpl>(
-            *QtCommon::system, UISettings::values.discord_application_id.GetValue());
+        discord_rpc = std::make_unique<DiscordRPC::DiscordImpl>(*QtCommon::system);
     else
         discord_rpc = std::make_unique<DiscordRPC::NullImpl>();
 #else

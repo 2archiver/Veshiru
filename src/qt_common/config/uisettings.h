@@ -39,7 +39,6 @@ extern template class Setting<unsigned long long>;
 
 namespace UISettings {
 
-inline constexpr char DEFAULT_DISCORD_APPLICATION_ID[] = "";
 
 bool IsDarkTheme();
 
@@ -161,11 +160,9 @@ struct Values {
     // The periodic performance summary: 0 = off, otherwise seconds per window.
     Setting<u32> perf_summary_seconds{linkage, 0, "perf_summary_seconds", Category::Ui};
 
-    // Discord Rich Presence is disabled until the user supplies their own application ID.
-    Setting<bool> enable_discord_presence{linkage, false, "enable_discord_presence", Category::Ui};
-    Setting<std::string> discord_application_id{linkage, DEFAULT_DISCORD_APPLICATION_ID,
-                                               "discord_application_id",
-                                               Category::Ui};
+    // Discord Rich Presence uses the application ID compiled into the build; the user only
+    // chooses whether to show their game. On by default, and one checkbox turns it off.
+    Setting<bool> enable_discord_presence{linkage, true, "enable_discord_presence", Category::Ui};
 
     // Screenshots
     Setting<bool> enable_screenshot_save_as{linkage, true, "enable_screenshot_save_as",

@@ -10680,8 +10680,8 @@ By selecting &quot;From Eden&quot;, previous save data stored in Eglantine will 
     <message>
         <location filename="../../src/veshiru/updater/update_dialog.ui" line="20"/>
         <location filename="../../src/veshiru/updater/update_dialog.cpp" line="31"/>
-        <source>&lt;a href=&quot;%1&quot;&gt;View on Forgejo&lt;/a&gt;</source>
-        <translation>&lt;a href=&quot;%1&quot;&gt;عرض على Forgejo&lt;/a&gt;</translation>
+        <source>&lt;a href=&quot;%1&quot;&gt;View on GitHub&lt;/a&gt;</source>
+        <translation>&lt;a href=&quot;%1&quot;&gt;عرض على GitHub&lt;/a&gt;</translation>
     </message>
     <message>
         <location filename="../../src/veshiru/updater/update_dialog.ui" line="33"/>

@@ -4,11 +4,15 @@
 #include "qt_common/discord/discord_payload.h"
 
 #include <string>
+#include <utility>
 
 #include "common/scm_rev.h"
 
 namespace DiscordRPC {
 namespace {
+
+constexpr char VESHIRU_ICON_URL[] =
+    "https://raw.githubusercontent.com/2archiver/Veshiru/main/dist/veshiru.png";
 
 std::string EscapeJson(std::string_view value) {
     constexpr char hex[] = "0123456789abcdef";
@@ -63,13 +67,21 @@ std::string PresenceName() {
     return "Veshiru " + std::string{Common::g_build_version};
 }
 
+std::string_view PresenceIconUrl() {
+    return VESHIRU_ICON_URL;
+}
+
 PresencePayload BuildPresencePayload(const ActivityData& activity) {
     if (activity.browsing) {
         return {.details = "Browsing library", .state = PresenceName()};
     }
+    std::string state = PresenceName();
+    if (!activity.game_version.empty()) {
+        state += " - Version " + activity.game_version;
+    }
     return {
         .details = "Playing " + activity.game_title,
-        .state = PresenceName() + " - Version " + activity.game_version,
+        .state = std::move(state),
         .started_at = activity.started_at,
     };
 }
@@ -89,6 +101,8 @@ std::string BuildSetActivityPayload(const ActivityData& activity, std::uint32_t 
         payload += ",\"timestamps\":{\"start\":" +
                    std::to_string(*presence.started_at) + "}";
     }
+    payload += ",\"assets\":{\"large_image\":\"" + EscapeJson(PresenceIconUrl()) +
+               "\",\"large_text\":\"Veshiru\"}";
     payload += "}},\"nonce\":\"" + EscapeJson(nonce) + "\"}";
     return payload;
 }

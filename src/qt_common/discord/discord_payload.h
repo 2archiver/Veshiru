@@ -29,6 +29,10 @@ struct PresencePayload {
 /// updater use, so the presence can never name a version the build does not have.
 std::string PresenceName();
 
+/// The Veshiru icon shown as the activity's large image. Discord fetches it from GitHub, so no
+/// uploaded application asset is needed; the text beside it is always "Veshiru".
+std::string_view PresenceIconUrl();
+
 PresencePayload BuildPresencePayload(const ActivityData& activity);
 std::string BuildHandshakePayload(std::string_view application_id);
 std::string BuildSetActivityPayload(const ActivityData& activity, std::uint32_t process_id,
