@@ -49,9 +49,21 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   presents over 100 ms, up to 7.8 s of draws held per 10 s window, one 39.4 s frame on first
   entry), and gives the per-game settings that matter on this card (lower the texture cache
   memory limit below 3935, `precache_shaders` Ask/Always, frame generation only above ~30 real
-  FPS). It also records what this machine cannot do, so expectations stay honest. No renderer
-  change ships in 2.5.0. `[verified: every number quoted in the document comes from the five
-  attached logs; not verified: a post-change session on hardware]`
+  FPS). It also records what this machine cannot do, so expectations stay honest. No performance
+  renderer change ships in 2.5.0. `[verified: every number quoted in the document comes from the
+  five attached logs; not verified: a post-change session on hardware]`
+- **Pipeline timeline tracing (`EDEN_NX2_PIPELINE_BUILD_TRACE=<file>`) gains three markers.**
+  Boot-time pipeline loads now log `SUBMIT` (a record queued to the job scheduler), and each
+  deferred SPIR-V emission logs `EMIT-BEG`/`EMIT-END`, so a cold load can be attributed end to end
+  with the existing driver `BEGIN`/`END` (vkCreate*Pipelines) lines: queue → emission → driver
+  create call → usable. No behaviour change when the variable is unset.
+- **Benchmark contract and operator checklist** (`docs/performance/2.5-benchmark-contract.md`,
+  `docs/performance/2.5-operator-checklist.md`). The contract defines matched before/after
+  captures (≥ 3 per scenario × cache condition, same machine/firmware/title/save/route/settings/
+  driver/AC/output, frame-gen off, sync on, separate cache dirs), frame metrics (mean real FPS,
+  p50/p99/p99.9 intervals, hitch counts > 100 ms and > 250 ms), and the [2.5.0] Kakariko gate
+  (mean ≥ 10 real FPS **and** p99 ≤ 100 ms on the 60 s route). No release claim may be quoted
+  without running it.
 
 ### Known issues / not addressed in 2.5.0
 
@@ -71,6 +83,10 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   held) is documented as an investigation, not yet diagnosed end to end.
 - **`precache_shaders` stays `Off` in the recommended table** (right for a cold cache and for
   boot time); turning it on per game is a valid choice once the cache is warm.
+- **No performance numbers are claimed for 2.5.0.** The renderer paths, the Kakariko real-FPS
+  gate and every VRAM figure are documented, but no before/after capture exists yet on the target
+  machine; 2.5.0 ships the fixes, the analysis and the measurement tooling. Hardware verification
+  belongs to `docs/performance/2.5-operator-checklist.md` and is the release blocker it documents.
 
 ## [2.4.1] - 2026-11-21
 
