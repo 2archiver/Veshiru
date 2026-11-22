@@ -1,8 +1,10 @@
 # Changelog
 
-All notable changes to Veshiru are documented here. Each release's notes are taken from its
-`## [X.Y.Z]` section (release candidates use the section of the version they are a candidate for).
-New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version section.
+All notable changes to Veshiru are documented here, in engineering voice: what changed, why, and what
+has been verified. Each release's page shows the short, user-facing notes in
+`docs/release-notes/<X.Y.Z>.md` when that file exists, and this file's `## [X.Y.Z]` section
+otherwise (release candidates use the section of the version they are a candidate for). New entries
+go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version section.
 
 ## [Unreleased]
 
@@ -44,6 +46,15 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   pressure it still runs, once per escape interval instead of every 5-30 s (120 s on a 32 GiB host,
   20 s on a 16 GiB one). One log line explains the first deferral. `[verified: unit tests over the
   whole truth table of the predicate; unverified: the effect on a session on hardware]`
+- **Release pages carry short, user-facing notes.** `tools/ci/release-description.sh <version>`
+  prints `docs/release-notes/<version>.md` when it exists and the CHANGELOG section otherwise
+  (release candidates use the notes of the release they are a candidate for); the release workflow
+  and `release-notes.sh` both take it from there, and the Windows-only note, the download table and
+  a link to `CHANGELOG.md` follow. The 2.7.0 notes describe the three Ocarina of Time changes in the terms a player uses
+  (stutters, flicker, second-long pauses), say what the release costs (a slower first load) and list
+  what is still open. `docs/release-notes/README.md` says how to write them.
+  `[verified: the script and the workflow's notes assembly were run for 2.7.0 and for a version
+  without notes (2.6.0); unverified: the rendered release page, which only a publish run produces]`
 - **Ocarina of Time on the reference machine: analysis and settings** in
   `docs/performance/2.7-oot-i7-10750h-gtx1650.md`, covering all three 2026-11-22 logs (frame-gen
   off, frame-gen on, and FPS Unlock off), what the freezes and the flicker come from, what 2.7
