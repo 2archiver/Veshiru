@@ -273,7 +273,7 @@ void Config::SetUpIni() {
         seed(Settings::values.use_speed_limit, ToString(true));
         seed(Settings::values.speed_limit, ToString(u16(100)));
         seed(Settings::values.memory_layout_mode, ToString(u32(Settings::MemoryLayout::Memory_4Gb)));
-        seed(Settings::values.sync_core_speed, ToString(false));
+        seed(Settings::values.sync_core_speed, ToString(true));
         EndGroup();
 
         BeginGroup(Settings::TranslateCategory(Settings::Category::System));

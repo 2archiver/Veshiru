@@ -25,6 +25,12 @@ This contains documentation created by developers, build instructions, guideline
   - **[HOS Kernel](./HosKernel.md)**
   - **[Settings](./Settings.md)**
 
+## Performance
+
+- **[2.5.0 — Ocarina of Time (Switch 2) on the GTX 1650 (Metabox NH77DB)](./performance/2.5-oot-switch2-gtx1650.md)** —
+  what the 2026-11-22 session logs say, why Kakariko runs at ~10 FPS, and the per-game settings
+  that matter on a 4 GB card.
+
 ## Contributing
 
 - **[Coding guidelines](./Coding.md)**
