@@ -22,6 +22,7 @@
 
 #include "common/settings.h"
 #include "core/core_timing.h"
+#include "core/game_settings.h"
 #include "core/hardware_properties.h"
 
 namespace Core::Timing {
@@ -319,8 +320,11 @@ void CoreTiming::ResetTicks() {
 
 u64 CoreTiming::GetClockTicks() const {
     u64 fres = is_multicore ? Common::g_wall_clock.GetCNTPCT() : Common::g_wall_clock.CPUTickToGuestCNTPCT(cpu_ticks);
-    if (const u32 target = CpuClockTargetMhz(Settings::values.cpu_clock.GetValue());
-        target != CPU_CLOCK_BASE_MHZ) {
+    // A title that paces its frames by this clock runs at Normal for the session, or Boost would
+    // push its guest time 1.7x ahead of wall time (see GameSettings::NeedsGuestClockPacing).
+    const auto cpu_clock = GameSettings::CpuClockHeldAtNormal() ? Settings::CpuClock::Normal
+                                                               : Settings::values.cpu_clock.GetValue();
+    if (const u32 target = CpuClockTargetMhz(cpu_clock); target != CPU_CLOCK_BASE_MHZ) {
         fres = fres * target / CPU_CLOCK_BASE_MHZ;
     }
     if (::Settings::values.sync_core_speed.GetValue()) {

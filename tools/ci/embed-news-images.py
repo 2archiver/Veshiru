@@ -25,8 +25,8 @@ ICON = ROOT / "dist" / "branding" / "veshiru_icon.png"
 OUT_DIR = ROOT / "dist" / "news"
 HEADER = ROOT / "src" / "core" / "hle" / "service" / "bcat" / "news" / "news_images.h"
 
-TOP = (16, 37, 59)     # #10253B elevated
-BOTTOM = (7, 17, 31)   # #07111F app background
+TOP = (20, 48, 79)     # #14304F elevated (Deep Current 2.6)
+BOTTOM = (10, 21, 38)  # #0A1526 app background (Deep Current 2.6)
 
 SIZES = {"large": (800, 450), "small": (320, 180)}
 

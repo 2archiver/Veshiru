@@ -6,6 +6,95 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-22
+
+### Changed
+
+- **Star Fox (Switch 2) and Donkey Kong Bananza run with the guest clock at Normal for the session
+  when "CPU Clock" is inherited from the global profile as Boost.** `Core::Timing::GetClockTicks`
+  derives the guest tick counter from the host wall clock in multicore and multiplies it by
+  1734/1020 for Boost, while kernel sleeps and GPU timestamps stay at wall time, so those two
+  titles saw guest time run 1.7x fast: a 60 Hz scene presented about 39 times a second, and Bananza
+  measured its own CPU frames over budget and fell back to swap interval 2 (30 FPS) with vblank
+  headroom left. `Core::GameSettings` now names the titles that pace themselves by that clock
+  (`NeedsGuestClockPacing`) and holds their clock at Normal when the inherited clock is Boost
+  (`HoldsClockAtNormal`); a clock chosen for the game itself, Overclock included, is left alone and
+  nothing on disk is rewritten. Adapted from Orchid 0.12.0's "keep Normal CPU clock for Donkey Kong
+  Bananza and Star Fox" (MythosOfs/Orchid PR #180, Eglantine lineage), which measured Star Fox
+  39.19 → 58.22 FPS and Bananza 57.75 → 59.74 mean FPS with its 30-FPS drops going 16 → 0 on an
+  RX 9070 XT. `[verified: unit tests for the title list and every combination of the hold rule;
+  unverified: frame rates on the target machine]`
+- **`Common::RangeMap`'s `Map`/`Unmap` walk the tree twice instead of four times.** The map behind
+  `Tegra::MemoryManager`'s PTE-kind tracking found the two surrounding values with its own
+  `lower_bound`/`upper_bound` and then searched again for the erase range. It now keeps the two
+  iterators it already has, erases the range between them and inserts with a hint. Adapted from
+  Orchid `f4edd9c8` / Eglantine `c6dd1d0214` (goof787lord), with Orchid's randomized flat-model
+  test. `[verified: standalone host benchmark (g++ 12.2.0, -O2), 3,000,000 random Map calls, three
+  runs each: 2.5's header 1.014-1.068 s (median 342 ns per Map), 2.6's 0.637-0.681 s (median
+  214 ns per Map, 37% less), identical final-state digest in both builds; a 40-seed x 2000-operation
+  randomized check against a flat model passes for both headers; unverified: the effect inside a
+  game]`
+- **Deep Current is a step brighter and bluer.** Every token moved: app background `#07111F` →
+  `#0A1526`, surface `#0B1B2D` → `#0E2140`, elevated `#10253B` → `#14304F`, border `#1D3B58` →
+  `#274C74`, primary blue `#258BFF` → `#3D9BFF`, bright blue `#3BA7FF` → `#5FBEFF`, cyan
+  `#42D9F5` → `#5FE1FA`, with hover/pressed/selection, the text ramp and faint lifted to match
+  (`dist/qt_themes/veshiru/style.qss`, `VeshiruPalette()`, both link colours, and the token sheet
+  that is the record). Filled accent surfaces — the selected menu row, the default button in all
+  three states and the item-view highlight — take dark navy text (`#06121F`) because white on
+  `#3D9BFF` is only 2.9:1; contrast computed from the committed colours: text 16.75:1, muted
+  5.30:1, faint 5.50:1 (3.68:1 in 2.5), accent 6.38:1 on the window, selected-row 6.58:1. The
+  HOME-applet news artwork was regenerated with the same gradient. `[verified: contrast ratios
+  computed from the exact hex values and the stylesheet's compositing; unverified: how it looks on
+  a real panel]`
+- **The interface applies its theme stylesheet once.** `MainWindow::UpdateUITheme` read the theme
+  file through a `QTextStream` twice; the second `readAll()` returns nothing, and that empty result
+  was set as the *window's* stylesheet, making Qt re-resolve the style of every child for no visual
+  change. The sheet is now read once and set on the application only. `[verified: the call path and
+  Qt's handling of an empty widget stylesheet; unverified: measured restyle time on Windows]`
+
+### Added
+
+- **`docs/performance/2.6-performance-and-ui.md`** records the measurement, the palette token
+  table, the contrast table, what was audited and deliberately not changed (on-demand pipeline
+  compilation, vertex-input dynamic state, storage-binding reuse, texture-cache limits) and how to
+  check the clock hold on the NH77DB.
+- **`docs/2.6-arena-agent-patch.txt`** is a plain-text patch manifest: the exact edits, the
+  verification run for each, and the limits of what was proved.
+- **A randomized Range Map test** (`src/tests/common/range_map.cpp`) compares 2000 random maps
+  against a flat model at every address, and **`src/tests/core/game_settings.cpp`** covers the
+  paced-title list and the hold rule.
+
+### Known issues / not addressed in 2.6
+
+- **No FPS number is claimed for this build on the reference machine.** The only measured frame
+  rates quoted above are Orchid's, from its own hardware and build. Run the checklist in
+  `docs/performance/2.5-operator-checklist.md` for anything stronger.
+- **On-demand pipeline compilation still dominates Kakariko's stutter** on the 4 GB GTX 1650
+  (`docs/performance/2.5-oot-switch2-gtx1650.md`). 2.6 does not change pipeline scheduling: this
+  tree already builds deferred pipelines on worker threads with priority promotion, and the
+  reference projects' pipeline ownership work describes what it already does.
+- **Boost remains the wrong clock for those two titles**, and the hold applies only when the clock
+  is inherited; a per-game Boost is still honoured and still costs the frame rate.
+
+### Verified
+
+- Host `g++ 12.2.0` standalone harnesses for the Range Map change: the 3-run benchmark table above,
+  the digest that proves both headers end in the same map, and the 40-seed randomized model check.
+- Palette contrast arithmetic from the committed hex values, and the regenerated news JPEGs (15427
+  and 4687 bytes) rendered and inspected.
+- A source grep that the old palette hexes no longer appear in the theme or the palette code.
+- **Windows clang-cl production build and the full test suite, on this release's head:** CI run
+  [44984651181](https://github.com/2archiver/Veshiru/actions/runs/44984651181) passed configure,
+  `cmake --build build` with `ENABLE_WERROR=ON`, the console-subsystem and import checks, and
+  `ctest --test-dir build --output-on-failure --no-tests=error`, which includes the new Range Map
+  and game-settings cases.
+
+### Unverified
+
+- Every frame-rate claim for Veshiru itself, and the clock hold in a running game: no title was
+  booted for 2.6.
+- How the palette looks on a panel, and the restyle saving in a running GUI.
+
 ## [2.5.0] - 2026-11-22
 
 ### Changed
