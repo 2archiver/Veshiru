@@ -613,7 +613,11 @@ GraphicsPipeline::GraphicsPipeline(
     // Shader cache v2: the emission is the CPU stage of the build's job.
     std::function<void()> emit;
     if (build_queue.jobs && emit_stages) {
+        // Enqueue-to-usable timeline: EMIT-BEG is when the worker starts the deferred SPIR-V
+        // emission for this pipeline; the driver build logs its own BEGIN/END (pipeline_build_trace).
         emit = [this, emit_stages = std::exchange(emit_stages, {})] {
+            const auto emit_begin = std::chrono::steady_clock::now();
+            Vulkan::TracePipelineBuild("EMIT-BEG", "graphics", key.Hash(), {}, false);
             try {
                 spirv = emit_stages();
             } catch (const Shader::Exception& exception) {
@@ -621,6 +625,11 @@ GraphicsPipeline::GraphicsPipeline(
                           exception.what());
                 throw;
             }
+            Vulkan::TracePipelineBuild(
+                "EMIT-END", "graphics", key.Hash(), {}, false,
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - emit_begin)
+                    .count());
         };
     }
     // The build counts as complete once its task is released, run or not: one dropped before it

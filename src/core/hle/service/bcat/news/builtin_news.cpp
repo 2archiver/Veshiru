@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Veshiru Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "common/net/net.h"
 #include "common/scm_rev.h"
 #include "core/hle/service/bcat/news/builtin_news.h"
 #include "core/hle/service/bcat/news/msgpack.h"
+#include "core/hle/service/bcat/news/news_images.h"
 #include "core/hle/service/bcat/news/news_storage.h"
 
 #include "common/fs/file.h"
@@ -17,8 +19,6 @@
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 
-#include "common/httplib.h"
-
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -28,36 +28,21 @@
 #include <optional>
 #include <thread>
 
-#ifdef VESHIRU_BUNDLED_OPENSSL
-#include <openssl/cert.h>
-#endif
-
 namespace Service::News {
 namespace {
 
-// Cached logo data
-std::vector<u8> default_logo_small;
-std::vector<u8> default_logo_large;
-bool default_logos_loaded = false;
-
-::Common::unordered_map<std::string, std::vector<u8>> news_images_small;
-::Common::unordered_map<std::string, std::vector<u8>> news_images_large;
-std::mutex images_mutex;
-
-
 std::filesystem::path GetCachePath() {
     return Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) / "news" / "github_releases.json";
-}
-
-std::filesystem::path GetDefaultLogoPath(bool large) {
-    return Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) / "news" /
-           (large ? "eden_logo_large.jpg" : "eden_logo_small.jpg");
 }
 
 std::filesystem::path GetNewsImagePath(std::string_view news_id, bool large) {
     const std::string filename = fmt::format("{}_{}.jpg", news_id, large ? "large" : "small");
     return Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) / "news" / "images" / filename;
 }
+
+::Common::unordered_map<std::string, std::vector<u8>> news_images_small;
+::Common::unordered_map<std::string, std::vector<u8>> news_images_large;
+std::mutex images_mutex;
 
 u32 HashToNewsId(std::string_view key) {
     return static_cast<u32>(std::hash<std::string_view>{}(key) & 0x7FFFFFFF);
@@ -79,51 +64,15 @@ std::vector<u8> TryLoadFromDisk(const std::filesystem::path& path) {
     return data;
 }
 
-// TODO(crueter): Migrate to use Common::Net
-std::vector<u8> DownloadImage(const std::string& url_path, const std::filesystem::path& cache_path) {
-    LOG_DEBUG(Service_BCAT, "Downloading image: https://eden-emu.dev{}", url_path);
-    try {
-        httplib::Client cli("https://eden-emu.dev");
-        cli.set_follow_location(true);
-        cli.set_connection_timeout(std::chrono::seconds(2));
-        cli.set_read_timeout(std::chrono::seconds(2));
-
-#ifdef VESHIRU_BUNDLED_OPENSSL
-        cli.load_ca_cert_store(kCert, sizeof(kCert));
-#endif
-
-        if (auto res = cli.Get(url_path); res && res->status == 200 && !res->body.empty()) {
-            std::vector<u8> data(res->body.begin(), res->body.end());
-
-            std::error_code ec;
-            std::filesystem::create_directories(cache_path.parent_path(), ec);
-            if (std::ofstream out(cache_path, std::ios::binary); out) {
-                out.write(res->body.data(), static_cast<std::streamsize>(res->body.size()));
-            }
-            return data;
-        }
-    } catch (...) {
-        LOG_WARNING(Service_BCAT, "Failed to download: {}", url_path);
-    }
-    return {};
-}
-
+// Veshiru ships no news-image host: the artwork bundled with the build is the
+// image every news entry falls back to. Operators that want release-specific
+// artwork can drop "<news_id>_{small,large}.jpg" files into the images cache
+// directory; those are honoured ahead of the bundled logo.
 std::vector<u8> LoadDefaultLogo(bool large) {
-    const auto path = GetDefaultLogoPath(large);
-    const std::string url = large ? "/news/eden_logo_large.jpg" : "/news/eden_logo_small.jpg";
-
-    auto data = TryLoadFromDisk(path);
-    if (!data.empty()) return data;
-
-    return DownloadImage(url, path);
-}
-
-void LoadDefaultLogos() {
-    if (default_logos_loaded) return;
-    default_logos_loaded = true;
-
-    default_logo_small = LoadDefaultLogo(false);
-    default_logo_large = LoadDefaultLogo(true);
+    if (large) {
+        return {kVeshiruNewsLarge, kVeshiruNewsLarge + kVeshiruNewsLargeSize};
+    }
+    return {kVeshiruNewsSmall, kVeshiruNewsSmall + kVeshiruNewsSmallSize};
 }
 
 std::vector<u8> GetNewsImage(std::string_view news_id, bool large) {
@@ -141,12 +90,7 @@ std::vector<u8> GetNewsImage(std::string_view news_id, bool large) {
     auto data = TryLoadFromDisk(cache_path);
 
     if (data.empty()) {
-        const std::string url = fmt::format("/news/{}_{}.jpg", id_str, large ? "large" : "small");
-        data = DownloadImage(url, cache_path);
-    }
-
-    if (data.empty()) {
-        data = large ? default_logo_large : default_logo_small;
+        data = LoadDefaultLogo(large);
     }
 
     {
@@ -170,12 +114,6 @@ void PreloadNewsImages(const std::vector<u32>& news_ids) {
             if (news_images_small.contains(id_str) && news_images_large.contains(id_str)) {
                 continue;
             }
-        }
-
-        const auto path_small = GetNewsImagePath(id_str, false);
-        const auto path_large = GetNewsImagePath(id_str, true);
-        if (std::filesystem::exists(path_small) && std::filesystem::exists(path_large)) {
-            continue;
         }
 
         futures.push_back(std::async(std::launch::async, [id_str]() {
@@ -351,7 +289,7 @@ std::vector<u8> BuildMsgpack(std::string_view title, std::string_view body,
                              std::optional<u32> override_id) {
     MsgPack::Writer w;
 
-    const u32 news_id = override_id.value_or(HashToNewsId(title.empty() ? "eden" : title));
+    const u32 news_id = override_id.value_or(HashToNewsId(title.empty() ? "veshiru" : title));
     const std::string news_id_str = fmt::format("{}", news_id);
 
     const auto img_small = GetNewsImage(news_id_str, false);
@@ -390,7 +328,7 @@ std::vector<u8> BuildMsgpack(std::string_view title, std::string_view body,
     w.WriteKey("display_type");
     w.WriteString("NORMAL");
     w.WriteKey("topic_id");
-    w.WriteString("eden");
+    w.WriteString("veshiru");
 
     w.WriteKey("no_photography"); // still show image
     w.WriteUInt(0);
@@ -459,8 +397,6 @@ std::vector<u8> BuildMsgpack(std::string_view title, std::string_view body,
 void EnsureBuiltinNewsLoaded() {
     static std::once_flag once;
     std::call_once(once, [] {
-        LoadDefaultLogos();
-
         if (const auto cached = ReadCachedJson()) {
             const std::string_view body = cached.value();
             const auto releases = Common::Net::Release::ListFromJson(body, Common::g_build_auto_update_stable_api, Common::g_build_auto_update_stable_repo);

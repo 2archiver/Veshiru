@@ -6,6 +6,88 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-22
+
+### Changed
+
+- **Synchronize Core Speed is on by default.** `Core.sync_core_speed` now defaults to `true` in
+  the built-in value, the first-run profile that the configuration seeder writes, and the
+  recommended-settings table, so a fresh profile never runs the guest clock ahead of the speed
+  limit; the change applies to fresh installs and to "Use recommended settings". Existing
+  configurations keep their stored values; nothing on disk is rewritten. The `first-run config`
+  test now expects the new default. `[verified: settings/recommended/seed/test all changed
+  together; unverified: hardware run — CI is the build gate for this branch]`
+
+### Fixed
+
+- **The HOME Menu news applet loads the Veshiru icon.** The news feed built its `list_image` and
+  `main_image` binaries from `eden-emu.dev`-hosted files that Veshiru cannot rely on, so the
+  news area rendered without an icon (or with another project's). The bundled default images
+  are now embedded JPEGs (800x450 and 320x180, rendered from `dist/branding/veshiru_icon.png`;
+  `tools/ci/embed-news-images.py` regenerates `news_images.h`), the per-release image download
+  is gone, and the feed works offline. `<news_id>_{small,large}.jpg` files dropped into the
+  news images cache directory are still honoured ahead of the bundled artwork. The msgpack
+  `topic_id` is `veshiru`, and the topic list the applet queries advertises `veshiru` as well
+  (previously `eden`). `[verified: the embedded assets and encoder output were inspected and
+  are well-formed JPEGs; unverified: HOME Menu rendering on hardware]`
+
+- **The `veshiru-cmd` loader error message told users to visit "the Eden wiki" and "the Eden
+  discord", and the GitHub issue template offered an "Eden Discord" contact link.** Both now
+  point at the Veshiru repository and its issue tracker. (The remaining `EDEN_*` environment
+  variables and `EdenPath` directory names are the fork's on-disk and IPC-compatible names;
+  renaming them is a migration, not a string change. The Discord IPC environment variable names
+  stay as-is.) `[verified: grep for user-facing "Eden" strings in the launch path and
+  .github comes back clean; the Discord icon URL host and the news topic id are already
+  Veshiru]`
+
+### Added
+
+- **Ocarina of Time (Switch 2) performance notes for the GTX 1650.**
+  `docs/performance/2.5-oot-switch2-gtx1650.md` reads all five session logs from the 2026-11-22
+  testing (title 0400486024DEC000 v2.0.0 on a Metabox NH77DB: i7-10750H, GTX 1650 4 GB,
+  31.8 GiB RAM), quantifies the Kakariko walk-through (up to `frame 106381 us`, 212 of 600
+  presents over 100 ms, up to 7.8 s of draws held per 10 s window, one 39.4 s frame on first
+  entry), and gives the per-game settings that matter on this card (lower the texture cache
+  memory limit below 3935, `precache_shaders` Ask/Always, frame generation only above ~30 real
+  FPS). It also records what this machine cannot do, so expectations stay honest. No performance
+  renderer change ships in 2.5.0. `[verified: every number quoted in the document comes from the
+  five attached logs; not verified: a post-change session on hardware]`
+- **Pipeline timeline tracing (`EDEN_NX2_PIPELINE_BUILD_TRACE=<file>`) gains three markers.**
+  Boot-time pipeline loads now log `SUBMIT` (a record queued to the job scheduler), and each
+  deferred SPIR-V emission logs `EMIT-BEG`/`EMIT-END`, so a cold load can be attributed end to end
+  with the existing driver `BEGIN`/`END` (vkCreate*Pipelines) lines: queue → emission → driver
+  create call → usable. No behaviour change when the variable is unset.
+- **Benchmark contract and operator checklist** (`docs/performance/2.5-benchmark-contract.md`,
+  `docs/performance/2.5-operator-checklist.md`). The contract defines matched before/after
+  captures (≥ 3 per scenario × cache condition, same machine/firmware/title/save/route/settings/
+  driver/AC/output, frame-gen off, sync on, separate cache dirs), frame metrics (mean real FPS,
+  p50/p99/p99.9 intervals, hitch counts > 100 ms and > 250 ms), and the [2.5.0] Kakariko gate
+  (mean ≥ 10 real FPS **and** p99 ≤ 100 ms on the 60 s route). No release claim may be quoted
+  without running it.
+
+### Known issues / not addressed in 2.5.0
+
+- **Discord Rich Presence still displays "Eden" as the application name.** The bundled client ID
+  is the Eden-lineage community application; Discord renders the registered application name and
+  no client-side payload can override it. 2.5.0 keeps it so presence works out of the box, and
+  documents the swap to a Veshiru-owned application in `src/qt_common/discord/discord_application.h`
+  (create the application at discord.com/developers/applications, replace
+  `VESHIRU_DISCORD_APPLICATION_ID`, update the `discord-<id>` cleanup key in
+  `dist/installer.nsi`). Everything the client sends is already Veshiru ("Playing <game>",
+  "Veshiru <version>", "large_text": "Veshiru", icon from this repo); only the application name
+  is not. Users who do not want the mislabelled entry can turn it off under Configure → Web →
+  "Show current game in Discord (Rich Presence)".
+- **Kakariko stays heavy on a cold shader cache on 4 GB cards.** 2.5.0 ships the analysis and
+  the recommended per-game settings, not a renderer fix; see the notes document.
+- **The one 39.4 s frame** (Kakariko first entry, 78 pipelines built in 10 s, 21 s of draws
+  held) is documented as an investigation, not yet diagnosed end to end.
+- **`precache_shaders` stays `Off` in the recommended table** (right for a cold cache and for
+  boot time); turning it on per game is a valid choice once the cache is warm.
+- **No performance numbers are claimed for 2.5.0.** The renderer paths, the Kakariko real-FPS
+  gate and every VRAM figure are documented, but no before/after capture exists yet on the target
+  machine; 2.5.0 ships the fixes, the analysis and the measurement tooling. Hardware verification
+  belongs to `docs/performance/2.5-operator-checklist.md` and is the release blocker it documents.
+
 ## [2.4.1] - 2026-11-21
 
 Ports six self-contained stability and hot-path fixes from Lichii `nx2` `3165970a`, with the

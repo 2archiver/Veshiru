@@ -76,7 +76,7 @@ void ForEachRecommendedSetting(Values& settings, Func&& func) {
     entry(settings.speed_limit, 100);
     entry(settings.slow_speed_limit, 50);
     entry(settings.turbo_speed_limit, 200);
-    entry(settings.sync_core_speed, false);
+    entry(settings.sync_core_speed, true);
 
     // CPU
     entry(settings.cpu_accuracy, CpuAccuracy::Auto);

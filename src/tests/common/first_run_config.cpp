@@ -130,7 +130,7 @@ void CheckUnchangedProfile() {
     CHECK(values.speed_limit.GetValue() == 100);
     CHECK(values.slow_speed_limit.GetValue() == 50);
     CHECK(values.turbo_speed_limit.GetValue() == 200);
-    CHECK_FALSE(values.sync_core_speed.GetValue());
+    CHECK(values.sync_core_speed.GetValue());
     CHECK(values.memory_layout_mode.GetValue() == Settings::MemoryLayout::Memory_4Gb);
     CHECK(values.vsync_mode.GetValue() == Settings::VSyncMode::Fifo);
     CHECK(values.fsr_sharpening_slider.GetValue() == 25);

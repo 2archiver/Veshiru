@@ -254,7 +254,7 @@ struct Values {
     // The currently used speed mode.
     Setting<SpeedMode> current_speed_mode{linkage, SpeedMode::Standard, "current_speed_mode", Category::Core, Specialization::Default, false, true};
 
-    SwitchableSetting<bool> sync_core_speed{linkage, false, "sync_core_speed", Category::Core,
+    SwitchableSetting<bool> sync_core_speed{linkage, true, "sync_core_speed", Category::Core,
                                             Specialization::Default};
 
     // Cpu
