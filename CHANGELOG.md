@@ -27,7 +27,8 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
   `tools/ci/embed-news-images.py` regenerates `news_images.h`), the per-release image download
   is gone, and the feed works offline. `<news_id>_{small,large}.jpg` files dropped into the
   news images cache directory are still honoured ahead of the bundled artwork. The msgpack
-  `topic_id` is `veshiru`. `[verified: the embedded assets and encoder output were inspected and
+  `topic_id` is `veshiru`, and the topic list the applet queries advertises `veshiru` as well
+  (previously `eden`). `[verified: the embedded assets and encoder output were inspected and
   are well-formed JPEGs; unverified: HOME Menu rendering on hardware]`
 
 - **The `veshiru-cmd` loader error message told users to visit "the Eden wiki" and "the Eden
