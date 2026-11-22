@@ -57,6 +57,7 @@
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
 #include "video_core/renderer_vulkan/mesh_fallback_limits.h"
+#include "video_core/renderer_vulkan/pipeline_build_trace.h"
 #include "video_core/renderer_vulkan/pipeline_eviction_policy.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 #include "video_core/renderer_vulkan/pipeline_shader_emission.h"
@@ -1632,6 +1633,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         for (const size_t index : indices) {
             bytes = std::max<u64>(bytes, records[index]->payload.size());
         }
+        Vulkan::TracePipelineBuild("SUBMIT", "compute", static_cast<u64>(key.Hash()), {}, false);
         jobs.Submit(
             {
                 .priority = ShaderJobPriority::Soon,
@@ -1698,6 +1700,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     for (const auto& [index, key] : boot_graphics) {
         ++state.total;
         const CacheV2::LogRecord& record = *records[index];
+        Vulkan::TracePipelineBuild("SUBMIT", "graphics", key.Hash(), {}, false);
         jobs.Submit(
             {
                 .priority = ShaderJobPriority::Soon,
@@ -3627,8 +3630,14 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
         const Shader::Info& info = job->program.info;
         auto emit = [this, job, shader_hash = key.unique_hash]() mutable {
             const auto begin = std::chrono::steady_clock::now();
+            Vulkan::TracePipelineBuild("EMIT-BEG", "compute", shader_hash, {}, false);
             vk::ShaderModule module{EmitComputeModule(device, profile, job->program, shader_hash,
                                                       job->reference_spirv)};
+            Vulkan::TracePipelineBuild(
+                "EMIT-END", "compute", shader_hash, {}, false,
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - begin)
+                    .count());
             auto completed_pools = std::move(job->pools);
             job.reset();
             ReturnPools(std::move(completed_pools));
