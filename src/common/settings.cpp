@@ -300,6 +300,10 @@ bool SkipCpuInnerInvalidation() {
     return values.skip_cpu_inner_invalidation.GetValue() && !values.keep_cpu_inner_invalidation;
 }
 
+bool BuildAllCachedShaders() {
+    return values.build_all_cached_shaders.GetValue() || values.force_build_all_cached_shaders;
+}
+
 bool CurrentProgramIsSwitch2() {
     return current_program_is_switch2;
 }

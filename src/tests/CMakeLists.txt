@@ -40,6 +40,7 @@ add_executable(tests
     core/nx2_thread_stats.cpp
     core/nx2_debug_server.cpp
     core/nx2_present_pacer.cpp
+    core/device_memory_trim.cpp
     core/nx2_frame_interval.cpp
     core/vfs_real.cpp
     core/ldn_lan_protocol.cpp

@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstdlib>
+#include <string>
 
 #include "common/logging.h"
 #include "common/settings.h"
@@ -35,6 +37,10 @@ bool NeedsGuestClockPacing(std::uint64_t program_id) noexcept {
 
 bool CpuClockHeldAtNormal() noexcept {
     return cpu_clock_held_at_normal.load(std::memory_order_relaxed);
+}
+
+bool WantsStabilityProfile(std::uint64_t program_id) noexcept {
+    return static_cast<TitleID>(program_id) == TitleID::OcarinaOfTime;
 }
 
 static GPUVendor GetGPU(const std::string& gpu_vendor_string) {
@@ -145,6 +151,7 @@ void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& rend
 
     Settings::values.force_reactive_flushing = false;
     Settings::values.keep_cpu_inner_invalidation = false;
+    Settings::values.force_build_all_cached_shaders = false;
 
     // A guest-clock-paced title halves or worse its frame rate under an inherited Boost clock
     // (see NeedsGuestClockPacing). A clock the user set for this game is left alone.
@@ -157,6 +164,54 @@ void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& rend
                  "Title {:016X} runs this session with CPU Clock at Normal: Boost paces its "
                  "guest clock ahead of wall time and lowers its frame rate",
                  program_id);
+    }
+
+    // The per-title stability profile (2.7). Ocarina of Time's logs on an i7-10750H + GTX 1650
+    // 4 GB show the three things this address, all on the same first visit to a busy area:
+    //   * 56 pipelines built on demand in one 10 s window, 5.8 s of draws held for them, worker
+    //     builds of 0.2-2.1 s each, and single frames of 0.1-18.6 s;
+    //   * compute dispatches whose pipeline is still building are skipped for the frame
+    //     ("its dispatch waits" / SkipUnbuiltDispatch), which leaves a per-frame billboard where it
+    //     was: the fairy's up-and-down flicker in the same windows;
+    //   * 30-353 CPU reads of GPU-written memory per 10 s (5-7 ms average sync wait, 60-140 ms
+    //     worst), so a CPU-side transform can be a frame stale.
+    // Building the whole recorded cache at load removes the first two (nothing is left to build
+    // or skip), and the flushing pair removes the third. Each switch is only taken where the
+    // user's own configuration does not already provide it, and nothing is written to disk:
+    // EDEN_NX2_OOT_PROFILE=0 turns the profile off for a session so it can be A/B'd on one machine.
+    {
+        static const bool profile_enabled = [] {
+            const char* value = std::getenv("EDEN_NX2_OOT_PROFILE");
+            return value == nullptr || value[0] != '0';
+        }();
+        const auto& build_all = Settings::values.build_all_cached_shaders;
+        const auto profile = ResolveStabilityProfile(
+            WantsStabilityProfile(program_id),
+            build_all.UsingGlobal() && !build_all.GetValue(),
+            !Settings::values.use_reactive_flushing.GetValue(),
+            Settings::values.skip_cpu_inner_invalidation.GetValue(), profile_enabled);
+        Settings::values.force_build_all_cached_shaders = profile.build_all_cached_shaders;
+        Settings::values.force_reactive_flushing |= profile.reactive_flushing;
+        Settings::values.keep_cpu_inner_invalidation |= profile.keep_inner_invalidation;
+        if (profile.Any()) {
+            std::string switches;
+            const auto add = [&switches](bool on, const char* name) {
+                if (!on) {
+                    return;
+                }
+                if (!switches.empty()) {
+                    switches += ", ";
+                }
+                switches += name;
+            };
+            add(profile.build_all_cached_shaders, "build_all_cached_shaders");
+            add(profile.reactive_flushing, "reactive_flushing");
+            add(profile.keep_inner_invalidation, "keep_cpu_inner_invalidation");
+            LOG_INFO(Core,
+                     "Title {:016X} runs this session with the stability profile: {} "
+                     "(EDEN_NX2_OOT_PROFILE=0 disables it)",
+                     program_id, switches);
+        }
     }
 
     switch (static_cast<TitleID>(program_id)) {

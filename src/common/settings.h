@@ -1202,6 +1202,10 @@ struct Values {
     /// A title that breaks when buffers miss the GPU engines' inner writes keeps those
     /// invalidations whatever skip_cpu_inner_invalidation says. Set per boot by the game overrides.
     bool keep_cpu_inner_invalidation{};
+    /// A title whose first visit to a busy area still builds dozens of pipelines on demand builds
+    /// its whole recorded cache at boot instead, and keeps it built, whatever
+    /// build_all_cached_shaders says. Set per boot by the game overrides.
+    bool force_build_all_cached_shaders{};
 
 };
 
@@ -1258,6 +1262,9 @@ bool CurrentProgramIsSwitch2();
 /// that requires it.
 bool ReactiveFlushing();
 bool SkipCpuInnerInvalidation();
+/// Whether every cached pipeline is built while the game loads and kept built: the setting, or a
+/// title running the per-title stability profile.
+bool BuildAllCachedShaders();
 
 // The ASTC recompression in effect: astc_recompression, unless the renderer picked another one
 // for the running program (the configuration is left as is). The core clears it on load.
