@@ -20,7 +20,9 @@ Write for the person who is deciding whether to download, not for the person who
   "the boot plan builds the spare pipelines".
 - **What to do about it**, when there is something: a setting, an environment variable, a title that
   needs nothing.
-- **Known issues**, honestly. A release that costs something (a slower first load) says so.
+- **What's better, then good to know.** Lead with what the player gains; keep the costs (a slower
+  first load, a build per new area) in a short "Good to know" list rather than a defect list. A
+  release that costs something still says so.
 
 `CHANGELOG.md` stays the engineering record: what changed, why, and what has been verified. It is
 long on purpose. The release page shows these notes instead.

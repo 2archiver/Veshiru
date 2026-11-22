@@ -57,9 +57,10 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
   prints `docs/release-notes/<version>.md` when it exists and the CHANGELOG section otherwise
   (release candidates use the notes of the release they are a candidate for); the release workflow
   and `release-notes.sh` both take it from there, and the Windows-only note, the download table and
-  a link to `CHANGELOG.md` follow. The 2.7.0 notes describe the three Ocarina of Time changes in the terms a player uses
-  (stutters, flicker, second-long pauses), say what the release costs (a slower first load) and list
-  what is still open. `docs/release-notes/README.md` says how to write them.
+  a link to `CHANGELOG.md` follow. The 2.7.0 notes describe the Ocarina of Time changes in the terms
+  a player uses (freezes, flicker, second-long pauses), say what the release costs (a longer first
+  load) and what to do if something still stutters, in a "What's better" / "Good to know" shape
+  rather than a list of defects. `docs/release-notes/README.md` says how to write them.
   `[verified: the script and the workflow's notes assembly were run for 2.7.0 and for a version
   without notes (2.6.0); unverified: the rendered release page, which only a publish run produces]`
 - **Ocarina of Time on the reference machine: analysis and settings** in
