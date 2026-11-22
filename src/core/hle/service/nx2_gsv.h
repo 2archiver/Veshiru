@@ -2226,16 +2226,22 @@ private:
                 m_stats.frame_us += frame;
                 m_stats.max_frame_us = (std::max)(m_stats.max_frame_us, frame);
                 m_stats.hitches += frame > 100'000 ? 1 : 0;
+                // A second apart is not a slow frame, it is a freeze (a pipeline build holding
+                // the draws, a zero-page trim, a channel waiting on a semaphore). Reported apart
+                // from the over-100 ms count because a handful of them decide the average: 30 of
+                // 600 presents over 100 ms, three of them seconds long, read as "10 fps" while 95%
+                // of the frames were 16.7 ms.
+                m_stats.freezes += frame > 1'000'000 ? 1 : 0;
             }
             m_stats.last_present = entered;
             if (++m_stats.presents == 600) {
                 LOG_INFO(Service,
-                         "nx2:vi2 last 600 presents: frame {} us (max {}, {} over 100 ms), "
-                         "blocked on the GPU fence {} us (max {}), composite {} us, vblank "
-                         "pacing {} us, {} ran a frame ahead",
+                         "nx2:vi2 last 600 presents: frame {} us (max {}, {} over 100 ms, {} "
+                         "over 1 s), blocked on the GPU fence {} us (max {}), composite {} us, "
+                         "vblank pacing {} us, {} ran a frame ahead",
                          m_stats.frame_us / 599, m_stats.max_frame_us, m_stats.hitches,
-                         m_stats.fence_us / 600, m_stats.max_fence_us, m_stats.composite_us / 600,
-                         m_stats.pace_us / 600, m_stats.ran_ahead);
+                         m_stats.freezes, m_stats.fence_us / 600, m_stats.max_fence_us,
+                         m_stats.composite_us / 600, m_stats.pace_us / 600, m_stats.ran_ahead);
                 m_stats = {.last_present = entered};
             }
         }
@@ -2252,7 +2258,7 @@ private:
     u32 m_wait_timeouts{};
     struct PresentStats {
         long long frame_us{}, fence_us{}, composite_us{}, pace_us{}, max_fence_us{};
-        long long max_frame_us{}, hitches{};
+        long long max_frame_us{}, hitches{}, freezes{};
         u32 presents{}, ran_ahead{};
         std::chrono::steady_clock::time_point last_present{};
     } m_stats{};

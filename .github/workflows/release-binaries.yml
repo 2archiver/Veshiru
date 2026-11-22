@@ -432,21 +432,20 @@ jobs:
             }
           }
 
-          # Manually tagged stable release: the notes come from the matching CHANGELOG section.
+          # Manually tagged stable release: the description is the short, user-facing notes for the
+          # version (docs/release-notes/<version>.md) when they exist, and the matching CHANGELOG
+          # section otherwise. Windows-only and download instructions follow either way.
           title="${RELEASE_TITLE:-Veshiru $RELEASE_TAG}"
           version="${RELEASE_TAG#v}"
-          changelog=$(gh api "repos/${GITHUB_REPOSITORY}/contents/CHANGELOG.md?ref=${GITHUB_SHA}" --jq .content | base64 -d)
-          section=$(awk -v name="$version" '
-            $0 == "## [" name "]" || index($0, "## [" name "] - ") == 1 { found = 1; next }
-            found && /^## / { exit }
-            found { print }
-          ' <<< "$changelog")
+          section=$(bash tools/ci/release-description.sh "$version")
           if [ -z "$(tr -d '[:space:]' <<< "$section")" ]; then
-            echo "CHANGELOG.md has no non-empty [$version] section" >&2
+            echo "No release notes and no non-empty CHANGELOG [$version] section" >&2
             exit 1
           fi
           {
             printf '%s\n\n' "$section"
+            echo "Full technical notes: [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${tag}/CHANGELOG.md)"
+            echo
             echo "Veshiru is a Windows-exclusive emulator: it is built and tested for 64-bit Windows 10 and 11 only."
             echo
             echo "Extract the entire zip and run \`veshiru.exe\`, or \`veshiru-cmd.exe\` from a terminal."

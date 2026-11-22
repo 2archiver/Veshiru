@@ -1520,7 +1520,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     size_t queued_graphics = 0;
     // build_all_cached_shaders: the rest too, in the room the recent sessions' pipelines leave
     // under the pipelines kept built
-    const bool build_all = Settings::values.build_all_cached_shaders.GetValue();
+    const bool build_all = Settings::BuildAllCachedShaders();
     const size_t kept_pipelines = KeptPipelines();
     const size_t boot_used =
         used_pipelines.empty() ? MaxPipelinesWithoutUsedList : used_pipelines.size();
@@ -2414,7 +2414,7 @@ void PipelineCache::EvictUnusedPipelines() {
         for (const size_t index : PipelinesToEvict(last_uses, built, kept)) {
             evict.push_back(keys[index]);
         }
-    } else if (!Settings::values.build_all_cached_shaders.GetValue()) {
+    } else if (!Settings::BuildAllCachedShaders()) {
         size_t kept_prebuilt = 0;
         for (const auto& [key, pipeline] : graphics_cache) {
             if (pipeline == nullptr || pipeline.get() == current_pipeline ||

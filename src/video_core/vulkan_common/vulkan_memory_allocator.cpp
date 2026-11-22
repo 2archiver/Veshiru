@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -320,13 +321,36 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge) {
         // Over the device memory budget (Switch 2 titles fill 8 GB cards): let the driver page
         // it out rather than failing the draw and aborting.
-        static u32 logged{};
-        if (logged++ < 32) {
-            LOG_WARNING(Render_Vulkan,
-                        "Image {}x{}x{} ({} levels, {} layers, format {}) is over the memory "
-                        "budget; allocating it anyway",
-                        ci.extent.width, ci.extent.height, ci.extent.depth, ci.mipLevels,
-                        ci.arrayLayers, static_cast<u32>(ci.format));
+        //
+        // This used to log the first 32 per process and then stop, and all three 2026-11-22 Ocarina
+        // logs stop at exactly 32: a session's real count was unknowable, and the same five shapes
+        // filled every line. One line per distinct shape now (up to 64), plus the running total
+        // every 256 allocations, so a capture can say how much went over and how often.
+        static std::mutex over_budget_mutex;
+        static std::unordered_set<u64> over_budget_shapes;
+        static u64 over_budget_total{};
+        const u64 shape_key =
+            (u64{ci.extent.width} & 0xFFFF) | ((u64{ci.extent.height} & 0xFFFF) << 16) |
+            ((u64{ci.extent.depth} & 0x7) << 32) | ((u64{ci.mipLevels} & 0x1F) << 35) |
+            ((u64{ci.arrayLayers} & 0xFFF) << 40) |
+            ((u64{static_cast<u32>(ci.format)} & 0xFF) << 52);
+        {
+            std::scoped_lock lock{over_budget_mutex};
+            ++over_budget_total;
+            const bool first_of_shape =
+                over_budget_shapes.size() < 64 && over_budget_shapes.insert(shape_key).second;
+            if (first_of_shape) {
+                LOG_WARNING(Render_Vulkan,
+                            "Image {}x{}x{} ({} levels, {} layers, format {}) is over the memory "
+                            "budget; allocating it anyway",
+                            ci.extent.width, ci.extent.height, ci.extent.depth, ci.mipLevels,
+                            ci.arrayLayers, static_cast<u32>(ci.format));
+            } else if (over_budget_total % 256 == 0) {
+                LOG_INFO(Render_Vulkan,
+                         "{} images have gone over the memory budget so far, in {} shapes, and all "
+                         "of them were allocated anyway",
+                         over_budget_total, over_budget_shapes.size());
+            }
         }
         // Short-lived dedicated scratch images (e.g. ASTC->BCn RGBA8 decode intermediates) return
         // their memory immediately after use; paging one of those out is not worth an eviction

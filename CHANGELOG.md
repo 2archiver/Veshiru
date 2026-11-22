@@ -1,10 +1,73 @@
 # Changelog
 
-All notable changes to Veshiru are documented here. Each release's notes are taken from its
-`## [X.Y.Z]` section (release candidates use the section of the version they are a candidate for).
-New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version section.
+All notable changes to Veshiru are documented here, in engineering voice: what changed, why, and what
+has been verified. Each release's page shows the short, user-facing notes in
+`docs/release-notes/<X.Y.Z>.md` when that file exists, and this file's `## [X.Y.Z]` section
+otherwise (release candidates use the section of the version they are a candidate for). New entries
+go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version section.
 
 ## [Unreleased]
+
+## [2.7.0] - 2026-11-22
+
+### Added
+
+- **Ocarina of Time runs a per-title stability profile on cards that cannot build pipelines
+  mid-scene.** The 2026-11-22 logs from the reference machine (i7-10750H, GTX 1650 4 GB, 32 GiB)
+  show three things happening in the same first visit to a busy area: 56 pipelines built on demand
+  in one 10 s window with 5.8 s of draws held for them and single frames of 0.1-18.6 s; compute
+  dispatches skipped for the frame because their pipeline was still building (a per-frame billboard
+  drawn where it was the previous frame, which is what the fairy's up-and-down flicker is); and
+  30-353 CPU reads of GPU-written memory per 10 s at 5-7 ms average, 60-140 ms worst. `Core::
+  GameSettings` now names the title (`WantsStabilityProfile`) and, where the user's own
+  configuration does not already provide each part, builds the whole recorded pipeline cache while
+  the game loads and keeps it built (`Settings::BuildAllCachedShaders`, fed by a new session flag so
+  nothing is written to disk), forces reactive flushing, and keeps the GPU engines' inner writes
+  invalidating the CPU view. `EDEN_NX2_OOT_PROFILE=0` turns the whole profile off for one session so
+  the same machine can A/B it, and one log line names what was turned on. `[verified: unit tests for
+  the title list and every combination of the profile rule, including the session switch; the
+  three-log analysis in docs/performance/2.7-oot-i7-10750h-gtx1650.md comes from the attached
+  logs; unverified: that the flicker and the freezes are gone on hardware]`
+- **Images that go over the memory budget are counted instead of truncated.** The allocator logged
+  the first 32 over-budget image allocations per process and then stopped; all three 2026-11-22
+  Ocarina logs stop at exactly 32, so none of them says how many images really went over, and the
+  same five shapes filled every line. It now logs one warning per distinct shape (up to 64) and a
+  running total with the shape count every 256 allocations. `[verified: the shape key packs width,
+  height, depth, mip levels, layers and format without overlapping bits, and the cap keeps the
+  logging bounded; unverified: the effect on a capture, which needs a session on hardware]`
+- **The `nx2:vi2 last 600 presents` line counts the freezes separately from the slow frames.** A
+  window of 600 presents read `10 fps` in three of the 2026-11-22 logs while 95% of its frames were
+  16.7 ms, because 30 of them were over 100 ms and three of those lasted 1.2-18.6 s. The average is
+  not a frame rate when a handful of frames last seconds, so the line now reports `N over 1 s`
+  beside `N over 100 ms`. `[verified: the counts are taken from the same per-frame interval the
+  existing over-100 ms count uses; the logs it was built from contain 486 ms-18.6 s frames;
+  unverified: nothing, the format change is additive]`
+
+### Changed
+
+- **The all-zero guest page trim no longer runs while the game is presenting a frame.** A pass
+  reads the whole resident guest working set under VAD locks: the 2026-11-22 logs have it taking
+  1700 ms and 2149 ms in the middle of Ocarina's gameplay, which the player sees as a freeze. The
+  saving is optional, so `Core::ShouldTrimZeroPages` now holds the pass back while the guest is
+  presenting and lets it run when the game pauses, loads or sits in a menu; under real host memory
+  pressure it still runs, once per escape interval instead of every 5-30 s (120 s on a 32 GiB host,
+  20 s on a 16 GiB one). One log line explains the first deferral. `[verified: unit tests over the
+  whole truth table of the predicate; unverified: the effect on a session on hardware]`
+- **Release pages carry short, user-facing notes.** `tools/ci/release-description.sh <version>`
+  prints `docs/release-notes/<version>.md` when it exists and the CHANGELOG section otherwise
+  (release candidates use the notes of the release they are a candidate for); the release workflow
+  and `release-notes.sh` both take it from there, and the Windows-only note, the download table and
+  a link to `CHANGELOG.md` follow. The 2.7.0 notes describe the three Ocarina of Time changes in the terms a player uses
+  (stutters, flicker, second-long pauses), say what the release costs (a slower first load) and list
+  what is still open. `docs/release-notes/README.md` says how to write them.
+  `[verified: the script and the workflow's notes assembly were run for 2.7.0 and for a version
+  without notes (2.6.0); unverified: the rendered release page, which only a publish run produces]`
+- **Ocarina of Time on the reference machine: analysis and settings** in
+  `docs/performance/2.7-oot-i7-10750h-gtx1650.md`, covering all three 2026-11-22 logs (frame-gen
+  off, frame-gen on, and FPS Unlock off), what the freezes and the flicker come from, what 2.7
+  changes and what it deliberately does not, and where the release stands against Fritchii's
+  4-8 GB fixes (the retention it describes is 2.5/2.6 work of this tree's own; nothing here is
+  ported from it, and the one credited port is the skipped empty flush from an earlier round).
 
 ## [2.6.0] - 2026-11-22
 

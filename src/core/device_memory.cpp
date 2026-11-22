@@ -12,6 +12,7 @@
 #include "common/thread.h"
 #endif
 
+#include "core/core.h"
 #include "core/device_memory.h"
 #include "hle/kernel/board/nintendo/nx/k_system_control.h"
 
@@ -38,7 +39,9 @@ DeviceMemory::~DeviceMemory() = default;
 // their heaps while booting: Ocarina leaves ~7 GB) stay resident until they leave the working set.
 // A pass comes every 5 s while they keep turning up, backing off to once every 5 minutes: after
 // boot most passes trim 1-2 MiB for about a second of work. It waits out bulk mapping (loads,
-// spawns), whose map calls stalled 10-14 ms while a pass ran.
+// spawns), whose map calls stalled 10-14 ms while a pass ran, and (2.7) it waits out the guest
+// presenting: a 1.7-2.1 s pass in the middle of gameplay is a freeze the player sees, and the
+// saving is optional (ShouldTrimZeroPages).
 void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     using namespace std::chrono_literals;
     Common::SetCurrentThreadName("ZeroTrim");
@@ -56,6 +59,10 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     std::chrono::seconds interval = ample_host_ram ? 30s : 5s;
     u64 last_zero_filled_bytes = 0;
     u32 consecutive_busy_deferrals = 0;
+    u32 consecutive_presenting_deferrals = 0;
+    // How long a game that keeps presenting holds a pass back once host commit is under pressure.
+    const std::chrono::seconds trim_escape = ample_host_ram ? 120s : 20s;
+    auto last_pass = std::chrono::steady_clock::now();
     while (true) {
         {
             std::unique_lock lock{mutex};
@@ -66,6 +73,7 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         }
         // Check whether bulk mapping/unmapping/protection (course loads, boots, spawns) is active.
         // Never force a 1-second zero-page scan in the middle of an active load on ample-RAM hosts.
+        const u64 presents_before = Core::g_nx2_present_count.load(std::memory_order_relaxed);
         bool mapping_active = false;
         const int poll_checks = ample_host_ram ? 4 : 10;
         for (int wait = 0; wait < poll_checks; ++wait) {
@@ -88,9 +96,28 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             continue;
         }
         consecutive_busy_deferrals = 0;
+        const Common::ProcessMemoryUsage usage = Common::GetProcessMemoryUsage();
+        const bool guest_presenting =
+            Core::g_nx2_present_count.load(std::memory_order_relaxed) != presents_before;
+        const bool memory_pressure = !ample_host_ram || usage.working_set >= (host_ram_bytes / 3);
+        const auto since_pass = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - last_pass);
+        if (!ShouldTrimZeroPages(mapping_active, guest_presenting, since_pass, memory_pressure,
+                                 trim_escape)) {
+            // Silent after the first time: a session that plays for an hour would otherwise log a
+            // deferral per interval. The first one explains where the earlier freezes went.
+            if (consecutive_presenting_deferrals++ == 0) {
+                LOG_INFO(HW_Memory,
+                         "Deferring the all-zero guest page trim while the game runs (a pass takes "
+                         "1-2 s); it runs when the game pauses, loads, or the host runs short");
+            }
+            // Keep the normal cadence: a pause should be noticed within one interval, not one
+            // five-minute backoff.
+            continue;
+        }
+        consecutive_presenting_deferrals = 0;
         if (ample_host_ram) {
             const u64 zero_now = Common::HostMemory::ZeroFilledBytes();
-            const Common::ProcessMemoryUsage usage = Common::GetProcessMemoryUsage();
             if (usage.working_set < (host_ram_bytes / 3) &&
                 zero_now - last_zero_filled_bytes < (u64{512} << 20)) {
                 interval = (std::min)(interval * 2, std::chrono::seconds{300});
@@ -106,7 +133,6 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             // A pass needs 32 MiB and more of scratch. When Windows runs out of commit, the
             // exception leaving this thread ended the emulator (#1346); the pass is only a saving.
             interval = std::chrono::seconds{60};
-            const Common::ProcessMemoryUsage usage = Common::GetProcessMemoryUsage();
             LOG_WARNING(HW_Memory,
                         "Skipped trimming all-zero guest pages: out of memory. Windows commit is "
                         "{} of {} MiB (this process {} MiB); the limit is RAM plus the page file",
@@ -123,6 +149,7 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             continue;
         }
         interval = ample_host_ram ? 30s : 5s;
+        last_pass = std::chrono::steady_clock::now();
         LOG_INFO(HW_Memory,
                  "Trimmed {} MiB of all-zero guest pages out of {} MiB resident in {} ms; the kernel "
                  "zero-filled {} MiB so far",

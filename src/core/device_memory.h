@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <chrono>
+
 #ifdef _WIN32
 #include <thread>
 #endif
@@ -13,6 +15,34 @@
 #include "common/typed_address.h"
 
 namespace Core {
+
+/// Whether the zero-page trim asks for a pass now.
+///
+/// A pass reads every resident guest page under VAD locks and takes 1.0-2.1 s on a 32 GiB laptop
+/// (Ocarina of Time logs, 2026-11-22), which the player sees as a freeze. The saving it makes is
+/// optional, so a pass only runs while the guest is quiet (paused, loading, or in a menu) or when
+/// host commit is actually under pressure; `since_last_pass` keeps a busy session from deferring
+/// it forever.
+///
+/// @param mapping_active   Bulk mapping/unmapping/protection is running (loads, boots, spawns).
+/// @param guest_presenting The guest completed at least one frame since the last probe.
+/// @param since_last_pass  Time since the last pass that trimmed anything.
+/// @param memory_pressure  The process working set is big enough that the saving matters.
+/// @param escape           How long a presenting guest holds a pass back under pressure: long on a
+///                         32 GiB host, whose commit has room (120 s); short on a 16 GiB one, where
+///                         the trim is what keeps the commit bounded (20 s).
+[[nodiscard]] constexpr bool ShouldTrimZeroPages(bool mapping_active, bool guest_presenting,
+                                                 std::chrono::seconds since_last_pass,
+                                                 bool memory_pressure,
+                                                 std::chrono::seconds escape) noexcept {
+    if (mapping_active) {
+        return false;
+    }
+    if (!guest_presenting) {
+        return true;
+    }
+    return memory_pressure && since_last_pass >= escape;
+}
 
 namespace DramMemoryMap {
 enum : u64 {

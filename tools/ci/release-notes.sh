@@ -28,9 +28,10 @@ commits() { git log --no-merges --pretty='- %s (`%h`)' "$@" 2>/dev/null | head -
       if [[ "$kind" == rc ]]; then
         printf '> **Release candidate of %s.** Please test it and report problems before the final release.\n\n' "$core"
       fi
-      section=$(bash tools/ci/changelog-section.sh "$core")
+      # The short user-facing notes when they exist, the CHANGELOG section otherwise.
+      section=$(bash tools/ci/release-description.sh "$core")
       [[ -n "$(tr -d '[:space:]' <<< "$section")" ]] || {
-        echo "CHANGELOG.md has no non-empty [$core] section" >&2
+        echo "No release notes and no non-empty CHANGELOG [$core] section" >&2
         exit 1
       }
       printf '%s\n\n' "$section"
