@@ -23,9 +23,9 @@
 namespace {
 
 // The 2.3 view painted its rows from QPalette::Base, which on the default Veshiru theme is the
-// near-black #07111F app background: inside an already dark blue window that read as a black
-// panel. This view takes every colour from the active palette instead and only derives shades
-// from it, so it works on Deep Current and on the light/dark/custom themes without any raw
+// app background (#07111F in 2.5, #0A1526 in 2.6): inside an already dark blue window that read
+// as a black panel. This view takes every colour from the active palette instead and only derives
+// shades from it, so it works on Deep Current and on the light/dark/custom themes without any raw
 // background or text hex value.
 constexpr int ROW_HEIGHT = 92;
 constexpr int ROW_INSET_X = 8;
@@ -76,8 +76,8 @@ QColor EnsureContrast(QColor foreground, const QColor& background, double minimu
 /// which is the app window colour and produced the "black panel" look.
 QColor SurfaceColor(const QPalette& palette) {
     const QColor window = palette.color(QPalette::Window);
-    // Mid is the theme's own elevated shade: #132D46 on Deep Current, a visibly lighter blue
-    // than the #07111F window rather than the near-black Base the old view used.
+    // Mid is the theme's own elevated shade: #17395C on Deep Current, a visibly lighter blue
+    // than the #0A1526 window rather than the near-black Base the old view used.
     QColor surface = palette.color(QPalette::Mid);
     if (ContrastRatio(surface, window) < 1.15) {
         surface = palette.color(QPalette::AlternateBase);

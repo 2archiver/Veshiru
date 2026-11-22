@@ -1,0 +1,81 @@
+SPDX-FileCopyrightText: Copyright 2026 Veshiru Emulator Project
+SPDX-License-Identifier: GPL-3.0-or-later
+
+VESHIRU 2.6 - PATCH SUMMARY FOR THE ARENA AGENT
+===============================================
+Version: 2.6 (VERSION file 2.6.0; release title "Veshiru 2.6")
+Base: main @ 5539275 (2.5.0)
+Scope: performance + interface. No renderer behaviour change is enabled by this patch.
+Full write-up: docs/performance/2.6-performance-and-ui.md
+
+
+WHAT TO CHANGE
+--------------
+1) common/range_map.h - InternalMap does two lookups instead of four.
+   - Keep the lower_bound(address) iterator and the upper_bound(address_end) iterator.
+   - first_value  = (it == begin) ? it->second : (it != end ? prev(it)->second : null_value)
+   - last_value   = (it_end == begin) ? it_end->second
+                    : (it_end != end ? prev(it_end)->second : null_value)
+   - container.erase(it, it_end); then emplace_hint(it_end, ...) for the start and the end key
+     when their value differs from the mapped value.
+   - Delete the now unused GetFirstValueWithin/GetLastValueWithin.
+   - Source: Orchid f4edd9c8, Eglantine c6dd1d0214 (goof787lord).
+
+2) core/game_settings.h/.cpp - hold the guest clock at Normal for guest-clock-paced titles.
+   - Add TitleID::StarFoxSwitch2 = 0x0400E88025B1A000.
+   - NeedsGuestClockPacing(id): true for DonkeyKongBananza and StarFoxSwitch2.
+   - constexpr HoldsClockAtNormal(paced, clock_inherited, clock_is_boost)
+       = paced && clock_inherited && clock_is_boost.
+   - LoadOverrides clears a namespace atomic, then stores true when HoldsClockAtNormal(
+       NeedsGuestClockPacing(id), cpu_clock.UsingGlobal(), cpu_clock.GetValue() == Boost),
+     and logs one Info line naming the title. Settings on disk are not modified.
+   - CpuClockHeldAtNormal() reads that atomic with memory_order_relaxed.
+   - Source of the fix: Orchid PR #180 / Eglantine lineage (Normal clock for Bananza + Star Fox).
+
+3) core/core_timing.cpp - GetClockTicks() uses Settings::CpuClock::Normal when
+   GameSettings::CpuClockHeldAtNormal(), instead of Settings::values.cpu_clock.
+   Why: in multicore the guest clock is wall-clock derived and then multiplied by 1734/1020 for
+   Boost, so guest time runs 1.7x ahead of kernel sleeps and GPU timestamps. 60 Hz scenes of the
+   two titles then present ~39 times a second; Bananza also drops to swap interval 2.
+
+4) tests - src/tests/core/game_settings.cpp (new; added to src/tests/CMakeLists.txt) covers the
+   title list and all reachable combinations of the hold rule, and src/tests/common/range_map.cpp
+   gains "Range Map: Random maps match a flat model" (2000 random maps over a 257-entry model).
+
+5) UI - brighter Deep Current (see the token table in the doc):
+   - dist/qt_themes/veshiru/style.qss: every token, rgba blue-soft, and the token sheet comment.
+     Filled accent surfaces use #06121F text (white on #3D9BFF is 2.9:1).
+   - src/veshiru/main_window.cpp: VeshiruPalette() colours, HighlightedText, both link colours,
+     and UpdateUITheme() reads the stylesheet once and sets it on qApp only (the second readAll()
+     used to set an empty window stylesheet and force a full child restyle).
+   - src/veshiru/game/game_version_list.cpp: comments name the 2.6 hex values.
+   - tools/ci/embed-news-images.py: gradient #14304F -> #0A1526; re-ran it, which rewrote
+     dist/news/veshiru_news_{large,small}.jpg and src/core/hle/service/bcat/news/news_images.h.
+
+
+VERIFICATION RUN FOR THIS PATCH (in the Linux sandbox)
+------------------------------------------------------
+- RangeMap benchmark, g++ 12.2.0 -O2 -DNDEBUG, 3,000,000 random Map calls, 3 runs x 2 passes:
+    old 1.068/1.046, 1.017/1.014, 1.032/1.022 s   (median 342 ns per Map)
+    new 0.681/0.650, 0.637/0.642, 0.644/0.638 s   (median 214 ns per Map)
+    identical final-state digest f7576526941254b8 in both builds.
+- RangeMap randomized model check (standalone harness, same compiler): 40 seeds x 2000 random
+  Map/Unmap ops, every address and every continuous-size query compared with a flat model;
+  "ALL CHECKS PASSED (failures 0)" for both the old and the new header.
+- Palette contrast computed from the committed hex values (doc section 4): text 16.75:1, muted
+  5.30:1, faint 5.50:1, accent 6.38:1 on the window, selected-row 6.58:1.
+- Not run here: any cmake configure or ctest (debian sandbox has g++ 12 but no cmake and no fmt /
+  Qt / Catch2). The Windows build-check workflow is the compile and test gate. No game was run;
+  no FPS number is claimed for this patch on the target machine.
+
+
+HONEST LIMITS
+-------------
+- The FPS change is a pacing fix for two titles under an inherited Boost clock. Its measured
+  numbers (Star Fox 39.19 -> 58.22 FPS, Bananza 57.75 -> 59.74 FPS with 30-FPS drops 16 -> 0)
+  are Orchid's, on an RX 9070 XT; Veshiru has not reproduced them.
+- The RangeMap win is host CPU time per map, not a frame-rate measurement.
+- The interface change is a palette and a one-read stylesheet; it has not been seen on a panel.
+- On-demand pipeline compilation, the dominant stutter on the GTX 1650, is unchanged on purpose:
+  the tree already builds deferred pipelines on workers with priority promotion, and a rewrite
+  without a target-machine measurement is not justified by this release.

@@ -6228,7 +6228,7 @@ static void AdjustLinkColor() {
     QPalette new_pal(qApp->palette());
 
     if (UISettings::values.theme == "veshiru")
-        new_pal.setColor(QPalette::Link, QColor(0x42, 0xd9, 0xf5));
+        new_pal.setColor(QPalette::Link, QColor(0x5f, 0xe1, 0xfa));
     else if (UISettings::IsDarkTheme())
         new_pal.setColor(QPalette::Link, QColor(0, 190, 255, 255));
     else
@@ -6241,34 +6241,35 @@ static void AdjustLinkColor() {
 // Veshiru Deep Current styles most widgets through its stylesheet; the palette covers what Qt
 // draws without one: item view text, disabled text, links and the native parts of dialogs.
 // These values mirror the token sheet at the top of dist/qt_themes/veshiru/style.qss and must
-// stay in step with it, or native-drawn parts will not match the stylesheet surfaces.
+// stay in step with it, or native-drawn parts will not match the stylesheet surfaces. 2.6's
+// brighter set: every surface and accent is one step lighter and bluer than 2.5's.
 static QPalette VeshiruPalette() {
     QPalette palette;
-    const QColor window(0x07, 0x11, 0x1f);
-    const QColor surface(0x0b, 0x1b, 0x2d);
-    const QColor text(0xea, 0xf4, 0xff);
-    const QColor disabled(0x41, 0x56, 0x6e);
-    const QColor accent(0x25, 0x8b, 0xff);
+    const QColor window(0x0a, 0x15, 0x26);
+    const QColor surface(0x0e, 0x21, 0x40);
+    const QColor text(0xed, 0xf6, 0xff);
+    const QColor disabled(0x4a, 0x61, 0x80);
+    const QColor accent(0x3d, 0x9b, 0xff);
     palette.setColor(QPalette::Window, window);
     palette.setColor(QPalette::WindowText, text);
     palette.setColor(QPalette::Base, window);
-    palette.setColor(QPalette::AlternateBase, QColor(0x0b, 0x1b, 0x2d));
-    palette.setColor(QPalette::ToolTipBase, QColor(0x10, 0x25, 0x3b));
+    palette.setColor(QPalette::AlternateBase, QColor(0x0e, 0x21, 0x40));
+    palette.setColor(QPalette::ToolTipBase, QColor(0x14, 0x30, 0x4f));
     palette.setColor(QPalette::ToolTipText, text);
-    palette.setColor(QPalette::PlaceholderText, QColor(0x55, 0x70, 0x8c));
+    palette.setColor(QPalette::PlaceholderText, QColor(0x72, 0x90, 0xae));
     palette.setColor(QPalette::Text, text);
     palette.setColor(QPalette::Button, surface);
     palette.setColor(QPalette::ButtonText, text);
     palette.setColor(QPalette::BrightText, Qt::white);
-    palette.setColor(QPalette::Light, QColor(0x2a, 0x55, 0x80));
-    palette.setColor(QPalette::Midlight, QColor(0x1d, 0x3b, 0x58));
-    palette.setColor(QPalette::Mid, QColor(0x13, 0x2d, 0x46));
-    palette.setColor(QPalette::Dark, QColor(0x05, 0x0c, 0x16));
+    palette.setColor(QPalette::Light, QColor(0x35, 0x5f, 0x8c));
+    palette.setColor(QPalette::Midlight, QColor(0x27, 0x4c, 0x74));
+    palette.setColor(QPalette::Mid, QColor(0x17, 0x39, 0x5c));
+    palette.setColor(QPalette::Dark, QColor(0x07, 0x0f, 0x1c));
     palette.setColor(QPalette::Shadow, Qt::black);
     palette.setColor(QPalette::Highlight, accent);
-    palette.setColor(QPalette::HighlightedText, Qt::white);
-    palette.setColor(QPalette::Link, QColor(0x42, 0xd9, 0xf5));
-    palette.setColor(QPalette::LinkVisited, QColor(0x3b, 0xa7, 0xff));
+    palette.setColor(QPalette::HighlightedText, QColor(0x06, 0x12, 0x1f));
+    palette.setColor(QPalette::Link, QColor(0x5f, 0xe1, 0xfa));
+    palette.setColor(QPalette::LinkVisited, QColor(0x5f, 0xbe, 0xff));
     palette.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
     palette.setColor(QPalette::Disabled, QPalette::Text, disabled);
     palette.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
@@ -6384,9 +6385,11 @@ void MainWindow::UpdateUITheme() {
     QString theme_uri{QStringLiteral(":%1/style.qss").arg(current_theme)};
     QFile f(theme_uri);
     if (f.open(QFile::ReadOnly | QFile::Text)) {
+        // One read, one application: the second readAll() used to return nothing and set an
+        // empty window stylesheet, which made Qt re-resolve the style of every child.
         QTextStream ts(&f);
-        qApp->setStyleSheet(ts.readAll());
-        setStyleSheet(ts.readAll());
+        const QString sheet = ts.readAll();
+        qApp->setStyleSheet(sheet);
     } else {
         LOG_ERROR(Frontend, "Unable to set style \"{}\", stylesheet file not found",
                   UISettings::values.theme);

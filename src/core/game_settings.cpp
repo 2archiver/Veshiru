@@ -4,6 +4,7 @@
 #include "core/game_settings.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 
 #include "common/logging.h"
@@ -15,6 +16,26 @@
 #endif
 
 namespace Core::GameSettings {
+
+namespace {
+// Set by LoadOverrides for the session; read from the emulation threads through
+// GetClockTicks, so it is an atomic rather than a plain bool.
+std::atomic_bool cpu_clock_held_at_normal{};
+} // namespace
+
+bool NeedsGuestClockPacing(std::uint64_t program_id) noexcept {
+    switch (static_cast<TitleID>(program_id)) {
+    case TitleID::DonkeyKongBananza:
+    case TitleID::StarFoxSwitch2:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool CpuClockHeldAtNormal() noexcept {
+    return cpu_clock_held_at_normal.load(std::memory_order_relaxed);
+}
 
 static GPUVendor GetGPU(const std::string& gpu_vendor_string) {
     struct Entry { const char* name; GPUVendor vendor; };
@@ -124,6 +145,20 @@ void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& rend
 
     Settings::values.force_reactive_flushing = false;
     Settings::values.keep_cpu_inner_invalidation = false;
+
+    // A guest-clock-paced title halves or worse its frame rate under an inherited Boost clock
+    // (see NeedsGuestClockPacing). A clock the user set for this game is left alone.
+    cpu_clock_held_at_normal.store(false, std::memory_order_relaxed);
+    if (HoldsClockAtNormal(NeedsGuestClockPacing(program_id),
+                           Settings::values.cpu_clock.UsingGlobal(),
+                           Settings::values.cpu_clock.GetValue() == Settings::CpuClock::Boost)) {
+        cpu_clock_held_at_normal.store(true, std::memory_order_relaxed);
+        LOG_INFO(Core,
+                 "Title {:016X} runs this session with CPU Clock at Normal: Boost paces its "
+                 "guest clock ahead of wall time and lowers its frame rate",
+                 program_id);
+    }
+
     switch (static_cast<TitleID>(program_id)) {
         case TitleID::NinjaGaidenRagebound:
             Settings::values.use_squashed_iterated_blend = true;

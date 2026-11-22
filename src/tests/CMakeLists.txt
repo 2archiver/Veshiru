@@ -64,6 +64,7 @@ add_executable(tests
     audio_core/microphone.cpp
     audio_core/hardware_audio_codec.cpp
     core/gpu_dirty_memory.cpp
+    core/game_settings.cpp
     core/memory_acquire.cpp
     core/ncz_decompressor.cpp
     core/builtin_patches.cpp
