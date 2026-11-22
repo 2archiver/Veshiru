@@ -28,6 +28,13 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
   the title list and every combination of the profile rule, including the session switch; the
   three-log analysis in docs/performance/2.7-oot-i7-10750h-gtx1650.md comes from the attached
   logs; unverified: that the flicker and the freezes are gone on hardware]`
+- **Images that go over the memory budget are counted instead of truncated.** The allocator logged
+  the first 32 over-budget image allocations per process and then stopped; all three 2026-11-22
+  Ocarina logs stop at exactly 32, so none of them says how many images really went over, and the
+  same five shapes filled every line. It now logs one warning per distinct shape (up to 64) and a
+  running total with the shape count every 256 allocations. `[verified: the shape key packs width,
+  height, depth, mip levels, layers and format without overlapping bits, and the cap keeps the
+  logging bounded; unverified: the effect on a capture, which needs a session on hardware]`
 - **The `nx2:vi2 last 600 presents` line counts the freezes separately from the slow frames.** A
   window of 600 presents read `10 fps` in three of the 2026-11-22 logs while 95% of its frames were
   16.7 ms, because 30 of them were over 100 ms and three of those lasted 1.2-18.6 s. The average is
@@ -58,7 +65,9 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
 - **Ocarina of Time on the reference machine: analysis and settings** in
   `docs/performance/2.7-oot-i7-10750h-gtx1650.md`, covering all three 2026-11-22 logs (frame-gen
   off, frame-gen on, and FPS Unlock off), what the freezes and the flicker come from, what 2.7
-  changes and what it deliberately does not.
+  changes and what it deliberately does not, and where the release stands against Fritchii's
+  4-8 GB fixes (the retention it describes is 2.5/2.6 work of this tree's own; nothing here is
+  ported from it, and the one credited port is the skipped empty flush from an earlier round).
 
 ## [2.6.0] - 2026-11-22
 
