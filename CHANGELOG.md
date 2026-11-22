@@ -83,12 +83,16 @@ New entries go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them in
 - Palette contrast arithmetic from the committed hex values, and the regenerated news JPEGs (15427
   and 4687 bytes) rendered and inspected.
 - A source grep that the old palette hexes no longer appear in the theme or the palette code.
+- **Windows clang-cl production build and the full test suite, on this release's head:** CI run
+  [44984651181](https://github.com/2archiver/Veshiru/actions/runs/44984651181) passed configure,
+  `cmake --build build` with `ENABLE_WERROR=ON`, the console-subsystem and import checks, and
+  `ctest --test-dir build --output-on-failure --no-tests=error`, which includes the new Range Map
+  and game-settings cases.
 
 ### Unverified
 
-- The Windows build and the ctest suite: this sandbox has no cmake, fmt, Qt or Catch2, so the
-  build-check workflow is the compile gate and the test job is the test gate.
-- Every frame-rate claim for Veshiru itself, and the clock hold in a running game.
+- Every frame-rate claim for Veshiru itself, and the clock hold in a running game: no title was
+  booted for 2.6.
 - How the palette looks on a panel, and the restyle saving in a running GUI.
 
 ## [2.5.0] - 2026-11-22

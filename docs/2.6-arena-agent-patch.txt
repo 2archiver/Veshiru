@@ -65,8 +65,9 @@ VERIFICATION RUN FOR THIS PATCH (in the Linux sandbox)
 - Palette contrast computed from the committed hex values (doc section 4): text 16.75:1, muted
   5.30:1, faint 5.50:1, accent 6.38:1 on the window, selected-row 6.58:1.
 - Not run here: any cmake configure or ctest (debian sandbox has g++ 12 but no cmake and no fmt /
-  Qt / Catch2). The Windows build-check workflow is the compile and test gate. No game was run;
-  no FPS number is claimed for this patch on the target machine.
+  Qt / Catch2). The Windows build-check workflow is the compile and test gate: run 44984651181
+  passed the clang-cl build with ENABLE_WERROR=ON and the full ctest suite on this head. No game
+  was run; no FPS number is claimed for this patch on the target machine.
 
 
 HONEST LIMITS
