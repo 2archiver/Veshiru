@@ -2326,7 +2326,7 @@ TEST_CASE("Shader refresh drops pipelines while retaining existing owners and re
         CHECK(cache.Stats().graphics_pipelines == 0);
         CHECK(cache.Stats().compute_pipelines == 0);
         CHECK(cache.Stats().lowered_programs == 0);
-        CHECK(notify.NumBuildingNoReport() == 0);
+        CHECK(notify.ShadersLeft() == 0);
         CHECK(graphics->Handle() == graphics_handle);
         CHECK(*compute->pipeline == compute_handle);
         CHECK(cache.GetRenderPass(graphics_request.targets) == pass);
@@ -2487,22 +2487,22 @@ TEST_CASE("Async compile: the shader notifier counts queued and running compiles
     FreezableOracle oracle;
     oracle.answer.type = Shader::TextureType::Color2D;
     const GraphicsRequest request = MakeGraphicsRequest(vertex, fragment, &oracle);
-    REQUIRE(notify.NumBuildingNoReport() == 0);
+    REQUIRE(notify.ShadersLeft() == 0);
 
     // The worker is held inside its texture query: the compile is running and counted.
     oracle.SetGate(false);
     bool not_ready = false;
     REQUIRE(cache.GetGraphics(request, &not_ready) == nullptr);
     REQUIRE(not_ready);
-    REQUIRE(notify.NumBuildingNoReport() == 1);
+    REQUIRE(notify.ShadersLeft() == 1);
     // Asking again while it compiles queues nothing more.
     not_ready = false;
     [[maybe_unused]] const auto again = cache.GetGraphics(request, &not_ready);
-    REQUIRE(notify.NumBuildingNoReport() == 1);
+    REQUIRE(notify.ShadersLeft() == 1);
 
     oracle.SetGate(true);
     cache.Flush();
-    REQUIRE(notify.NumBuildingNoReport() == 0);
+    REQUIRE(notify.ShadersLeft() == 0);
     REQUIRE(cache.Stats().async_queued == 1);
     // The status bar's reading: one build since the window opened.
     REQUIRE(notify.ShadersBuilding() == 1);
@@ -2510,7 +2510,7 @@ TEST_CASE("Async compile: the shader notifier counts queued and running compiles
     // A hit queues nothing.
     not_ready = false;
     REQUIRE(cache.GetGraphics(request, &not_ready) != nullptr);
-    REQUIRE(notify.NumBuildingNoReport() == 0);
+    REQUIRE(notify.ShadersLeft() == 0);
 
     // Compute compiles are counted too.
     const TestProgram compute = MakeAddProgram(5, 42);
@@ -2518,7 +2518,7 @@ TEST_CASE("Async compile: the shader notifier counts queued and running compiles
     not_ready = false;
     REQUIRE(cache.GetCompute(MakeComputeRequest(compute, &compute_oracle), &not_ready) == nullptr);
     cache.Flush();
-    REQUIRE(notify.NumBuildingNoReport() == 0);
+    REQUIRE(notify.ShadersLeft() == 0);
     REQUIRE(cache.Stats().async_queued == 2);
 }
 
@@ -2604,7 +2604,7 @@ TEST_CASE("Async compile off: nothing is counted as building", "[nvn]") {
     const TestProgram program = MakeAddProgram(5, 77);
     FreezableOracle oracle;
     REQUIRE(cache.GetCompute(MakeComputeRequest(program, &oracle)) != nullptr);
-    REQUIRE(notify.NumBuildingNoReport() == 0);
+    REQUIRE(notify.ShadersLeft() == 0);
     REQUIRE(notify.ShadersBuilding() == 0);
 }
 
