@@ -236,8 +236,10 @@ TEST_CASE("nvn uniform snapshot: only pages the CPU wrote lately and the GPU nev
     CHECK(totals.not_cpu == 1);     // B + 0x9000: never written by the CPU
     CHECK(totals.gpu_written == 1); // B + 0x5000
 
-    SECTION("a write stays recent for this frame and the next") {
+    SECTION("a write stays recent for the recent-frame window") {
         ++cpu.presents;
+        CHECK(capture() != nullptr);
+        cpu.presents += 16;
         CHECK(capture() != nullptr);
         ++cpu.presents;
         CHECK(capture() == nullptr);
