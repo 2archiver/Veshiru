@@ -167,6 +167,20 @@ constexpr std::array FPS_UNLOCK_RECORDS{
     BuiltinPatchRecord{0x3C46300, WATER_STEPS_ROUTINE, {}, true},
 };
 
+// Super Mario Bros. Wonder Switch 2 Edition's frame-rate controller picks present interval 2 from
+// its second frame on under emulation and steps the game by 1/30 s; pin its simulation rate to
+// 60 and its present interval to 1 together (from Orchid/Lichii #2411).
+constexpr std::array<u8, 4> WONDER_RATE_DIVIDE{0x01, 0x0D, 0xCA, 0x1A};
+constexpr std::array<u8, 4> WONDER_INTERVAL_LOAD{0x81, 0x42, 0x40, 0xB9};
+constexpr std::array<u8, 4> WONDER_FALLBACK_LOAD{0x81, 0x52, 0x40, 0xB9};
+constexpr std::array<u8, 4> WONDER_RATE_60{0x81, 0x07, 0x80, 0x52};
+constexpr std::array<u8, 4> WONDER_INTERVAL_1{0x21, 0x00, 0x80, 0x52};
+constexpr std::array WONDER_60FPS_RECORDS{
+    BuiltinPatchRecord{0x1BBFB0, WONDER_RATE_60, WONDER_RATE_DIVIDE},
+    BuiltinPatchRecord{0x1BBFCC, WONDER_INTERVAL_1, WONDER_INTERVAL_LOAD},
+    BuiltinPatchRecord{0x1BC04C, WONDER_RATE_60, WONDER_FALLBACK_LOAD},
+};
+
 constexpr std::array BUILTIN_PATCHES{
     // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
     // instead of following the GPU-time controller down to its 480p floor.
@@ -232,6 +246,13 @@ constexpr std::array BUILTIN_PATCHES{
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = RENDER_ULTRA_RECORDS,
         .dlss_quality = Settings::NvidiaDlssQuality::UltraPerformance,
+    },
+    BuiltinPatch{
+        .name = "60 FPS (built-in)",
+        .title_id = 0x040015100B514001,
+        .module = "main",
+        .build_id = "EC47E6F8846D2A7B6892E2682845C7255F7117AE",
+        .records = WONDER_60FPS_RECORDS,
     },
 };
 
@@ -1367,6 +1388,20 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw,
     }
 
     // DLC
+    u64 aoc_base_tid = title_id;
+    {
+        const auto meta = GetControlMetadata();
+        const auto nacp_dlc = meta.first ? meta.first->GetDLCBaseTitleId() : 0;
+        if (nacp_dlc != 0) {
+            aoc_base_tid = GetBaseTitleID(nacp_dlc);
+        } else if (loader != nullptr) {
+            NACP loader_nacp;
+            if (loader->ReadControlData(loader_nacp) == Loader::ResultStatus::Success &&
+                loader_nacp.GetDLCBaseTitleId() != 0) {
+                aoc_base_tid = GetBaseTitleID(loader_nacp.GetDLCBaseTitleId());
+            }
+        }
+    }
     std::vector<ContentProviderEntry> dlc_match;
     bool has_external_dlc = false;
     bool has_nand_dlc = false;
@@ -1378,7 +1413,7 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw,
     dlc_match.reserve(dlc_entries_with_origin.size());
     for (const auto& [slot, entry] : dlc_entries_with_origin) {
         const auto base_tid = GetBaseTitleID(entry.title_id);
-        const bool matches_base = base_tid == title_id;
+        const bool matches_base = base_tid == title_id || base_tid == aoc_base_tid;
         if (!matches_base) {
             LOG_DEBUG(Loader, "DLC {:016X} base {:016X} doesn't match title {:016X}",
                       entry.title_id, base_tid, title_id);
@@ -1456,7 +1491,8 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw,
         std::vector<Patch> carried;
         if (loader->ReadCarriedPatches(carried) == Loader::ResultStatus::Success) {
             for (auto& patch : carried) {
-                if (GetBaseTitleID(patch.program_id) != title_id) {
+                const u64 patch_base = GetBaseTitleID(patch.program_id);
+                if (patch_base != title_id && patch_base != aoc_base_tid) {
                     continue;
                 }
                 const auto installed = std::find_if(out.begin(), out.end(), [&](const auto& p) {

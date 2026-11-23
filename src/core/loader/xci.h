@@ -52,7 +52,7 @@ public:
     ResultStatus ReadProgramIds(std::vector<u64>& out_program_ids) override;
     ResultStatus ReadIcon(std::vector<u8>& buffer) override;
     ResultStatus ReadTitle(std::string& title) override;
-    ResultStatus ReadControlData(FileSys::NACP& control) override;
+    ResultStatus ReadControlData(FileSys::NACP& control) const override;
     ResultStatus ReadManualRomFS(FileSys::VirtualFile& out_file) override;
 
     ResultStatus ReadBanner(std::vector<u8>& buffer) override;

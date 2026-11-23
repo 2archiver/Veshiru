@@ -221,6 +221,12 @@ void PresentManager::StartPresentThread() {
     use_present_thread = true;
 }
 
+void PresentManager::EnablePresentThread() {
+    if (!use_present_thread) {
+        StartPresentThread();
+    }
+}
+
 void PresentManager::LogPacing(const Frame* frame, std::chrono::steady_clock::duration took,
                                std::chrono::steady_clock::time_point now) {
     if (!Settings::values.frame_gen.GetValue()) {
@@ -301,6 +307,7 @@ void PresentManager::RecycleUnsubmittedFrame(Frame* frame) {
 }
 
 void PresentManager::Present(Frame* frame) {
+    frame->renderer_paced = true;
     if (!use_present_thread &&
         (frame->present_spacing.count() != 0 || Settings::values.frame_gen.GetValue())) {
         // Frame generation was turned on from the status bar while a game runs. Earlier frames
@@ -322,6 +329,28 @@ void PresentManager::Present(Frame* frame) {
         CopyToSwapchain(frame);
         free_queue.push_back(frame);
     }
+}
+
+void PresentManager::PresentSubmitted(Frame* frame) {
+    frame->renderer_paced = false;
+    frame->present_done.Reset();
+    if (use_present_thread) {
+        std::unique_lock lock{queue_mutex};
+        present_queue.push_back(frame);
+        frame_cv.notify_one();
+    } else {
+        CopyToSwapchain(frame);
+        std::scoped_lock lock{free_mutex};
+        free_queue.push_back(frame);
+        free_cv.notify_one();
+    }
+}
+
+void PresentManager::ReturnFrame(Frame* frame) {
+    // GetRenderFrame left present_done signaled (Present / PresentSubmitted reset it).
+    std::scoped_lock lock{free_mutex};
+    free_queue.push_back(frame);
+    free_cv.notify_one();
 }
 
 size_t PresentManager::MaxExtraFrames() const {
@@ -348,6 +377,13 @@ VkFormat PresentManager::GetFrameImageFormat(VkFormat image_view_format) const {
 
 void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height, VkFormat image_view_format,
                                    VkRenderPass rd, bool storage) {
+    RecreateFrame(frame, width, height, GetFrameImageFormat(image_view_format), image_view_format,
+                  rd, storage, nullptr);
+}
+
+void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height,
+                                   VkFormat frame_image_format, VkFormat image_view_format,
+                                   VkRenderPass rd, bool storage, MemoryAllocator* allocator) {
     auto& dld = device.GetLogical();
 
     // The checkout fence has completed. Tear down objects in dependency order.
@@ -358,7 +394,7 @@ void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height, VkFormat
     frame->width = width;
     frame->height = height;
     frame->format = image_view_format;
-    frame->image_format = GetFrameImageFormat(image_view_format);
+    frame->image_format = frame_image_format;
     frame->storage_capable = CanStoreToFrame(device.GetPhysical(), frame->image_format);
 
     const bool with_storage = storage && frame->storage_capable;
@@ -367,7 +403,7 @@ void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height, VkFormat
         storage_usage = VK_IMAGE_USAGE_STORAGE_BIT;
     }
 
-    frame->image = memory_allocator.CreateImage({
+    frame->image = (allocator != nullptr ? *allocator : memory_allocator).CreateImage({
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = nullptr,
         .flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT,
@@ -666,7 +702,8 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         return;
     }
 
-    while (swapchain.AcquireNextImage(!use_present_thread, frame->game_frame_presents)) {
+    while (swapchain.AcquireNextImage(!use_present_thread, frame->game_frame_presents,
+                                      frame->renderer_paced)) {
         if (!RecreateSwapchain(frame)) {
             return;
         }
@@ -792,16 +829,32 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         kFrameSrcStage,
     };
 
+    // A frame the scheduler did not render (VTX-HLE) also signals the present timeline: the next
+    // acquire with this present semaphore waits for this submission instead of a renderer tick.
+    const VkSemaphore present_timeline =
+        frame->renderer_paced ? VK_NULL_HANDLE : swapchain.PresentTimeline();
+    const bool signal_timeline = present_timeline != VK_NULL_HANDLE;
+    const std::array signal_semaphores{render_semaphore, present_timeline};
+    const std::array<u64, 2> signal_values{0, swapchain.NextPresentTimelineValue()};
+    const VkTimelineSemaphoreSubmitInfo timeline_info{
+        .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+        .pNext = nullptr,
+        .waitSemaphoreValueCount = 0,
+        .pWaitSemaphoreValues = nullptr,
+        .signalSemaphoreValueCount = 2,
+        .pSignalSemaphoreValues = signal_values.data(),
+    };
+
     const VkSubmitInfo submit_info{
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .pNext = nullptr,
+        .pNext = signal_timeline ? &timeline_info : nullptr,
         .waitSemaphoreCount = 2U,
         .pWaitSemaphores = wait_semaphores.data(),
         .pWaitDstStageMask = wait_stage_masks.data(),
         .commandBufferCount = 1,
         .pCommandBuffers = cmdbuf.address(),
-        .signalSemaphoreCount = 1U,
-        .pSignalSemaphores = &render_semaphore,
+        .signalSemaphoreCount = signal_timeline ? 2U : 1U,
+        .pSignalSemaphores = signal_semaphores.data(),
     };
 
     // Submit the image copy/blit to the swapchain
@@ -818,6 +871,10 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
             vk::Check(result);
             break;
         }
+    }
+
+    if (signal_timeline) {
+        swapchain.MarkPresentTimelineSubmitted();
     }
 
     // Present

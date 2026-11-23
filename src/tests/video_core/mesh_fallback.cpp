@@ -72,6 +72,13 @@ bool HasExtension(const std::vector<u32>& code, std::string_view name) {
     });
 }
 
+bool HasDecoration(const std::vector<u32>& code, spv::Decoration decoration) {
+    return std::ranges::any_of(Instructions(code), [&](const Instruction& inst) {
+        return inst.op == spv::Op::OpDecorate &&
+               inst.operands[1] == static_cast<u32>(decoration);
+    });
+}
+
 bool HasVariable(const std::vector<u32>& code, spv::StorageClass storage_class) {
     return std::ranges::any_of(Instructions(code), [&](const Instruction& inst) {
         return inst.op == spv::Op::OpVariable &&
@@ -343,4 +350,48 @@ TEST_CASE("Mesh fallback reserves auxiliary storage buffers in the descriptor se
     // No limit is represented by zero. Reject huge inputs without addition overflow.
     REQUIRE(FitsStorageBufferSetLimit(200, 4, 0));
     REQUIRE_FALSE(FitsStorageBufferSetLimit((std::numeric_limits<size_t>::max)(), 4, 8));
+}
+
+TEST_CASE("Mesh fallback fragment shader omits PerPrimitiveEXT for emulated mesh draws",
+          "[video_core][spirv][mesh_fallback]") {
+    const auto emit_fragment = [](bool as_compute) {
+        ObjectPool<IR::Inst> pool;
+        IR::Block block{pool};
+        IR::Program program;
+        program.stage = Stage::Fragment;
+        program.blocks = {&block};
+        program.post_order_blocks = {&block};
+        program.syntax_list = {{{.block = &block}, IR::AbstractSyntaxNode::Type::Block},
+                               {{}, IR::AbstractSyntaxNode::Type::Return}};
+        program.info.loads.Set(IR::Attribute::Generic0X, true);
+        program.info.stores_frag_color[0] = true;
+
+        IR::IREmitter ir{block};
+        ir.Prologue();
+        ir.SetFragColor(0, 0, ir.GetAttribute(IR::Attribute::Generic0X));
+        ir.Epilogue();
+
+        RuntimeInfo runtime_info;
+        runtime_info.generic_input_types[0] = AttributeType::Float;
+        runtime_info.previous_stage_stores.Set(IR::Attribute::Generic0X, true);
+        runtime_info.per_primitive_generics.set(0);
+        runtime_info.mesh_as_compute = as_compute;
+        Backend::Bindings bindings;
+        return SPIRV::EmitSPIRV(MakeProfile(), runtime_info, program, bindings);
+    };
+
+    const std::vector<u32> emulated{emit_fragment(true)};
+    Dump(emulated, "fallback-fragment-per-primitive");
+    REQUIRE(Model(emulated) == spv::ExecutionModel::Fragment);
+    REQUIRE_FALSE(HasCapability(emulated, spv::Capability::MeshShadingEXT));
+    REQUIRE_FALSE(HasExtension(emulated, "SPV_EXT_mesh_shader"));
+    REQUIRE_FALSE(HasDecoration(emulated, spv::Decoration::PerPrimitiveEXT));
+    REQUIRE(HasDecoration(emulated, spv::Decoration::Flat));
+
+    const std::vector<u32> native{emit_fragment(false)};
+    Dump(native, "native-fragment-per-primitive");
+    REQUIRE(Model(native) == spv::ExecutionModel::Fragment);
+    REQUIRE(HasCapability(native, spv::Capability::MeshShadingEXT));
+    REQUIRE(HasExtension(native, "SPV_EXT_mesh_shader"));
+    REQUIRE(HasDecoration(native, spv::Decoration::PerPrimitiveEXT));
 }

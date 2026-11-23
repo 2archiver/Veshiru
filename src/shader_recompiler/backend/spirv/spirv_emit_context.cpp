@@ -18,9 +18,11 @@
 #include "common/common_types.h"
 #include "common/div_ceil.h"
 #include "shader_recompiler/backend/nvn_storage_descriptor.h"
+#include "shader_recompiler/bindless_table.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
+#include "shader_recompiler/raw_coverage_layout.h"
 
 namespace Shader::Backend::SPIRV {
 namespace {
@@ -437,6 +439,195 @@ Id CasLoop(EmitContext& ctx, Operation operation, Id array_pointer, Id element_p
     ctx.OpReturnValue(from_word(atomic_res));
     ctx.OpFunctionEnd();
     return func;
+}
+
+// VTX-HLE raw global memory (DefineRawGlobalMemoryFunctions): the compare-exchange loop and
+// the atomics on the word a guest address resolves to.
+
+/// The compare-exchange loop of CasLoop on the word `word_pointer()` yields (called before the
+/// loop). Leaves the module in `merge_block` and returns the value the word held before the
+/// update. The word is read once; each further attempt expects the word the previous
+/// compare-exchange returned, kept in `expected_var` (a Function U32 variable, declared in the
+/// entry block of the function): a reload can keep returning a stale copy (AMD), and the
+/// invocations that lost would never match again. `load_alignment` is the byte alignment of the
+/// plain load (PhysicalStorageBuffer pointers require it), 0 for none.
+template <typename WordPointer>
+Id CasLoopBody(EmitContext& ctx, Id cas_func, Id op_b, Id value_type, Id expected_var,
+               spv::Scope scope, Id loop_header, Id continue_block, Id merge_block,
+               u32 load_alignment, WordPointer&& word_pointer) {
+    const Id zero{ctx.u32_zero_value};
+    const Id scope_id{ctx.Const(static_cast<u32>(scope))};
+    const Id pointer{word_pointer()};
+    ctx.OpStore(expected_var, load_alignment != 0
+                                  ? ctx.OpLoad(ctx.U32[1], pointer, spv::MemoryAccessMask::Aligned,
+                                               load_alignment)
+                                  : ctx.OpLoad(ctx.U32[1], pointer));
+    ctx.OpBranch(loop_header);
+    ctx.AddLabel(loop_header);
+
+    ctx.OpLoopMerge(merge_block, continue_block, spv::LoopControlMask::MaskNone);
+    ctx.OpBranch(continue_block);
+
+    ctx.AddLabel(continue_block);
+    // The word holds a u32, an f32, an f16x2, or an f32x2 packed as two halves.
+    const bool packed_half{value_type.value == ctx.F32[2].value};
+    const bool is_u32{value_type.value == ctx.U32[1].value};
+    const auto from_word{[&](Id word) {
+        if (packed_half) {
+            return ctx.OpUnpackHalf2x16(ctx.F32[2], word);
+        }
+        return is_u32 ? word : ctx.OpBitcast(value_type, word);
+    }};
+    const Id expected{ctx.OpLoad(ctx.U32[1], expected_var)};
+    const Id new_value{ctx.OpFunctionCall(value_type, cas_func, from_word(expected), op_b)};
+    const Id new_word{packed_half ? ctx.OpPackHalf2x16(ctx.U32[1], new_value)
+                      : is_u32    ? new_value
+                                  : ctx.OpBitcast(ctx.U32[1], new_value)};
+    const Id atomic_res{ctx.OpAtomicCompareExchange(ctx.U32[1], pointer, scope_id, zero, zero,
+                                                    new_word, expected)};
+    ctx.OpStore(expected_var, atomic_res);
+    const Id success{ctx.OpIEqual(ctx.U1, atomic_res, expected)};
+    ctx.OpBranchConditional(success, merge_block, loop_header);
+
+    ctx.AddLabel(merge_block);
+    return from_word(atomic_res);
+}
+
+/// A Function-storage U32 variable for CasLoopBody; declare it right after the function's first
+/// label (OpVariable belongs to the entry block).
+Id CasExpectedVariable(EmitContext& ctx) {
+    return ctx.AddLocalVariable(ctx.TypePointer(spv::StorageClass::Function, ctx.U32[1]),
+                                spv::StorageClass::Function);
+}
+
+/// What a GlobalAtomic* opcode does to the word its address resolves to.
+struct GlobalAtomicSpec {
+    Id value_type;  // the operand
+    Id result_type; // the value of the instruction: the word before the update
+    Id word_type;   // the type of the word in memory: U32 or U64
+    /// A SPIR-V atomic on the word, or null for an operation that is a compare-exchange loop.
+    Id (Sirit::Module::*atomic)(Id, Id, Id, Id, Id){};
+    Id cas_func{}; // the arithmetic of the compare-exchange loop
+    enum class Result { Plain, F16x2Bits, F32x2Packed } result{Result::Plain};
+};
+
+/// The definition of a GlobalAtomic* opcode, or nothing when the host cannot do it: a 64-bit
+/// atomic needs shaderBufferInt64Atomics (and, on the storage buffer fallback, a 64-bit view of the
+/// buffers); the two 32-bit halves forms (GlobalAtomic*32x2) only exist for hosts without int64,
+/// which have no global memory at all. Defines the arithmetic function of a compare-exchange loop,
+/// so it has to be called between function definitions.
+std::optional<GlobalAtomicSpec> GlobalAtomicSpecOf(EmitContext& ctx, IR::Opcode opcode, bool raw) {
+    using Result = GlobalAtomicSpec::Result;
+    const auto direct{[&](Id type, Id (Sirit::Module::*atomic)(Id, Id, Id, Id, Id)) {
+        return GlobalAtomicSpec{.value_type = type,
+                                .result_type = type,
+                                .word_type = type,
+                                .atomic = atomic};
+    }};
+    const auto loop{[&](Operation operation, Id value_type, Id result_type, Result result) {
+        return GlobalAtomicSpec{.value_type = value_type,
+                                .result_type = result_type,
+                                .word_type = ctx.U32[1],
+                                .cas_func = CasFunction(ctx, operation, value_type),
+                                .result = result};
+    }};
+    const bool atomics64{ctx.profile.support_int64_atomics &&
+                         (raw || ctx.profile.support_descriptor_aliasing)};
+    using Module = Sirit::Module;
+    switch (opcode) {
+    case IR::Opcode::GlobalAtomicIAdd32:
+        return direct(ctx.U32[1], &Module::OpAtomicIAdd);
+    case IR::Opcode::GlobalAtomicSMin32:
+        return direct(ctx.U32[1], &Module::OpAtomicSMin);
+    case IR::Opcode::GlobalAtomicUMin32:
+        return direct(ctx.U32[1], &Module::OpAtomicUMin);
+    case IR::Opcode::GlobalAtomicSMax32:
+        return direct(ctx.U32[1], &Module::OpAtomicSMax);
+    case IR::Opcode::GlobalAtomicUMax32:
+        return direct(ctx.U32[1], &Module::OpAtomicUMax);
+    case IR::Opcode::GlobalAtomicAnd32:
+        return direct(ctx.U32[1], &Module::OpAtomicAnd);
+    case IR::Opcode::GlobalAtomicOr32:
+        return direct(ctx.U32[1], &Module::OpAtomicOr);
+    case IR::Opcode::GlobalAtomicXor32:
+        return direct(ctx.U32[1], &Module::OpAtomicXor);
+    case IR::Opcode::GlobalAtomicExchange32:
+        return direct(ctx.U32[1], &Module::OpAtomicExchange);
+    case IR::Opcode::GlobalAtomicInc32:
+        return loop(Operation::Increment, ctx.U32[1], ctx.U32[1], Result::Plain);
+    case IR::Opcode::GlobalAtomicDec32:
+        return loop(Operation::Decrement, ctx.U32[1], ctx.U32[1], Result::Plain);
+    case IR::Opcode::GlobalAtomicIAdd64:
+        return atomics64 ? std::optional{direct(ctx.U64, &Module::OpAtomicIAdd)} : std::nullopt;
+    case IR::Opcode::GlobalAtomicSMin64:
+        return atomics64 ? std::optional{direct(ctx.U64, &Module::OpAtomicSMin)} : std::nullopt;
+    case IR::Opcode::GlobalAtomicUMin64:
+        return atomics64 ? std::optional{direct(ctx.U64, &Module::OpAtomicUMin)} : std::nullopt;
+    case IR::Opcode::GlobalAtomicSMax64:
+        return atomics64 ? std::optional{direct(ctx.U64, &Module::OpAtomicSMax)} : std::nullopt;
+    case IR::Opcode::GlobalAtomicUMax64:
+        return atomics64 ? std::optional{direct(ctx.U64, &Module::OpAtomicUMax)} : std::nullopt;
+    case IR::Opcode::GlobalAtomicAnd64:
+        return atomics64 ? std::optional{direct(ctx.U64, &Module::OpAtomicAnd)} : std::nullopt;
+    case IR::Opcode::GlobalAtomicOr64:
+        return atomics64 ? std::optional{direct(ctx.U64, &Module::OpAtomicOr)} : std::nullopt;
+    case IR::Opcode::GlobalAtomicXor64:
+        return atomics64 ? std::optional{direct(ctx.U64, &Module::OpAtomicXor)} : std::nullopt;
+    case IR::Opcode::GlobalAtomicExchange64:
+        return atomics64 ? std::optional{direct(ctx.U64, &Module::OpAtomicExchange)} : std::nullopt;
+    case IR::Opcode::GlobalAtomicAddF32:
+        return loop(Operation::FPAdd, ctx.F32[1], ctx.F32[1], Result::Plain);
+    case IR::Opcode::GlobalAtomicAddF16x2:
+        return loop(Operation::FPAdd, ctx.F16[2], ctx.U32[1], Result::F16x2Bits);
+    case IR::Opcode::GlobalAtomicMinF16x2:
+        return loop(Operation::FPMin, ctx.F16[2], ctx.U32[1], Result::F16x2Bits);
+    case IR::Opcode::GlobalAtomicMaxF16x2:
+        return loop(Operation::FPMax, ctx.F16[2], ctx.U32[1], Result::F16x2Bits);
+    case IR::Opcode::GlobalAtomicAddF32x2:
+        return loop(Operation::FPAdd, ctx.F32[2], ctx.U32[1], Result::F32x2Packed);
+    case IR::Opcode::GlobalAtomicMinF32x2:
+        return loop(Operation::FPMin, ctx.F32[2], ctx.U32[1], Result::F32x2Packed);
+    case IR::Opcode::GlobalAtomicMaxF32x2:
+        return loop(Operation::FPMax, ctx.F32[2], ctx.U32[1], Result::F32x2Packed);
+    default:
+        return std::nullopt;
+    }
+}
+
+/// The atomic of `spec` on the word `pointer` points to (a StorageBuffer or PhysicalStorageBuffer
+/// pointer, whose plain loads need `load_alignment`). Returns the instruction's value.
+/// `expected_var` is the CasExpectedVariable of the enclosing function for a compare-exchange loop
+/// (spec.atomic null), unused otherwise.
+Id EmitGlobalAtomicOnWord(EmitContext& ctx, const GlobalAtomicSpec& spec, Id pointer, Id value,
+                          u32 load_alignment, Id expected_var) {
+    constexpr spv::Scope scope{spv::Scope::Device};
+    if (spec.atomic) {
+        return (ctx.*spec.atomic)(spec.result_type, pointer, ctx.Const(static_cast<u32>(scope)),
+                                  ctx.u32_zero_value, value);
+    }
+    const Id loop_header{ctx.OpLabel()};
+    const Id continue_block{ctx.OpLabel()};
+    const Id merge_block{ctx.OpLabel()};
+    const Id before{CasLoopBody(ctx, spec.cas_func, value, spec.value_type, expected_var, scope,
+                                loop_header, continue_block, merge_block, load_alignment,
+                                [&] { return pointer; })};
+    switch (spec.result) {
+    case GlobalAtomicSpec::Result::F16x2Bits:
+        return ctx.OpBitcast(ctx.U32[1], before);
+    case GlobalAtomicSpec::Result::F32x2Packed:
+        return ctx.OpPackHalf2x16(ctx.U32[1], before);
+    case GlobalAtomicSpec::Result::Plain:
+        break;
+    }
+    return before;
+}
+
+bool LeanGlobalMemory(Stage stage) {
+    static const char* const forced = std::getenv("EDEN_NX2_LEAN_SSBO");
+    if (forced != nullptr) {
+        return forced[0] != '0';
+    }
+    return stage != Stage::Task && stage != Stage::Mesh;
 }
 
 template <typename Desc>
@@ -967,6 +1158,572 @@ void EmitContext::DefineWriteStorageCasLoopFunction(const Info& info) {
     write_storage_cas_loop_func = func;
 }
 
+void EmitContext::DefineRawGlobalMemoryFunctions(const Info& info) {
+    raw_global_memory = true;
+    // VTX-HLE's raw path uses a table search instead of the candidate-buffer switch. Keep its
+    // translation and access helpers as calls too, so each access does not duplicate the search.
+    const spv::FunctionControlMask helper_control{LeanGlobalMemory(stage)
+                                                      ? spv::FunctionControlMask::DontInline
+                                                      : spv::FunctionControlMask::MaskNone};
+    const Id zero{u32_zero_value};
+    const Id zero64{Constant(U64, u64{0})};
+    const Id one{Const(1u)};
+
+    // translate(guest address) -> device address, 0 when no table entry contains the address.
+    // The table is an array of {guest base, device base, size} (u64 each), sorted by guest base
+    // and never overlapping, so the entry for an address is found by a binary search (the last
+    // entry whose base is <= the address); any number of ranges fit. With
+    // Info::raw_global_table_ssbo it is read from the last storage buffer of the program (u32
+    // words: the entry count at word 0, the entries from RAW_GLOBAL_TABLE_SSBO_ENTRIES_WORD).
+    // Otherwise the driver bank (c0) holds a u32 entry count at RAW_GLOBAL_TABLE_OFFSET and the
+    // device address of the table at RAW_GLOBAL_TABLE_ADDRESS_OFFSET.
+    const bool table_in_ssbo{info.raw_global_table_ssbo};
+    const Id translate_type{TypeFunction(U64, U64)};
+    const Id translate{OpFunction(U64, helper_control, translate_type)};
+    const Id address{OpFunctionParameter(U64)};
+    AddLabel();
+    const Id index_pointer_type{TypePointer(spv::StorageClass::Function, U32[1])};
+    const Id low_var{AddLocalVariable(index_pointer_type, spv::StorageClass::Function, zero)};
+    const Id high_var{AddLocalVariable(index_pointer_type, spv::StorageClass::Function, zero)};
+    // Info::raw_global_last_hit (EDEN_NX2_TRY_RAWGLOBAL_FAST): the invocation's last candidate
+    // entry {guest base, device base, size} in Private variables (size 0: none yet). An address
+    // inside it maps without the search. Same result as the search: the entries never overlap,
+    // so the entry containing an address is the last one whose base is <= it, and the table does
+    // not change while the program runs (reference: VideoCommon::TranslateRawGlobalAddressLastHit).
+    std::array<Id, 3> last_hit{};
+    if (info.raw_global_last_hit) {
+        const Id private_u64{TypePointer(spv::StorageClass::Private, U64)};
+        for (Id& variable : last_hit) {
+            variable = AddGlobalVariable(private_u64, spv::StorageClass::Private, zero64);
+            if (profile.supported_spirv >= 0x00010400) {
+                interfaces.push_back(variable);
+            }
+        }
+        const Id relative{OpISub(U64, address, OpLoad(U64, last_hit[0]))};
+        const Id hit{OpULessThan(U1, relative, OpLoad(U64, last_hit[2]))};
+        const Id hit_label{OpLabel()};
+        const Id search_label{OpLabel()};
+        OpSelectionMerge(search_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(hit, hit_label, search_label);
+        AddLabel(hit_label);
+        OpReturnValue(OpIAdd(U64, OpLoad(U64, last_hit[1]), relative));
+        AddLabel(search_label);
+    }
+    Id count{};
+    Id table{};
+    Id table_ssbo{};
+    if (table_in_ssbo) {
+        table_ssbo = ssbos[info.raw_global_table_index].U32;
+        const Id count_pointer{OpAccessChain(storage_types.U32.element, table_ssbo, zero, zero)};
+        count = OpLoad(U32[1], count_pointer);
+    } else {
+        const Id count_pointer{OpAccessChain(uniform_types.U32, cbufs[0].U32, zero,
+                                             Const(Profile::RAW_GLOBAL_TABLE_OFFSET / 4))};
+        count = OpLoad(U32[1], count_pointer);
+        const Id table_pointer{OpAccessChain(uniform_types.U32x2, cbufs[0].U32x2, zero,
+                                             Const(Profile::RAW_GLOBAL_TABLE_ADDRESS_OFFSET / 8))};
+        table = OpBitcast(U64, OpLoad(U32[2], table_pointer));
+    }
+    OpStore(high_var, count);
+    const Id entry_pointer_type{TypePointer(spv::StorageClass::PhysicalStorageBuffer, U64)};
+    constexpr u32 ENTRY_ALIGNMENT{8};
+    // The u64 at byte `offset` of entry `index`.
+    const auto load_entry{[&](Id index, u32 offset) -> Id {
+        if (table_in_ssbo) {
+            constexpr u32 ENTRY_WORDS{Profile::RAW_GLOBAL_TABLE_ENTRY_SIZE / 4};
+            const Id word{OpIAdd(U32[1], OpIMul(U32[1], index, Const(ENTRY_WORDS)),
+                                 Const(Profile::RAW_GLOBAL_TABLE_SSBO_ENTRIES_WORD + offset / 4))};
+            const Id low_pointer{OpAccessChain(storage_types.U32.element, table_ssbo, zero, word)};
+            const Id high_pointer{OpAccessChain(storage_types.U32.element, table_ssbo, zero,
+                                                OpIAdd(U32[1], word, one))};
+            const Id words{OpCompositeConstruct(U32[2], OpLoad(U32[1], low_pointer),
+                                                OpLoad(U32[1], high_pointer))};
+            return OpBitcast(U64, words);
+        }
+        const Id byte_offset{OpIMul(U64, OpUConvert(U64, index),
+                                    Constant(U64, u64{Profile::RAW_GLOBAL_TABLE_ENTRY_SIZE}))};
+        const Id entry_address{OpIAdd(U64, OpIAdd(U64, table, byte_offset),
+                                      Constant(U64, u64{offset}))};
+        const Id pointer{OpConvertUToPtr(entry_pointer_type, entry_address)};
+        return OpLoad(U64, pointer, spv::MemoryAccessMask::Aligned, ENTRY_ALIGNMENT);
+    }};
+    const Id header_label{OpLabel()};
+    const Id check_label{OpLabel()};
+    const Id body_label{OpLabel()};
+    const Id continue_label{OpLabel()};
+    const Id merge_label{OpLabel()};
+    OpBranch(header_label);
+
+    AddLabel(header_label);
+    OpLoopMerge(merge_label, continue_label, spv::LoopControlMask::MaskNone);
+    OpBranch(check_label);
+
+    AddLabel(check_label);
+    const Id low{OpLoad(U32[1], low_var)};
+    const Id high{OpLoad(U32[1], high_var)};
+    OpBranchConditional(OpULessThan(U1, low, high), body_label, merge_label);
+
+    AddLabel(body_label);
+    const Id middle{OpShiftRightLogical(U32[1], OpIAdd(U32[1], low, high), one)};
+    const Id middle_base{load_entry(middle, 0)};
+    const Id base_not_above{OpULessThanEqual(U1, middle_base, address)};
+    OpStore(low_var, OpSelect(U32[1], base_not_above, OpIAdd(U32[1], middle, one), low));
+    OpStore(high_var, OpSelect(U32[1], base_not_above, high, middle));
+    OpBranch(continue_label);
+
+    AddLabel(continue_label);
+    OpBranch(header_label);
+
+    AddLabel(merge_label);
+    // `found` entries have a base <= address; the last one is the candidate.
+    const Id found{OpLoad(U32[1], low_var)};
+    const Id has_candidate{OpINotEqual(U1, found, zero)};
+    const Id candidate_label{OpLabel()};
+    const Id none_label{OpLabel()};
+    OpSelectionMerge(none_label, spv::SelectionControlMask::MaskNone);
+    OpBranchConditional(has_candidate, candidate_label, none_label);
+
+    AddLabel(candidate_label);
+    const Id last{OpISub(U32[1], found, one)};
+    const Id guest_base{load_entry(last, 0)};
+    const Id device_base{load_entry(last, 8)};
+    const Id range_size{load_entry(last, 16)};
+    if (info.raw_global_last_hit) {
+        // Any entry of the table is a valid cache, also one that does not contain the address.
+        OpStore(last_hit[0], guest_base);
+        OpStore(last_hit[1], device_base);
+        OpStore(last_hit[2], range_size);
+    }
+    const Id relative{OpISub(U64, address, guest_base)};
+    const Id in_range{OpULessThan(U1, relative, range_size)};
+    OpReturnValue(OpSelect(U64, in_range, OpIAdd(U64, device_base, relative), zero64));
+
+    AddLabel(none_label);
+    OpReturnValue(zero64);
+    OpFunctionEnd();
+
+    // Info::raw_global_store_alias: alias(guest address) -> the device address of the same byte in
+    // an eligible mirror alias target, or 0 when none holds it. The driver bank carries the table
+    // (Profile::RAW_GLOBAL_ALIAS_*); entries share the raw table's layout and search. A raw store
+    // writes there after the raw-table target, so a read-only mirror stays current or a storage
+    // mirror's imported guest backing receives the write too.
+    Id alias{};
+    if (info.raw_global_store_alias) {
+        alias = OpFunction(U64, helper_control, translate_type);
+        const Id alias_address{OpFunctionParameter(U64)};
+        AddLabel();
+        const Id alias_low_var{
+            AddLocalVariable(index_pointer_type, spv::StorageClass::Function, zero)};
+        const Id alias_high_var{
+            AddLocalVariable(index_pointer_type, spv::StorageClass::Function, zero)};
+        const auto bank_u64{[&](u32 offset) {
+            const Id pointer{
+                OpAccessChain(uniform_types.U32x2, cbufs[0].U32x2, zero, Const(offset / 8))};
+            return OpBitcast(U64, OpLoad(U32[2], pointer));
+        }};
+        const Id alias_count{OpLoad(
+            U32[1], OpAccessChain(uniform_types.U32, cbufs[0].U32, zero,
+                                  Const(Profile::RAW_GLOBAL_ALIAS_COUNT_OFFSET / 4)))};
+        const Id alias_table{bank_u64(Profile::RAW_GLOBAL_ALIAS_ADDRESS_OFFSET)};
+        const Id bounds_low{bank_u64(Profile::RAW_GLOBAL_ALIAS_LOW_OFFSET)};
+        const Id bounds_high{bank_u64(Profile::RAW_GLOBAL_ALIAS_HIGH_OFFSET)};
+        // Most stores land outside every mirror: one compare, no search.
+        const Id inside{OpULessThan(U1, OpISub(U64, alias_address, bounds_low),
+                                    OpISub(U64, bounds_high, bounds_low))};
+        const Id outside_label{OpLabel()};
+        const Id alias_search_label{OpLabel()};
+        OpSelectionMerge(alias_search_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(inside, alias_search_label, outside_label);
+        AddLabel(outside_label);
+        OpReturnValue(zero64);
+        AddLabel(alias_search_label);
+        OpStore(alias_high_var, alias_count);
+        const auto alias_entry{[&](Id index, u32 offset) -> Id {
+            const Id byte_offset{OpIMul(U64, OpUConvert(U64, index),
+                                        Constant(U64, u64{Profile::RAW_GLOBAL_TABLE_ENTRY_SIZE}))};
+            const Id entry_address{OpIAdd(U64, OpIAdd(U64, alias_table, byte_offset),
+                                          Constant(U64, u64{offset}))};
+            return OpLoad(U64, OpConvertUToPtr(entry_pointer_type, entry_address),
+                          spv::MemoryAccessMask::Aligned, ENTRY_ALIGNMENT);
+        }};
+        const Id alias_header_label{OpLabel()};
+        const Id alias_check_label{OpLabel()};
+        const Id alias_body_label{OpLabel()};
+        const Id alias_continue_label{OpLabel()};
+        const Id alias_merge_label{OpLabel()};
+        OpBranch(alias_header_label);
+
+        AddLabel(alias_header_label);
+        OpLoopMerge(alias_merge_label, alias_continue_label, spv::LoopControlMask::MaskNone);
+        OpBranch(alias_check_label);
+
+        AddLabel(alias_check_label);
+        const Id alias_low{OpLoad(U32[1], alias_low_var)};
+        const Id alias_high{OpLoad(U32[1], alias_high_var)};
+        OpBranchConditional(OpULessThan(U1, alias_low, alias_high), alias_body_label,
+                            alias_merge_label);
+
+        AddLabel(alias_body_label);
+        const Id alias_middle{
+            OpShiftRightLogical(U32[1], OpIAdd(U32[1], alias_low, alias_high), one)};
+        const Id alias_not_above{
+            OpULessThanEqual(U1, alias_entry(alias_middle, 0), alias_address)};
+        OpStore(alias_low_var,
+                OpSelect(U32[1], alias_not_above, OpIAdd(U32[1], alias_middle, one), alias_low));
+        OpStore(alias_high_var, OpSelect(U32[1], alias_not_above, alias_high, alias_middle));
+        OpBranch(alias_continue_label);
+
+        AddLabel(alias_continue_label);
+        OpBranch(alias_header_label);
+
+        AddLabel(alias_merge_label);
+        const Id alias_found{OpLoad(U32[1], alias_low_var)};
+        const Id alias_candidate_label{OpLabel()};
+        const Id alias_none_label{OpLabel()};
+        // The condition first: OpSelectionMerge must directly precede the branch.
+        const Id alias_has_candidate{OpINotEqual(U1, alias_found, zero)};
+        OpSelectionMerge(alias_none_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(alias_has_candidate, alias_candidate_label, alias_none_label);
+
+        AddLabel(alias_candidate_label);
+        const Id alias_last{OpISub(U32[1], alias_found, one)};
+        const Id alias_relative{OpISub(U64, alias_address, alias_entry(alias_last, 0))};
+        const Id alias_in_range{OpULessThan(U1, alias_relative, alias_entry(alias_last, 16))};
+        OpReturnValue(OpSelect(U64, alias_in_range,
+                               OpIAdd(U64, alias_entry(alias_last, 8), alias_relative), zero64));
+
+        AddLabel(alias_none_label);
+        OpReturnValue(zero64);
+        OpFunctionEnd();
+    }
+    // Inside a store's mapped branch: write to the alias target when one covers `guest_address`.
+    const auto write_through{[&](Id guest_address, const auto& store) {
+        if (!Sirit::ValidId(alias)) {
+            return;
+        }
+        const Id mirror{OpFunctionCall(U64, alias, guest_address)};
+        const Id mirror_label{OpLabel()};
+        const Id mirror_end_label{OpLabel()};
+        const Id has_mirror{OpINotEqual(U1, mirror, zero64)};
+        OpSelectionMerge(mirror_end_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(has_mirror, mirror_label, mirror_end_label);
+        AddLabel(mirror_label);
+        store(mirror);
+        OpBranch(mirror_end_label);
+        AddLabel(mirror_end_label);
+    }};
+
+    // Raw coverage diagnostic (Info::raw_coverage, raw_coverage_layout.h): report(guest address,
+    // op) appends {address, program hash, op | stage << 8, present} to the miss ring whose device
+    // address is in the table header (the table storage buffer's words, or c0 next to the table
+    // address; nothing when it is 0). Once the ring is full a miss only reads the counter: an
+    // atomic per miss on one word (hundreds of millions per window in a pointer-chasing loop)
+    // would stall the GPU.
+    Id report_miss{};
+    if (info.raw_coverage) {
+        namespace Cov = RawCoverage;
+        static_assert(Cov::BANK_RING_OFFSET == Profile::RAW_GLOBAL_TABLE_ADDRESS_OFFSET + 8 &&
+                      Cov::BANK_RING_OFFSET % 8 == 0);
+        report_miss = OpFunction(void_id, helper_control, TypeFunction(void_id, U64, U32[1]));
+        const Id miss_address{OpFunctionParameter(U64)};
+        const Id miss_op{OpFunctionParameter(U32[1])};
+        AddLabel();
+        // 1 while this miss may take a record (a null miss only below NULL_RECORDS).
+        const Id take_var{AddLocalVariable(index_pointer_type, spv::StorageClass::Function, one)};
+        Id ring{};
+        if (table_in_ssbo) {
+            const auto header_word{[&](u32 word) {
+                return OpLoad(U32[1], OpAccessChain(storage_types.U32.element, table_ssbo, zero,
+                                                    Const(word)));
+            }};
+            ring = OpBitcast(U64, OpCompositeConstruct(U32[2], header_word(Cov::TABLE_RING_WORD),
+                                                       header_word(Cov::TABLE_RING_WORD + 1)));
+        } else {
+            const Id ring_pointer{OpAccessChain(uniform_types.U32x2, cbufs[0].U32x2, zero,
+                                                Const(Cov::BANK_RING_OFFSET / 8))};
+            ring = OpBitcast(U64, OpLoad(U32[2], ring_pointer));
+        }
+        const Id ring_label{OpLabel()};
+        const Id null_label{OpLabel()};
+        const Id null_add_label{OpLabel()};
+        const Id null_add_end_label{OpLabel()};
+        const Id null_end_label{OpLabel()};
+        const Id add_label{OpLabel()};
+        const Id slot_label{OpLabel()};
+        const Id slot_end_label{OpLabel()};
+        const Id add_end_label{OpLabel()};
+        const Id report_end_label{OpLabel()};
+        const Id has_ring{OpINotEqual(U1, ring, zero64)};
+        OpSelectionMerge(report_end_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(has_ring, ring_label, report_end_label);
+
+        AddLabel(ring_label);
+        const Id word_pointer_type{TypePointer(spv::StorageClass::PhysicalStorageBuffer, U32[1])};
+        const Id counter{OpConvertUToPtr(
+            word_pointer_type,
+            OpIAdd(U64, ring, Constant(U64, u64{Cov::RING_COUNTER_WORD * sizeof(u32)})))};
+        const Id device_scope{Const(static_cast<u32>(spv::Scope::Device))};
+        // Null misses: a load of their own counter, an add only while below the cap.
+        const Id is_null{
+            OpULessThan(U1, miss_address, Constant(U64, u64{Cov::NULL_ADDRESS_LIMIT}))};
+        OpSelectionMerge(null_end_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(is_null, null_label, null_end_label);
+
+        AddLabel(null_label);
+        const Id null_counter{OpConvertUToPtr(
+            word_pointer_type,
+            OpIAdd(U64, ring, Constant(U64, u64{Cov::RING_NULL_WORD * sizeof(u32)})))};
+        OpStore(take_var, zero);
+        const Id null_seen{OpAtomicLoad(U32[1], null_counter, device_scope, zero)};
+        const Id null_room{OpULessThan(U1, null_seen, Const(Cov::NULL_RECORDS))};
+        OpSelectionMerge(null_add_end_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(null_room, null_add_label, null_add_end_label);
+
+        AddLabel(null_add_label);
+        const Id null_slot{OpAtomicIAdd(U32[1], null_counter, device_scope, zero, one)};
+        OpStore(take_var,
+                OpSelect(U32[1], OpULessThan(U1, null_slot, Const(Cov::NULL_RECORDS)), one, zero));
+        OpBranch(null_add_end_label);
+
+        AddLabel(null_add_end_label);
+        OpBranch(null_end_label);
+
+        AddLabel(null_end_label);
+        const Id take{OpINotEqual(U1, OpLoad(U32[1], take_var), zero)};
+        const Id seen{OpAtomicLoad(U32[1], counter, device_scope, zero)};
+        const Id room{OpLogicalAnd(U1, take, OpULessThan(U1, seen, Const(Cov::RING_ENTRIES)))};
+        OpSelectionMerge(add_end_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(room, add_label, add_end_label);
+
+        AddLabel(add_label);
+        const Id slot{OpAtomicIAdd(U32[1], counter, device_scope, zero, one)};
+        const Id in_ring{OpULessThan(U1, slot, Const(Cov::RING_ENTRIES))};
+        OpSelectionMerge(slot_end_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(in_ring, slot_label, slot_end_label);
+
+        AddLabel(slot_label);
+        const Id present_pointer{OpConvertUToPtr(
+            word_pointer_type,
+            OpIAdd(U64, ring, Constant(U64, u64{Cov::RING_PRESENT_WORD * sizeof(u32)})))};
+        const Id present{OpLoad(U32[1], present_pointer, spv::MemoryAccessMask::Aligned, 4u)};
+        const Id record{OpIAdd(
+            U64, ring,
+            OpIAdd(U64, Constant(U64, u64{Cov::RING_HEADER_BYTES}),
+                   OpIMul(U64, OpUConvert(U64, slot), Constant(U64, u64{Cov::RECORD_BYTES}))))};
+        const Id address_words{OpBitcast(U32[2], miss_address)};
+        const u64 program_hash{info.raw_coverage_program};
+        const Id first_half{OpCompositeConstruct(
+            U32[4], OpCompositeExtract(U32[1], address_words, 0u),
+            OpCompositeExtract(U32[1], address_words, 1u), Const(static_cast<u32>(program_hash)),
+            Const(static_cast<u32>(program_hash >> 32)))};
+        const Id kind{OpBitwiseOr(
+            U32[1], miss_op, Const(static_cast<u32>(stage) << Cov::RECORD_STAGE_SHIFT))};
+        const Id second_half{OpCompositeConstruct(U32[4], kind, present, zero, zero)};
+        static_assert(Cov::RECORD_KIND_WORD == 4 && Cov::RECORD_PRESENT_WORD == 5);
+        static_assert(Cov::RING_HEADER_BYTES % 16 == 0 && Cov::RECORD_BYTES == 32);
+        const Id half_pointer_type{TypePointer(spv::StorageClass::PhysicalStorageBuffer, U32[4])};
+        OpStore(OpConvertUToPtr(half_pointer_type, record), first_half,
+                spv::MemoryAccessMask::Aligned, 16u);
+        OpStore(OpConvertUToPtr(half_pointer_type, OpIAdd(U64, record, Constant(U64, u64{16}))),
+                second_half, spv::MemoryAccessMask::Aligned, 16u);
+        OpBranch(slot_end_label);
+
+        AddLabel(slot_end_label);
+        OpBranch(add_end_label);
+
+        AddLabel(add_end_label);
+        OpBranch(report_end_label);
+
+        AddLabel(report_end_label);
+        OpReturn();
+        OpFunctionEnd();
+    }
+    const auto report{[&](Id addr, RawCoverage::Op op) {
+        if (Sirit::ValidId(report_miss)) {
+            OpFunctionCall(void_id, report_miss, addr, Const(static_cast<u32>(op)));
+        }
+    }};
+
+    // Accesses: translate, then go through a PhysicalStorageBuffer64 pointer. Accesses outside
+    // every entry are dropped (loads return 0), as with robust buffer access.
+    constexpr u32 ALIGNMENT{4};
+    const auto define_load{[&](Id type, RawCoverage::Op op) {
+        const Id pointer_type{TypePointer(spv::StorageClass::PhysicalStorageBuffer, type)};
+        const Id func{OpFunction(type, helper_control, TypeFunction(type, U64))};
+        const Id addr{OpFunctionParameter(U64)};
+        AddLabel();
+        const Id device{OpFunctionCall(U64, translate, addr)};
+        const Id then_label{OpLabel()};
+        const Id end_label{OpLabel()};
+        const Id mapped{OpINotEqual(U1, device, zero64)};
+        OpSelectionMerge(end_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(mapped, then_label, end_label);
+        AddLabel(then_label);
+        const Id pointer{OpConvertUToPtr(pointer_type, device)};
+        OpReturnValue(OpLoad(type, pointer, spv::MemoryAccessMask::Aligned, ALIGNMENT));
+        AddLabel(end_label);
+        report(addr, op);
+        OpReturnValue(ConstantNull(type));
+        OpFunctionEnd();
+        return func;
+    }};
+    const auto define_write{[&](Id type, RawCoverage::Op op) {
+        const Id pointer_type{TypePointer(spv::StorageClass::PhysicalStorageBuffer, type)};
+        const Id func{OpFunction(void_id, helper_control, TypeFunction(void_id, U64, type))};
+        const Id addr{OpFunctionParameter(U64)};
+        const Id data{OpFunctionParameter(type)};
+        AddLabel();
+        const Id device{OpFunctionCall(U64, translate, addr)};
+        const Id then_label{OpLabel()};
+        const Id end_label{OpLabel()};
+        const Id mapped{OpINotEqual(U1, device, zero64)};
+        OpSelectionMerge(end_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(mapped, then_label, end_label);
+        AddLabel(then_label);
+        const Id pointer{OpConvertUToPtr(pointer_type, device)};
+        OpStore(pointer, data, spv::MemoryAccessMask::Aligned, ALIGNMENT);
+        write_through(addr, [&](Id mirror) {
+            OpStore(OpConvertUToPtr(pointer_type, mirror), data, spv::MemoryAccessMask::Aligned,
+                    ALIGNMENT);
+        });
+        OpReturn();
+        AddLabel(end_label);
+        report(addr, op);
+        OpReturn();
+        OpFunctionEnd();
+        return func;
+    }};
+    load_global_func_u32 = define_load(U32[1], RawCoverage::Op::Load32);
+    load_global_func_u32x2 = define_load(U32[2], RawCoverage::Op::Load64);
+    load_global_func_u32x4 = define_load(U32[4], RawCoverage::Op::Load128);
+    write_global_func_u32 = define_write(U32[1], RawCoverage::Op::Store32);
+    write_global_func_u32x2 = define_write(U32[2], RawCoverage::Op::Store64);
+    write_global_func_u32x4 = define_write(U32[4], RawCoverage::Op::Store128);
+
+    if (!info.stores_raw_global_memory) {
+        return;
+    }
+    const Id u32_pointer_type{TypePointer(spv::StorageClass::PhysicalStorageBuffer, U32[1])};
+    for (size_t index = 0; index < NUM_GLOBAL_ATOMICS; ++index) {
+        const auto opcode{
+            static_cast<IR::Opcode>(static_cast<size_t>(IR::Opcode::GlobalAtomicIAdd32) + index)};
+        if ((info.global_atomics & GlobalAtomicBit(opcode)) == 0) {
+            continue;
+        }
+        const std::optional<GlobalAtomicSpec> spec{GlobalAtomicSpecOf(*this, opcode, true)};
+        if (!spec) {
+            continue;
+        }
+        const Id func{OpFunction(spec->result_type, helper_control,
+                                 TypeFunction(spec->result_type, U64, spec->value_type))};
+        const Id addr{OpFunctionParameter(U64)};
+        const Id value{OpFunctionParameter(spec->value_type)};
+        AddLabel();
+        const Id expected_var{spec->atomic ? Id{} : CasExpectedVariable(*this)};
+        // The mirror's word takes its own compare-exchange loop (declared in the entry block).
+        const Id mirror_expected_var{
+            (spec->atomic || !Sirit::ValidId(alias)) ? Id{} : CasExpectedVariable(*this)};
+        const Id device{OpFunctionCall(U64, translate, addr)};
+        const Id then_label{OpLabel()};
+        const Id end_label{OpLabel()};
+        const Id mapped{OpINotEqual(U1, device, zero64)};
+        OpSelectionMerge(end_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(mapped, then_label, end_label);
+        AddLabel(then_label);
+        const Id pointer{OpConvertUToPtr(
+            TypePointer(spv::StorageClass::PhysicalStorageBuffer, spec->word_type), device)};
+        const Id before{
+            EmitGlobalAtomicOnWord(*this, *spec, pointer, value, ALIGNMENT, expected_var)};
+        // Info::raw_global_store_alias: the same operation on the alias target's word, so read-only
+        // mirrors stay current and storage mirror writes also reach imported guest memory. The
+        // value returned by the instruction remains the result from the raw-table target.
+        write_through(addr, [&](Id mirror) {
+            const Id mirror_pointer{OpConvertUToPtr(
+                TypePointer(spv::StorageClass::PhysicalStorageBuffer, spec->word_type), mirror)};
+            EmitGlobalAtomicOnWord(*this, *spec, mirror_pointer, value, ALIGNMENT,
+                                   mirror_expected_var);
+        });
+        OpReturnValue(before);
+        AddLabel(end_label);
+        report(addr, RawCoverage::Op::Atomic);
+        OpReturnValue(ConstantNull(spec->result_type));
+        OpFunctionEnd();
+        raw_global_atomic_funcs[index] = func;
+    }
+
+    // 8 and 16 bit stores replace the field inside the containing aligned word with a
+    // compare-exchange loop, so neighbouring invocations cannot lose each other's bytes.
+    raw_global_subword_write_func = OpFunction(
+        void_id, helper_control, TypeFunction(void_id, U64, U32[1], U32[1], U32[1]));
+    const Id word_addr{OpFunctionParameter(U64)};
+    const Id field_value{OpFunctionParameter(U32[1])};
+    const Id bit_offset{OpFunctionParameter(U32[1])};
+    const Id bit_count{OpFunctionParameter(U32[1])};
+    AddLabel();
+    const Id word_device{OpFunctionCall(U64, translate, word_addr)};
+    const Id store_label{OpLabel()};
+    const Id store_end_label{OpLabel()};
+    // With the coverage diagnostic a miss goes through its own block to report.
+    const Id miss_label{Sirit::ValidId(report_miss) ? OpLabel() : store_end_label};
+    const Id mapped{OpINotEqual(U1, word_device, zero64)};
+    OpSelectionMerge(store_end_label, spv::SelectionControlMask::MaskNone);
+    OpBranchConditional(mapped, store_label, miss_label);
+    AddLabel(store_label);
+    const Id word_pointer{OpConvertUToPtr(u32_pointer_type, word_device)};
+    const Id device_scope{Const(static_cast<u32>(spv::Scope::Device))};
+    const Id loop_header{OpLabel()};
+    const Id loop_body{OpLabel()};
+    const Id loop_continue{OpLabel()};
+    const Id loop_merge{OpLabel()};
+    OpBranch(loop_header);
+    AddLabel(loop_header);
+    OpLoopMerge(loop_merge, loop_continue, spv::LoopControlMask::MaskNone);
+    OpBranch(loop_body);
+    AddLabel(loop_body);
+    const Id expected{OpAtomicLoad(U32[1], word_pointer, device_scope, zero)};
+    const Id desired{OpBitFieldInsert(U32[1], expected, field_value, bit_offset, bit_count)};
+    const Id previous{OpAtomicCompareExchange(U32[1], word_pointer, device_scope, zero, zero,
+                                              desired, expected)};
+    OpBranchConditional(OpIEqual(U1, previous, expected), loop_merge, loop_continue);
+    AddLabel(loop_continue);
+    OpBranch(loop_header);
+    AddLabel(loop_merge);
+    // The mirror's word takes the same field (the other fields stay what the mirror holds, which
+    // is what the guest word holds while the page is valid).
+    write_through(word_addr, [&](Id mirror) {
+        const Id mirror_pointer{OpConvertUToPtr(u32_pointer_type, mirror)};
+        const Id mirror_header{OpLabel()};
+        const Id mirror_body{OpLabel()};
+        const Id mirror_continue{OpLabel()};
+        const Id mirror_merge{OpLabel()};
+        OpBranch(mirror_header);
+        AddLabel(mirror_header);
+        OpLoopMerge(mirror_merge, mirror_continue, spv::LoopControlMask::MaskNone);
+        OpBranch(mirror_body);
+        AddLabel(mirror_body);
+        const Id mirror_expected{OpAtomicLoad(U32[1], mirror_pointer, device_scope, zero)};
+        const Id mirror_desired{
+            OpBitFieldInsert(U32[1], mirror_expected, field_value, bit_offset, bit_count)};
+        const Id mirror_previous{OpAtomicCompareExchange(U32[1], mirror_pointer, device_scope,
+                                                         zero, zero, mirror_desired,
+                                                         mirror_expected)};
+        OpBranchConditional(OpIEqual(U1, mirror_previous, mirror_expected), mirror_merge,
+                            mirror_continue);
+        AddLabel(mirror_continue);
+        OpBranch(mirror_header);
+        AddLabel(mirror_merge);
+    });
+    OpBranch(store_end_label);
+    if (Sirit::ValidId(report_miss)) {
+        AddLabel(miss_label);
+        report(word_addr, RawCoverage::Op::StoreSubword);
+        OpBranch(store_end_label);
+    }
+    AddLabel(store_end_label);
+    OpReturn();
+    OpFunctionEnd();
+}
+
 const EmitContext::GlobalMemoryFunctions& EmitContext::GlobalMemoryFunctionsOf(
     const IR::Inst& inst) const {
     const auto route{global_memory_route.find(&inst)};
@@ -987,6 +1744,10 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
         global_memory_functions.resize(1);
     }
     if (!info.uses_global_memory || !profile.support_int64) {
+        return;
+    }
+    if (profile.support_raw_global_memory && info.uses_raw_global_memory) {
+        DefineRawGlobalMemoryFunctions(info);
         return;
     }
     // The storage buffer descriptors the functions being defined route among, and those functions
@@ -1843,6 +2604,50 @@ void EmitContext::DefineTextures(const Info& info, u32& binding, u32& scaling_in
     for (const TextureDescriptor& desc : info.texture_descriptors) {
         const Id image_type{ImageType(*this, desc)};
         const Id sampled_type{TypeSampledImage(image_type)};
+        if (desc.bindless) {
+            // The replay's table of this type, in its own set (bindless_table.h): the descriptors
+            // of the draw (set 0) do not number it.
+            if (!bindless_samplers.value) {
+                bindless_sampler_type = TypeSampler();
+                const Id array_type{
+                    TypeArray(bindless_sampler_type, Const(BINDLESS_SAMPLER_CAPACITY))};
+                bindless_sampler_pointer_type =
+                    TypePointer(spv::StorageClass::UniformConstant, bindless_sampler_type);
+                bindless_samplers = AddGlobalVariable(
+                    TypePointer(spv::StorageClass::UniformConstant, array_type),
+                    spv::StorageClass::UniformConstant);
+                Decorate(bindless_samplers, spv::Decoration::Binding, BINDLESS_SAMPLER_BINDING);
+                Decorate(bindless_samplers, spv::Decoration::DescriptorSet, BINDLESS_SET);
+                Name(bindless_samplers, "bindless_samplers");
+                if (profile.supported_spirv >= 0x00010400) {
+                    interfaces.push_back(bindless_samplers);
+                }
+            }
+            const Id array_type{TypeArray(image_type, Const(BINDLESS_TEXTURE_CAPACITY))};
+            const Id id{AddGlobalVariable(TypePointer(spv::StorageClass::UniformConstant,
+                                                      array_type),
+                                          spv::StorageClass::UniformConstant)};
+            Decorate(id, spv::Decoration::Binding,
+                     BindlessTextureBinding(desc.type,
+                                            BindlessClass(desc.is_integer, desc.is_depth)));
+            Decorate(id, spv::Decoration::DescriptorSet, BINDLESS_SET);
+            Name(id, NameOf(stage, desc, "bindless_tex"));
+            textures.push_back({
+                .id = id,
+                .sampled_type = sampled_type,
+                .pointer_type = TypePointer(spv::StorageClass::UniformConstant, image_type),
+                .image_type = image_type,
+                .count = BINDLESS_TEXTURE_CAPACITY,
+                .is_multisample = desc.is_multisample,
+                .is_integer = desc.is_integer,
+                .bindless = true,
+            });
+            if (profile.supported_spirv >= 0x00010400) {
+                interfaces.push_back(id);
+            }
+            ++scaling_index;
+            continue;
+        }
         const Id pointer_type{TypePointer(spv::StorageClass::UniformConstant, sampled_type)};
         const Id desc_type{DescType(*this, sampled_type, pointer_type, desc.count)};
         const Id id{AddGlobalVariable(desc_type, spv::StorageClass::UniformConstant)};
@@ -1974,8 +2779,11 @@ void EmitContext::DefineInputs(const IR::Program& program) {
         std::ranges::any_of(info.interpolation, [](Interpolation mode) {
             return mode == Interpolation::NoPerspective;
         })};
+    const bool quantized_frag_depth{stage == Stage::Fragment && info.stores_frag_depth &&
+                                    runtime_info.quantize_frag_depth_d24};
     if (loads.AnyComponent(IR::Attribute::PositionX) ||
-        info.passthrough.AnyComponent(IR::Attribute::PositionX) || noperspective_as_smooth) {
+        info.passthrough.AnyComponent(IR::Attribute::PositionX) || noperspective_as_smooth ||
+        quantized_frag_depth) {
         const bool is_fragment{stage == Stage::Fragment};
         if (!is_fragment && profile.has_broken_spirv_position_input) {
             need_input_position_indirect = true;
@@ -2069,6 +2877,11 @@ void EmitContext::DefineInputs(const IR::Program& program) {
         const bool is_integer = input_type == AttributeType::SignedInt ||
                                 input_type == AttributeType::UnsignedInt;
         if (runtime_info.per_primitive_generics.test(index)) {
+            if (runtime_info.mesh_as_compute) {
+                // Mesh emulation outputs per-primitive attributes per vertex in a vertex shader.
+                Decorate(id, spv::Decoration::Flat);
+                continue;
+            }
             // Written per primitive by a mesh program: constant over the primitive.
             AddExtension("SPV_EXT_mesh_shader");
             AddCapability(spv::Capability::MeshShadingEXT);

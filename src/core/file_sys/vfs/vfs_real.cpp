@@ -13,6 +13,7 @@
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "core/file_sys/errors.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/file_sys/vfs/vfs_real.h"
 
@@ -235,11 +236,17 @@ VirtualFile RealVfsFilesystem::OpenFileFromEntry(std::string_view path_, std::op
                                                  OpenMode perms) {
     const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
     std::scoped_lock lk{list_lock};
+    return OpenFileLocked(path, size, perms);
+}
 
+VirtualFile RealVfsFilesystem::OpenFileLocked(const std::string& path, std::optional<u64> size,
+                                              OpenMode perms) {
     if (auto it = cache.find(path); it != cache.end()) {
-        if (auto file = it->second.lock(); file) {
+        if (auto file = it->second.file.lock(); file) {
             return file;
         }
+        CloseReferenceLocked(*it->second.reference);
+        DetachReferenceLocked(it);
     }
 
     if (!size && !FS::IsFile(path)) {
@@ -247,10 +254,11 @@ VirtualFile RealVfsFilesystem::OpenFileFromEntry(std::string_view path_, std::op
     }
 
     auto reference = std::make_unique<FileReference>();
-    this->InsertReferenceIntoListLocked(*reference);
-
-    auto file = std::make_shared<RealVfsFile>(*this, std::move(reference), path, perms, size);
-    cache[path] = file;
+    reference->path = path;
+    reference->size = size;
+    auto file = std::make_shared<RealVfsFile>(*this, std::move(reference), perms);
+    InsertReferenceIntoListLocked(*file->reference);
+    cache[path] = {file, file->reference.get()};
 
     return file;
 }
@@ -261,10 +269,13 @@ VirtualFile RealVfsFilesystem::OpenFile(std::string_view path_, OpenMode perms) 
 
 VirtualFile RealVfsFilesystem::CreateFile(std::string_view path_, OpenMode perms) {
     const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
-    {
-        std::scoped_lock lk{list_lock};
-        UncacheFileLocked(path);
+    std::scoped_lock lk{list_lock};
+    const auto entry = cache.find(path);
+#ifdef _WIN32
+    if (entry != cache.end()) {
+        CloseReferenceLocked(*entry->second.reference);
     }
+#endif
 
     // Current usages of CreateFile expect to delete the contents of an existing file.
     if (FS::IsFile(path)) {
@@ -273,17 +284,15 @@ VirtualFile RealVfsFilesystem::CreateFile(std::string_view path_, OpenMode perms
         if (!temp.IsOpen()) {
             return nullptr;
         }
-
-        temp.Close();
-
-        return OpenFile(path, perms);
-    }
-
-    if (!FS::NewFile(path)) {
+    } else if (!FS::NewFile(path)) {
         return nullptr;
     }
 
-    return OpenFile(path, perms);
+    if (entry != cache.end()) {
+        entry->second.reference->size.reset();
+        DetachReferenceLocked(entry);
+    }
+    return OpenFileLocked(path, {}, perms);
 }
 
 VirtualFile RealVfsFilesystem::CopyFile(std::string_view old_path_, std::string_view new_path_) {
@@ -294,24 +303,75 @@ VirtualFile RealVfsFilesystem::CopyFile(std::string_view old_path_, std::string_
 VirtualFile RealVfsFilesystem::MoveFile(std::string_view old_path_, std::string_view new_path_) {
     const auto old_path = FS::SanitizePath(old_path_, FS::DirectorySeparator::PlatformDefault);
     const auto new_path = FS::SanitizePath(new_path_, FS::DirectorySeparator::PlatformDefault);
-    {
-        std::scoped_lock lk{list_lock};
-        UncacheFileLocked(old_path);
-        UncacheFileLocked(new_path);
-    }
-    if (!FS::RenameFile(old_path, new_path)) {
+    std::scoped_lock lk{list_lock};
+    if (!RenameFileLocked(old_path, new_path)) {
         return nullptr;
     }
-    return OpenFile(new_path, OpenMode::ReadWrite);
+    return OpenFileLocked(new_path, {}, OpenMode::ReadWrite);
+}
+
+bool RealVfsFilesystem::RenameFileLocked(const std::string& old_path, const std::string& new_path) {
+    if (old_path == new_path) {
+        return false;
+    }
+    const auto source = cache.find(old_path);
+#ifdef _WIN32
+    if (source != cache.end()) {
+        CloseReferenceLocked(*source->second.reference);
+    }
+#endif
+    if (!FS::RenameFile(old_path, new_path)) {
+        return false;
+    }
+
+    if (auto destination = cache.find(new_path); destination != cache.end()) {
+        DetachReferenceLocked(destination);
+    }
+    if (source != cache.end()) {
+#ifndef _WIN32
+        CloseReferenceLocked(*source->second.reference);
+#endif
+        auto entry = cache.extract(source);
+        entry.key() = new_path;
+        entry.mapped().reference->path = new_path;
+        cache.insert(std::move(entry));
+    }
+    return true;
 }
 
 bool RealVfsFilesystem::DeleteFile(std::string_view path_) {
+    return DeleteFileWithResult(path_).IsSuccess();
+}
+
+Result RealVfsFilesystem::DeleteFileWithResult(std::string_view path_) {
     const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
-    {
-        std::scoped_lock lk{list_lock};
-        UncacheFileLocked(path);
+    std::scoped_lock lk{list_lock};
+    const auto entry = cache.find(path);
+#ifdef _WIN32
+    if (entry != cache.end()) {
+        CloseReferenceLocked(*entry->second.reference);
     }
-    return FS::RemoveFile(path);
+#endif
+    std::error_code ec;
+    if (!FS::RemoveFile(std::filesystem::path{FS::ToU8String(path)}, ec)) {
+#ifdef _WIN32
+        if (ec == std::error_code{ERROR_SHARING_VIOLATION, std::system_category()} ||
+            ec == std::error_code{ERROR_LOCK_VIOLATION, std::system_category()}) {
+            return ResultTargetLocked;
+        }
+#endif
+        if (ec == std::errc::permission_denied || ec == std::errc::read_only_file_system) {
+            return ResultPermissionDenied;
+        }
+        if (ec == std::errc::invalid_argument || ec == std::errc::is_a_directory) {
+            return ResultInvalidPath;
+        }
+        return ResultUnknown;
+    }
+    if (entry != cache.end()) {
+        DetachReferenceLocked(entry);
+    }
+    return ResultSuccess;
 }
 
 VirtualDir RealVfsFilesystem::OpenDirectory(std::string_view path_, OpenMode perms) {
@@ -358,11 +418,7 @@ bool RealVfsFilesystem::DeleteDirectory(std::string_view path_) {
     return FS::RemoveDirRecursively(path);
 }
 
-std::unique_lock<std::shared_mutex> RealVfsFilesystem::RefreshReference(const std::string& path,
-                                                                        OpenMode perms,
-                                                                        FileReference& reference) {
-    std::unique_lock lk{list_lock};
-
+void RealVfsFilesystem::RefreshReferenceLocked(FileReference& reference, OpenMode perms) {
     // Temporarily remove from list.
     this->RemoveReferenceFromListLocked(reference);
 
@@ -374,11 +430,11 @@ std::unique_lock<std::shared_mutex> RealVfsFilesystem::RefreshReference(const st
 #endif
 
     // Restore file if needed.
-    if (!reference.file) {
+    if (!reference.file && !reference.detached) {
         this->EvictSingleReferenceLocked();
 
-        reference.file =
-            FS::FileOpen(path, ModeFlagsToFileAccessMode(perms), FS::FileType::BinaryFile);
+        reference.file = FS::FileOpen(reference.path, ModeFlagsToFileAccessMode(perms),
+                                      FS::FileType::BinaryFile);
         if (reference.file) {
             num_open_files++;
         }
@@ -386,18 +442,18 @@ std::unique_lock<std::shared_mutex> RealVfsFilesystem::RefreshReference(const st
 
     // Reinsert into list.
     this->InsertReferenceIntoListLocked(reference);
-
-    return lk;
 }
 
 #ifdef _WIN32
-std::shared_ptr<NativeReadHandle> RealVfsFilesystem::AcquireReadHandle(const std::string& path,
-                                                                       FileReference& reference) {
+std::shared_ptr<NativeReadHandle> RealVfsFilesystem::AcquireReadHandle(FileReference& reference) {
     // Fast path: while below the 4,096-handle eviction threshold (or already MRU), concurrent
     // readers share `list_lock` without serializing or churning the intrusive LRU list on every
     // small archive/RomFS read.
     {
         std::shared_lock lk{list_lock};
+        if (reference.detached) {
+            return nullptr;
+        }
         if (reference.read_handle &&
             (num_open_read_handles < MaxOpenReadHandles ||
              (!open_read_references.empty() && &open_read_references.front() == &reference))) {
@@ -406,6 +462,9 @@ std::shared_ptr<NativeReadHandle> RealVfsFilesystem::AcquireReadHandle(const std
     }
 
     std::scoped_lock lk{list_lock};
+    if (reference.detached) {
+        return nullptr;
+    }
     if (reference.read_handle &&
         (num_open_read_handles < MaxOpenReadHandles ||
          (!open_read_references.empty() && &open_read_references.front() == &reference))) {
@@ -422,7 +481,7 @@ std::shared_ptr<NativeReadHandle> RealVfsFilesystem::AcquireReadHandle(const std
     if (!reference.read_handle) {
         this->EvictSingleReadReferenceLocked();
 
-        reference.read_handle = OpenNativeReadHandle(path);
+        reference.read_handle = OpenNativeReadHandle(reference.path);
         if (reference.read_handle) {
             num_open_read_handles++;
         }
@@ -434,32 +493,37 @@ std::shared_ptr<NativeReadHandle> RealVfsFilesystem::AcquireReadHandle(const std
 }
 #endif
 
-void RealVfsFilesystem::DropReference(std::unique_ptr<FileReference>&& reference,
-                                      const std::string& path) {
+void RealVfsFilesystem::DropReference(FileReference& reference) {
     if (in_dtor)
         return;
 
     std::scoped_lock lk{list_lock};
 
     // Remove from list.
-    this->RemoveReferenceFromListLocked(*reference);
+    this->RemoveReferenceFromListLocked(reference);
 
-    // Forget the path, unless it was opened again since this file's last reference went away.
-    if (const auto it = cache.find(path); it != cache.end() && it->second.expired()) {
+    // Forget the path, unless it was opened again since this reference was detached.
+    if (const auto it = cache.find(reference.path);
+        it != cache.end() && it->second.reference == &reference) {
         cache.erase(it);
     }
 
     // Close the file.
-    if (reference->file) {
-        reference->file.reset();
+    if (reference.file) {
+        reference.file.reset();
         num_open_files--;
     }
 #ifdef _WIN32
-    if (reference->read_handle) {
-        reference->read_handle.reset();
+    if (reference.read_handle) {
+        reference.read_handle.reset();
         num_open_read_handles--;
     }
 #endif
+}
+
+void RealVfsFilesystem::DetachReferenceLocked(FileCache::iterator entry) {
+    entry->second.reference->detached = true;
+    cache.erase(entry);
 }
 
 void RealVfsFilesystem::EvictSingleReferenceLocked() {
@@ -500,6 +564,13 @@ void RealVfsFilesystem::EvictSingleReadReferenceLocked() {
 #endif
 
 void RealVfsFilesystem::CloseReferenceLocked(FileReference& reference) {
+    if (!reference.file
+#ifdef _WIN32
+        && !reference.read_handle
+#endif
+    ) {
+        return;
+    }
     this->RemoveReferenceFromListLocked(reference);
     if (reference.file) {
         reference.file.reset();
@@ -514,26 +585,14 @@ void RealVfsFilesystem::CloseReferenceLocked(FileReference& reference) {
     this->InsertReferenceIntoListLocked(reference);
 }
 
-void RealVfsFilesystem::UncacheFileLocked(const std::string& path) {
-    const auto it = cache.find(path);
-    if (it == cache.end()) {
-        return;
-    }
-    if (const auto cached = std::static_pointer_cast<RealVfsFile>(it->second.lock())) {
-        CloseReferenceLocked(*cached->reference);
-    }
-    cache.erase(it);
-}
-
 void RealVfsFilesystem::UncacheDirectoryLocked(std::string_view dir_path) {
     for (auto it = cache.lower_bound(dir_path); it != cache.end();) {
         if (!it->first.starts_with(dir_path)) {
             break;
         }
         if (IsWithinRoot(dir_path, it->first)) {
-            if (const auto cached = std::static_pointer_cast<RealVfsFile>(it->second.lock())) {
-                CloseReferenceLocked(*cached->reference);
-            }
+            CloseReferenceLocked(*it->second.reference);
+            it->second.reference->detached = true;
             it = cache.erase(it);
         } else {
             ++it;
@@ -570,14 +629,16 @@ void RealVfsFilesystem::RemoveReferenceFromListLocked(FileReference& reference) 
 }
 
 RealVfsFile::RealVfsFile(RealVfsFilesystem& base_, std::unique_ptr<FileReference> reference_,
-                         const std::string& path_, OpenMode perms_, std::optional<u64> size_)
-    : base(base_), reference(std::move(reference_)), path(path_), size(size_), perms(perms_) {}
+                         OpenMode perms_)
+    : base(base_), reference(std::move(reference_)), perms(perms_) {}
 
 RealVfsFile::~RealVfsFile() {
-    base.DropReference(std::move(reference), path);
+    base.DropReference(*reference);
 }
 
 std::string RealVfsFile::GetName() const {
+    std::shared_lock lk{base.list_lock};
+    const auto& path = reference->path;
 #ifdef __ANDROID__
     if (path[0] != '/') {
         return FS::Android::GetFilename(path);
@@ -594,12 +655,15 @@ std::string RealVfsFile::GetName() const {
 }
 
 std::size_t RealVfsFile::GetSize() const {
-    if (size) {
-        return *size;
+    {
+        std::shared_lock lk{base.list_lock};
+        if (reference->size && !reference->detached) {
+            return *reference->size;
+        }
     }
 #ifdef _WIN32
     if (perms == OpenMode::Read) {
-        const auto handle = base.AcquireReadHandle(path, *reference);
+        const auto handle = base.AcquireReadHandle(*reference);
         LARGE_INTEGER file_size{};
         if (!handle || !GetFileSizeEx(handle->handle, &file_size) || file_size.QuadPart < 0) {
             return 0;
@@ -607,18 +671,25 @@ std::size_t RealVfsFile::GetSize() const {
         return static_cast<std::size_t>(file_size.QuadPart);
     }
 #endif
-    auto lk = base.RefreshReference(path, perms, *reference);
+    std::scoped_lock lk{base.list_lock};
+    base.RefreshReferenceLocked(*reference, perms);
     return reference->file ? reference->file->GetSize() : 0;
 }
 
 bool RealVfsFile::Resize(std::size_t new_size) {
-    size.reset();
-    auto lk = base.RefreshReference(path, perms, *reference);
+    std::scoped_lock lk{base.list_lock};
+    reference->size.reset();
+    base.RefreshReferenceLocked(*reference, perms);
     return reference->file ? reference->file->SetSize(new_size) : false;
 }
 
 VirtualDir RealVfsFile::GetContainingDirectory() const {
-    return base.OpenDirectory(FS::GetParentPath(path), perms);
+    std::string parent;
+    {
+        std::shared_lock lk{base.list_lock};
+        parent = FS::GetParentPath(reference->path);
+    }
+    return base.OpenDirectory(parent, perms);
 }
 
 bool RealVfsFile::IsWritable() const {
@@ -635,14 +706,15 @@ std::size_t RealVfsFile::Read(u8* data, std::size_t length, std::size_t offset) 
         if (length == 0) {
             return 0;
         }
-        const auto handle = base.AcquireReadHandle(path, *reference);
+        const auto handle = base.AcquireReadHandle(*reference);
         if (!handle) {
             return 0;
         }
         return ReadNativeOverlapped(handle->handle, data, length, offset);
     }
 #endif
-    auto lk = base.RefreshReference(path, perms, *reference);
+    std::scoped_lock lk{base.list_lock};
+    base.RefreshReferenceLocked(*reference, perms);
     if (!reference->file || !reference->file->Seek(static_cast<s64>(offset))) {
         return 0;
     }
@@ -650,8 +722,9 @@ std::size_t RealVfsFile::Read(u8* data, std::size_t length, std::size_t offset) 
 }
 
 std::size_t RealVfsFile::Write(const u8* data, std::size_t length, std::size_t offset) {
-    size.reset();
-    auto lk = base.RefreshReference(path, perms, *reference);
+    std::scoped_lock lk{base.list_lock};
+    reference->size.reset();
+    base.RefreshReferenceLocked(*reference, perms);
     if (!reference->file || !reference->file->Seek(static_cast<s64>(offset))) {
         return 0;
     }
@@ -659,7 +732,14 @@ std::size_t RealVfsFile::Write(const u8* data, std::size_t length, std::size_t o
 }
 
 bool RealVfsFile::Rename(std::string_view name) {
-    return base.MoveFile(path, FS::GetParentPath(path) + '/' + std::string(name)) != nullptr;
+    std::scoped_lock lk{base.list_lock};
+    if (reference->detached) {
+        return false;
+    }
+    const auto& path = reference->path;
+    const auto new_path = FS::SanitizePath(FS::GetParentPath(path) + '/' + std::string(name),
+                                           FS::DirectorySeparator::PlatformDefault);
+    return base.RenameFileLocked(path, new_path);
 }
 
 // TODO(DarkLordZach): MSVC would not let me combine the following two functions using 'if
@@ -831,8 +911,12 @@ bool RealVfsDirectory::DeleteSubdirectory(std::string_view name) {
 }
 
 bool RealVfsDirectory::DeleteFile(std::string_view name) {
+    return DeleteFileWithResult(name).IsSuccess();
+}
+
+Result RealVfsDirectory::DeleteFileWithResult(std::string_view name) {
     const std::string file_path = (path + '/').append(name);
-    return base.DeleteFile(file_path);
+    return base.DeleteFileWithResult(file_path);
 }
 
 bool RealVfsDirectory::Rename(std::string_view name) {

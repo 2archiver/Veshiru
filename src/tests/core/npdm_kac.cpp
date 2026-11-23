@@ -91,3 +91,33 @@ TEST_CASE("NPDM rejects a file access control that runs past the file", "[core][
     REQUIRE(npdm.Load(MakeNpdm(8, 0x60, 0x480 - 0x100 - 0x10)) ==
             Loader::ResultStatus::ErrorBadFileAccessControl);
 }
+
+TEST_CASE("Reloading an NPDM takes the platform of the reloaded file", "[core][file_sys]") {
+    const auto make_platform_npdm = [](bool switch2) {
+        const u32 shift = switch2 ? 0x100 : 0;
+        std::vector<u8> bytes(0x480 + shift);
+        std::memcpy(bytes.data(), "META", 4);
+        Put32(bytes, 0x70, 0x400 + shift);
+        Put32(bytes, 0x74, 0x40);
+        Put32(bytes, 0x78, 0x100);
+        Put32(bytes, 0x7C, 0x240 + shift);
+        std::memcpy(bytes.data() + 0x300 + shift, "ACID", 4);
+        Put32(bytes, 0x320 + shift, 0x240 + shift);
+        Put32(bytes, 0x324 + shift, 0x2C);
+        std::memcpy(bytes.data() + 0x400 + shift, "ACI0", 4);
+        Put32(bytes, 0x420 + shift, 0x40);
+        Put32(bytes, 0x424 + shift, 0x1C);
+        Put32(bytes, 0x430 + shift, 0x60);
+        Put32(bytes, 0x434 + shift, 0);
+        return std::make_shared<VectorVfsFile>(std::move(bytes), "main.npdm");
+    };
+    const auto native = make_platform_npdm(true);
+    const auto legacy = make_platform_npdm(false);
+    ProgramMetadata npdm;
+    REQUIRE(npdm.Load(native) == Loader::ResultStatus::Success);
+    REQUIRE(npdm.IsSwitch2());
+    REQUIRE(npdm.Reload(legacy) == Loader::ResultStatus::Success);
+    CHECK_FALSE(npdm.IsSwitch2());
+    REQUIRE(npdm.Reload(native) == Loader::ResultStatus::Success);
+    CHECK(npdm.IsSwitch2());
+}

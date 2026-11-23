@@ -29,6 +29,7 @@ add_library(
     announce_multiplayer_room.h
     assert.cpp
     assert.h
+    boot_counter.h
     atomic_ops.h
     bit_field.h
     bit_util.h
@@ -128,6 +129,18 @@ add_library(
     settings_input.cpp
     settings_input.h
     settings_setting.h
+    vtx_hle_settings.cpp
+    vtx_hle_settings.h
+    frame_stats.cpp
+    frame_stats.h
+    diag_request.cpp
+    diag_request.h
+    diag_image.cpp
+    diag_image.h
+    hdr.cpp
+    hdr.h
+    frame_capture_list.cpp
+    frame_capture_list.h
     slot_vector.h
     socket_types.h
     sparse_large_vector.cpp

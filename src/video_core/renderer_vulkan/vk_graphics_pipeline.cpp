@@ -1847,15 +1847,21 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     auto input_assembly_topology = MaxwellToVK::PrimitiveTopology(device, key.state.topology);
     if (input_assembly_topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
         if (!has_tess_stages) {
-            LOG_WARNING(Render_Vulkan, "Patch topology used without tessellation, using points");
+            static std::atomic_bool warned_no_tess{false};
+            if (!warned_no_tess.exchange(true, std::memory_order_relaxed)) {
+                LOG_WARNING(Render_Vulkan, "Patch topology used without tessellation, using points");
+            }
             input_assembly_topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
         }
     } else {
         if (has_tess_stages) {
             // The Vulkan spec requires patch list IA topology be used with tessellation
             // shader stages. Forcing it fixes a crash on some drivers
-            LOG_WARNING(Render_Vulkan,
-                        "Patch topology not used with tessellation, using patch list");
+            static std::atomic_bool warned_patch_tess{false};
+            if (!warned_patch_tess.exchange(true, std::memory_order_relaxed)) {
+                LOG_WARNING(Render_Vulkan,
+                            "Patch topology not used with tessellation, using patch list");
+            }
             input_assembly_topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
         }
     }

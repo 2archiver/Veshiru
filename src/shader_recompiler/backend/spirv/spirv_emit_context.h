@@ -45,6 +45,10 @@ struct TextureDefinition {
     u32 count;
     bool is_multisample;
     bool is_integer;
+    /// The array is the replay's bindless table of this type (bindless_table.h): `id` is the
+    /// array of images, indexed with the rebased handle word; `sampled_type` combines one with a
+    /// sampler of `bindless_samplers`.
+    bool bindless{};
 };
 
 struct TextureBufferDefinition {
@@ -376,6 +380,23 @@ public:
     std::vector<GlobalMemoryFunctions> global_memory_functions;
     std::unordered_map<const IR::Inst*, u32> global_memory_route;
     [[nodiscard]] const GlobalMemoryFunctions& GlobalMemoryFunctionsOf(const IR::Inst& inst) const;
+    /// VTX-HLE raw global memory: the load/write_global_func_* and the atomics go through
+    /// PhysicalStorageBuffer64 pointers (see DefineRawGlobalMemoryFunctions).
+    Id load_global_func_u32{};
+    Id load_global_func_u32x2{};
+    Id load_global_func_u32x4{};
+    Id write_global_func_u32{};
+    Id write_global_func_u32x2{};
+    Id write_global_func_u32x4{};
+    /// `raw_global_atomic_funcs[opcode - GlobalAtomicIAdd32]` is the function
+    /// `result(guest address, value)` defined for each GlobalAtomic* opcode the program uses
+    /// (Info::global_atomics); invalid for the ones with no definition.
+    static constexpr size_t NUM_GLOBAL_ATOMICS{static_cast<size_t>(IR::Opcode::GlobalAtomicMaxF32x2) -
+                                               static_cast<size_t>(IR::Opcode::GlobalAtomicIAdd32) + 1};
+    std::array<Id, NUM_GLOBAL_ATOMICS> raw_global_atomic_funcs{};
+    bool raw_global_memory{};
+    /// void(aligned guest word address, value, bit offset, bit count): a 8/16-bit raw store.
+    Id raw_global_subword_write_func{};
 
     bool need_input_position_indirect{};
     Id input_position{};
@@ -454,6 +475,12 @@ public:
     // Sirit::Id doesn't play nice with *::set<>
     ::Common::unordered_set<u32> non_uniform_ids;
 
+    /// The sampler array of the bindless table (set BINDLESS_SET, binding 0); unset until a
+    /// bindless texture is declared.
+    Id bindless_samplers{};
+    Id bindless_sampler_type{};
+    Id bindless_sampler_pointer_type{};
+
     bool uses_nonuniform_sampled_image{};
     bool uses_nonuniform_storage_image{};
     bool uses_nonuniform_uniform_texel_buffer{};
@@ -491,6 +518,7 @@ private:
     void DefineAttributeMemAccess(const Info& info);
     void DefineWriteStorageCasLoopFunction(const Info& info);
     void DefineGlobalMemoryFunctions(const IR::Program& program);
+    void DefineRawGlobalMemoryFunctions(const Info& info);
     void DefineRescalingInput(const Info& info);
     void DefineRescalingInputPushConstant();
     void DefineRescalingInputUniformConstant();

@@ -49,6 +49,16 @@ private:
 /// A reject_shaders hash: exactly 16 hex digits, optionally after 0x. Throws std::runtime_error.
 [[nodiscard]] u64 ParseShaderHash(std::string_view text);
 
+/// An nvn_draws / nvn_draw_skip / nvn_draw_dump stage hash: 1 to 16 hex digits, optionally after
+/// 0x. Throws std::runtime_error.
+[[nodiscard]] u64 ParseDrawHash(std::string_view text);
+
+/// nvn_stats from log lines, oldest first: the latest `[nvn] memory:`, `[nvn] status:` and
+/// `[nvn] replay stage=` lines, the latest `gpuprof 10 s window` report and the latest storage
+/// census (its first `census_lines` lines).
+[[nodiscard]] nlohmann::json NvnStatsFromLog(std::span<const std::string> lines,
+                                             size_t census_lines);
+
 /// search_memory's pattern: hex digit pairs, optionally after 0x, spaces allowed. Throws
 /// std::runtime_error.
 [[nodiscard]] std::vector<u8> ParseHexBytes(std::string_view text);

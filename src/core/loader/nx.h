@@ -57,7 +57,7 @@ public:
     ResultStatus ReadOriginalIcon(u64 application_id, std::vector<u8>& buffer) const;
     ResultStatus ReadTitle(std::string& title) override;
     ResultStatus ReadPublisher(std::string& publisher) const;
-    ResultStatus ReadControlData(FileSys::NACP& control) override;
+    ResultStatus ReadControlData(FileSys::NACP& control) const override;
     ResultStatus ReadDisplayVersion(std::string& version) override;
     ResultStatus ReadNSOModules(Modules& modules) override;
 

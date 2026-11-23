@@ -1,0 +1,911 @@
+// SPDX-FileCopyrightText: Copyright (c) Microsoft Corporation.
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later AND MIT
+
+// Ported from DirectXTex's BC7Encode.hlsl (https://github.com/microsoft/DirectXTex):
+//
+//--------------------------------------------------------------------------------------
+// File: BC7Encode.hlsl
+//
+// The Compute Shader for BC7 Encoder
+//
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//--------------------------------------------------------------------------------------
+//
+// MIT License
+//
+// Copyright (c) Microsoft Corporation.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+// Compresses the layers of an RGBA8 2D array (the ASTC decoder's output) to BC7 blocks, for the
+// VTX-HLE ASTC stand-ins. DirectXTex's passes, one pipeline per STAGE:
+//   0  modes 4, 5 and 6 (TryMode456CS): 16 invocations per block, one per rotation / index
+//      selector / p-bit pair, the best into `best` (the first pass, it overwrites);
+//   1  the two- and three-subset mode `mode` (TryMode137CS, TryMode02CS): 64 invocations per
+//      block, one per partition, the best of them replaces `best` when it is better;
+//   2  `best` encoded into `blocks` (EncodeBlockCS), one invocation per block.
+// Changes from the HLSL: the blocks of every layer in one dispatch (x: blocks of a row, y: rows,
+// z: layers) and the candidate in place in one buffer; texels read as integers; the subsets'
+// box corners oriented along their covariance with the widest channel (the HLSL always takes the
+// min/max corners), p-bits rounded to the nearest code and, in stage 1, chosen by how little
+// they move the endpoints instead of tried on the texels; blocks the one-subset modes already
+// hold well skip stage 1; the last pass checks the neighbours of each projected index and refits
+// the endpoints by least squares; an alpha guard (alpha 0 and 255 stay exact, alpha tests at 64,
+// 128 and 192 keep each texel on its side) penalizes candidates and steers endpoint rounding and
+// the index choice; no constant tables in the texel loops; a generic bit writer packs the blocks.
+
+#version 460 core
+
+layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (constant_id = 0) const uint STAGE = 0;
+
+layout (set = 0, binding = 0, rgba8) uniform readonly image2DArray source;
+
+layout (std430, set = 0, binding = 1) buffer Best {
+    uvec2 best[]; // error, candidate (PackCandidate)
+};
+
+layout (std430, set = 0, binding = 2) writeonly buffer Output {
+    uvec4 blocks[];
+};
+
+layout (push_constant) uniform PushConstants {
+    uint blocks_x;
+    uint blocks_y;
+    uint width;
+    uint height;
+    uint mode; // STAGE 1: the mode tried
+};
+
+// Bit i: subset of texel i in each two-subset partition.
+const uint PARTITIONS_2[64] = uint[](
+    0xCCCCu, 0x8888u, 0xEEEEu, 0xECC8u, 0xC880u, 0xFEECu, 0xFEC8u, 0xEC80u,
+    0xC800u, 0xFFECu, 0xFE80u, 0xE800u, 0xFFE8u, 0xFF00u, 0xFFF0u, 0xF000u,
+    0xF710u, 0x008Eu, 0x7100u, 0x08CEu, 0x008Cu, 0x7310u, 0x3100u, 0x8CCEu,
+    0x088Cu, 0x3110u, 0x6666u, 0x366Cu, 0x17E8u, 0x0FF0u, 0x718Eu, 0x399Cu,
+    0xAAAAu, 0xF0F0u, 0x5A5Au, 0x33CCu, 0x3C3Cu, 0x55AAu, 0x9696u, 0xA55Au,
+    0x73CEu, 0x13C8u, 0x324Cu, 0x3BDCu, 0x6996u, 0xC33Cu, 0x9966u, 0x0660u,
+    0x0272u, 0x04E4u, 0x4E40u, 0x2720u, 0xC936u, 0x936Cu, 0x39C6u, 0x639Cu,
+    0x9336u, 0x9CC6u, 0x817Eu, 0xE718u, 0xCCF0u, 0x0FCCu, 0x7744u, 0xEE22u);
+
+// Bits 2i..2i+1: subset of texel i in each three-subset partition.
+const uint PARTITIONS_3[64] = uint[](
+    0xAA685050u, 0x6A5A5040u, 0x5A5A4200u, 0x5450A0A8u, 0xA5A50000u, 0xA0A05050u, 0x5555A0A0u, 0x5A5A5050u,
+    0xAA550000u, 0xAA555500u, 0xAAAA5500u, 0x90909090u, 0x94949494u, 0xA4A4A4A4u, 0xA9A59450u, 0x2A0A4250u,
+    0xA5945040u, 0x0A425054u, 0xA5A5A500u, 0x55A0A0A0u, 0xA8A85454u, 0x6A6A4040u, 0xA4A45000u, 0x1A1A0500u,
+    0x0050A4A4u, 0xAAA59090u, 0x14696914u, 0x69691400u, 0xA08585A0u, 0xAA821414u, 0x50A4A450u, 0x6A5A0200u,
+    0xA9A58000u, 0x5090A0A8u, 0xA8A09050u, 0x24242424u, 0x00AA5500u, 0x24924924u, 0x24499224u, 0x50A50A50u,
+    0x500AA550u, 0xAAAA4444u, 0x66660000u, 0xA5A0A5A0u, 0x50A050A0u, 0x69286928u, 0x44AAAA44u, 0x66666600u,
+    0xAA444444u, 0x54A854A8u, 0x95809580u, 0x96969600u, 0xA85454A8u, 0x80959580u, 0xAA141414u, 0x96960000u,
+    0xAAAA1414u, 0xA05050A0u, 0xA0A5A5A0u, 0x96000000u, 0x40804080u, 0xA9A8A9A8u, 0xAAAAAA44u, 0x2A4A5254u);
+
+// Anchor texel of subset 1 in the two-subset partitions, of subsets 1 and 2 in the three-subset
+// ones (subset 0's is texel 0).
+const uint ANCHOR_2[64] = uint[](
+    15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u,
+    15u,  2u,  8u,  2u,  2u,  8u,  8u, 15u,  2u,  8u,  2u,  2u,  8u,  8u,  2u,  2u,
+    15u, 15u,  6u,  8u,  2u,  8u, 15u, 15u,  2u,  8u,  2u,  2u,  2u, 15u, 15u,  6u,
+     6u,  2u,  6u,  8u, 15u, 15u,  2u,  2u, 15u, 15u, 15u, 15u, 15u,  2u,  2u, 15u);
+const uint ANCHOR_3A[64] = uint[](
+     3u,  3u, 15u, 15u,  8u,  3u, 15u, 15u,  8u,  8u,  6u,  6u,  6u,  5u,  3u,  3u,
+     3u,  3u,  8u, 15u,  3u,  3u,  6u, 10u,  5u,  8u,  8u,  6u,  8u,  5u, 15u, 15u,
+     8u, 15u,  3u,  5u,  6u, 10u,  8u, 15u, 15u,  3u, 15u,  5u, 15u, 15u, 15u, 15u,
+     3u, 15u,  5u,  5u,  5u,  8u,  5u, 10u,  5u, 10u,  8u, 13u, 15u, 12u,  3u,  3u);
+const uint ANCHOR_3B[64] = uint[](
+    15u,  8u,  8u,  3u, 15u, 15u,  3u,  8u, 15u, 15u, 15u, 15u, 15u, 15u, 15u,  8u,
+    15u,  8u, 15u,  3u, 15u,  8u, 15u,  8u,  3u, 15u,  6u, 10u, 15u, 15u, 10u,  8u,
+    15u,  3u, 15u, 10u, 10u,  8u,  9u, 10u,  6u, 15u,  8u, 15u,  3u,  6u,  6u,  8u,
+    15u,  3u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u, 15u,  3u, 15u, 15u,  8u);
+
+// Per mode, a nibble each (mode 0 lowest): subsets, partition bits, colour and alpha endpoint
+// precision (p-bit included, 0: no alpha), p-bits (0 none, 1 one per subset, 2 one per endpoint),
+// index bits. Packed scalars: glslang copies a constant array into each invocation's local
+// memory at every dynamically indexed read.
+uint ModeField(uint packed, uint m) {
+    return (packed >> (4u * m)) & 15u;
+}
+uint Subsets(uint m) {
+    return ModeField(0x21112323u, m);
+}
+uint PartitionBits(uint m) {
+    return ModeField(0x60006664u, m);
+}
+uint ColorPrecision(uint m) {
+    return ModeField(0x68758575u, m);
+}
+uint AlphaPrecision(uint m) {
+    return ModeField(0x68860000u, m);
+}
+uint PBits(uint m) {
+    return ModeField(0x22002012u, m);
+}
+uint IndexBits(uint m) {
+    return ModeField(0x24222233u, m);
+}
+
+// Added to a candidate's error for each texel whose alpha it breaks (AlphaSafe): above any
+// error a whole block can have (16 * 4 * 255^2 < 2^22).
+const uint ALPHA_PENALTY = 1u << 22;
+
+shared uint shared_texels[1024]; // RGBA8 packed; 16 per block
+shared uint shared_error[64];
+shared uint shared_candidate[64];
+
+uvec4 Texel(uint index) {
+    const uint v = shared_texels[index];
+    return uvec4(v & 0xFFu, (v >> 8) & 0xFFu, (v >> 16) & 0xFFu, v >> 24);
+}
+
+uint LoadTexel(uvec3 block, uint i) {
+    // Edge blocks repeat the last row/column so padding doesn't widen the endpoints.
+    const ivec2 coord = min(ivec2(block.xy * 4u + uvec2(i & 3u, i >> 2)),
+                            ivec2(width, height) - 1);
+    const uvec4 v = uvec4(round(clamp(imageLoad(source, ivec3(coord, int(block.z))), 0.0, 1.0) * 255.0));
+    return v.r | (v.g << 8) | (v.b << 16) | (v.a << 24);
+}
+
+// Mode 4/5 rotation: channel rotation - 1 trades places with alpha.
+uvec4 Rotate(uvec4 v, uint rotation) {
+    if (rotation == 1u) {
+        return v.wyzx;
+    }
+    if (rotation == 2u) {
+        return v.xwzy;
+    }
+    if (rotation == 3u) {
+        return v.xywz;
+    }
+    return v;
+}
+
+// The subset bits of a partition (PARTITIONS_2 / PARTITIONS_3 entry, 0 for one subset): read
+// once per candidate, the texel loops take the mask.
+uint PartitionMask(uint m, uint part) {
+    const uint subsets = Subsets(m);
+    return subsets == 2u ? PARTITIONS_2[part] : (subsets == 3u ? PARTITIONS_3[part] : 0u);
+}
+
+uint SubsetOf(uint m, uint mask, uint i) {
+    const uint subsets = Subsets(m);
+    if (subsets == 2u) {
+        return (mask >> i) & 1u;
+    }
+    if (subsets == 3u) {
+        return (mask >> (2u * i)) & 3u;
+    }
+    return 0u;
+}
+
+uint Anchor(uint m, uint part, uint subset) {
+    if (subset == 0u) {
+        return 0u;
+    }
+    if (Subsets(m) == 2u) {
+        return ANCHOR_2[part];
+    }
+    return subset == 1u ? ANCHOR_3A[part] : ANCHOR_3B[part];
+}
+
+// The BC7 interpolation weights (0, 21, 43, 64 / 0, 9, ... 64 / 0, 4, ... 64): index * 64 / top,
+// rounded.
+uint Weight(uint bits, uint index) {
+    const uint top = (1u << bits) - 1u;
+    return (index * 128u + top) / (2u * top);
+}
+
+uvec4 Interpolate(uvec4 e0, uvec4 e1, uint weight) {
+    return ((64u - weight) * e0 + weight * e1 + 32u) >> 6;
+}
+
+int Dot(ivec4 a, ivec4 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+}
+
+// Whether `reconstructed` keeps what alpha testing sees of `alpha`.
+bool AlphaSafe(uint alpha, uint reconstructed) {
+    if ((alpha == 0u || alpha == 255u) && reconstructed != alpha) {
+        return false;
+    }
+    return (alpha >= 64u) == (reconstructed >= 64u) && (alpha >= 128u) == (reconstructed >= 128u) &&
+           (alpha >= 192u) == (reconstructed >= 192u);
+}
+
+uint TexelError(uvec4 texel, uvec4 reconstructed) {
+    const ivec4 d = ivec4(reconstructed) - ivec4(texel);
+    const uint error = uint(Dot(d, d));
+    return AlphaSafe(texel.a, reconstructed.a) ? error : error + ALPHA_PENALTY;
+}
+
+// The low and high endpoints of a subset before quantization: its bounding box, the corners
+// oriented along the covariance of each channel with the widest one (RGB; RGBA in the modes
+// whose indices cover alpha too). Modes 4 and 5 keep alpha's own min and max.
+void SubsetBox(uint base, uint m, uint mask, uint subset, uint rotation, out uvec4 e0,
+               out uvec4 e1) {
+    uvec4 lo = uvec4(255u);
+    uvec4 hi = uvec4(0u);
+    for (uint i = 0u; i < 16u; ++i) {
+        if (SubsetOf(m, mask, i) == subset) {
+            const uvec4 v = Rotate(Texel(base + i), rotation);
+            lo = min(lo, v);
+            hi = max(hi, v);
+        }
+    }
+    const uint channels = m >= 6u ? 4u : 3u;
+    const uvec4 extent = hi - lo;
+    uint major = 0u;
+    for (uint c = 1u; c < channels; ++c) {
+        if (extent[c] > extent[major]) {
+            major = c;
+        }
+    }
+    ivec4 covariance = ivec4(0);
+    const ivec4 center2 = ivec4(lo + hi);
+    for (uint i = 0u; i < 16u; ++i) {
+        if (SubsetOf(m, mask, i) == subset) {
+            const ivec4 d = ivec4(Rotate(Texel(base + i), rotation)) * 2 - center2;
+            covariance += d * d[major];
+        }
+    }
+    e0 = lo;
+    e1 = hi;
+    for (uint c = 0u; c < channels; ++c) {
+        if (covariance[c] < 0) {
+            e0[c] = hi[c];
+            e1[c] = lo[c];
+        }
+    }
+}
+
+uint Quantize(uint v, uint prec) {
+    return (v * 257u * ((1u << prec) - 1u) + 32768u) >> 16;
+}
+
+uint Unquantize(uint code, uint prec) {
+    code <<= 8u - prec;
+    return code | (code >> prec);
+}
+
+// The channel of the true alpha in the endpoints and texels of a mode (rotated in modes 4 and 5),
+// 4 when the mode decodes alpha as 255.
+uint AlphaChannel(uint m, uint rotation) {
+    if (m < 4u) {
+        return 4u;
+    }
+    return (m == 4u || m == 5u) && rotation != 0u ? rotation - 1u : 3u;
+}
+
+// The code of `prec` bits (its lowest bit `p` when `with_p`) nearest to `v`; for the alpha channel
+// (`alpha`) the nearest that keeps v where alpha tests see it (AlphaSafe), if one does.
+uint QuantizeChannel(uint v, uint prec, bool with_p, uint p, bool alpha) {
+    const int top = int((1u << prec) - 1u);
+    const int step = with_p ? 2 : 1;
+    const int base = with_p ? int((Quantize(v, prec) & ~1u) | p) : int(Quantize(v, prec));
+    uint chosen = uint(base);
+    int best_distance = 1 << 20;
+    bool best_safe = false;
+    for (int k = -1; k <= 1; ++k) {
+        const int code = base + k * step;
+        if (code < 0 || code > top) {
+            continue;
+        }
+        const uint value = Unquantize(uint(code), prec);
+        const int distance = abs(int(value) - int(v));
+        const bool safe = !alpha || AlphaSafe(v, value);
+        if ((safe && !best_safe) || (safe == best_safe && distance < best_distance)) {
+            chosen = uint(code);
+            best_distance = distance;
+            best_safe = safe;
+        }
+    }
+    return chosen;
+}
+
+// Endpoint codes (`precision` bits per channel, p-bit included) and the 8-bit values they decode
+// to. Modes without alpha decode it as 255.
+void QuantizeEnds(uint m, uint rotation, uvec4 e0, uvec4 e1, uvec2 p, out uvec4 c0, out uvec4 c1,
+                  out uvec4 r0, out uvec4 r1) {
+    const uint color = ColorPrecision(m);
+    const uint alpha = AlphaPrecision(m);
+    const bool p_bits = PBits(m) != 0u;
+    const uint alpha_channel = AlphaChannel(m, rotation);
+    for (uint c = 0u; c < 4u; ++c) {
+        const uint prec = c < 3u ? color : alpha;
+        if (prec == 0u) {
+            c0[c] = 0u;
+            c1[c] = 0u;
+            r0[c] = 255u;
+            r1[c] = 255u;
+            continue;
+        }
+        const bool with_p = p_bits && (c < 3u || m >= 6u);
+        c0[c] = QuantizeChannel(e0[c], prec, with_p, p.x, c == alpha_channel);
+        c1[c] = QuantizeChannel(e1[c], prec, with_p, p.y, c == alpha_channel);
+        r0[c] = Unquantize(c0[c], prec);
+        r1[c] = Unquantize(c1[c], prec);
+    }
+}
+
+uint ColorIndexBits(uint m, uint selector) {
+    return m == 4u ? (selector != 0u ? 3u : 2u) : IndexBits(m);
+}
+
+uint AlphaIndexBits(uint m, uint selector) {
+    return m == 4u ? (selector != 0u ? 2u : 3u) : 2u;
+}
+
+uint ProjectIndex(ivec4 d, ivec4 span, int norm, uint bits) {
+    const int projection = Dot(d, span);
+    if (norm <= 0 || projection <= 0) {
+        return 0u;
+    }
+    const uint top = (1u << bits) - 1u;
+    if (projection >= norm) {
+        return top;
+    }
+    // The index whose weight is nearest to the projection (the weights are almost evenly spaced:
+    // the rounded one or a neighbour; the HLSL looks it up in aStep).
+    const float target = float(projection) * 64.0 / float(norm);
+    uint index = uint(target * float(top) / 64.0 + 0.5);
+    const float distance = abs(float(Weight(bits, index)) - target);
+    if (index > 0u && abs(float(Weight(bits, index - 1u)) - target) < distance) {
+        --index;
+    } else if (index < top && abs(float(Weight(bits, index + 1u)) - target) < distance) {
+        ++index;
+    }
+    return index;
+}
+
+// Error of a subset with the endpoints r0, r1, each texel taking the index its projection on
+// the endpoints' line rounds to (the try passes), or a neighbour of the index that sets its alpha
+// when that one breaks the alpha guard.
+uint ProjectedError(uint base, uint m, uint mask, uint subset, uint rotation, uint selector,
+                    uvec4 r0, uvec4 r1) {
+    const bool separate_alpha = m == 4u || m == 5u;
+    const bool joint_alpha = m >= 6u;
+    const uint color_bits = ColorIndexBits(m, selector);
+    const uint alpha_bits = AlphaIndexBits(m, selector);
+    ivec4 span = ivec4(r1) - ivec4(r0);
+    const int alpha_span = span.w;
+    if (!joint_alpha) {
+        span.w = 0;
+    }
+    const int norm = Dot(span, span);
+    const int alpha_norm = alpha_span * alpha_span;
+    uint error = 0u;
+    for (uint i = 0u; i < 16u; ++i) {
+        if (SubsetOf(m, mask, i) != subset) {
+            continue;
+        }
+        const uvec4 texel = Texel(base + i);
+        const ivec4 d = ivec4(Rotate(texel, rotation)) - ivec4(r0);
+        const uint color_index =
+            ProjectIndex(joint_alpha ? d : ivec4(d.xyz, 0), span, norm, color_bits);
+        uint alpha_index = 0u;
+        uvec4 reconstructed = Interpolate(r0, r1, Weight(color_bits, color_index));
+        if (separate_alpha) {
+            alpha_index = ProjectIndex(ivec4(d.w, 0, 0, 0), ivec4(alpha_span, 0, 0, 0), alpha_norm,
+                                       alpha_bits);
+            reconstructed.w = Interpolate(r0, r1, Weight(alpha_bits, alpha_index)).w;
+        } else if (!joint_alpha) {
+            reconstructed.w = 255u;
+        }
+        uint texel_error = TexelError(texel, Rotate(reconstructed, rotation));
+        if (texel_error >= ALPHA_PENALTY && m >= 4u) {
+            // The colour indices set alpha in modes 6 and 7 and in rotated modes 4 and 5.
+            const bool by_color = joint_alpha || rotation != 0u;
+            const uint index = by_color ? color_index : alpha_index;
+            const uint bits = by_color ? color_bits : alpha_bits;
+            for (int k = -1; k <= 1; k += 2) {
+                const int neighbour = int(index) + k;
+                if (neighbour < 0 || neighbour >= int(1u << bits)) {
+                    continue;
+                }
+                uvec4 other = reconstructed;
+                const uvec4 value = Interpolate(r0, r1, Weight(bits, uint(neighbour)));
+                if (by_color) {
+                    other.xyz = value.xyz;
+                    other.w = joint_alpha ? value.w : other.w;
+                } else {
+                    other.w = value.w;
+                }
+                texel_error = min(texel_error, TexelError(texel, Rotate(other, rotation)));
+            }
+        }
+        error += texel_error;
+    }
+    return error;
+}
+
+// mode 0-2, selector 3, rotation 4-5, partition 6-11, p-bits 12-17 (mode 1: bit 12 + subset;
+// modes 0, 3, 6, 7: bits 12 + 2 * subset for the low endpoint, + 1 for the high one).
+uint PackCandidate(uint m, uint selector, uint rotation, uint part, uint p_bits) {
+    return m | (selector << 3) | (rotation << 4) | (part << 6) | (p_bits << 12);
+}
+
+uvec2 SubsetP(uint m, uint p_bits, uint subset) {
+    if (m == 1u) {
+        const uint p = (p_bits >> subset) & 1u;
+        return uvec2(p, p);
+    }
+    return uvec2((p_bits >> (2u * subset)) & 1u, (p_bits >> (2u * subset + 1u)) & 1u);
+}
+
+// Keeps the lower error of entries `index` and `index + stride` of the shared arrays.
+void ReduceStep(uint index, uint stride) {
+    if (shared_error[index + stride] < shared_error[index]) {
+        shared_error[index] = shared_error[index + stride];
+        shared_candidate[index] = shared_candidate[index + stride];
+    }
+}
+
+uint BlockIndex(uvec3 block) {
+    return (block.z * blocks_y + block.y) * blocks_x + block.x;
+}
+
+void TryModes456() {
+    const uint thread = gl_LocalInvocationIndex & 15u;
+    const uint base = gl_LocalInvocationIndex & ~15u;
+    const uvec3 block = uvec3(gl_WorkGroupID.x * 4u + gl_LocalInvocationIndex / 16u, gl_WorkGroupID.yz);
+    shared_texels[gl_LocalInvocationIndex] = LoadTexel(block, thread);
+    barrier();
+
+    // Threads 0-7: mode 4, rotation thread / 2, index selector thread & 1; 8-11: mode 5,
+    // rotation thread - 8; 12-15: mode 6, p-bits thread - 12.
+    uint m = 6u;
+    uint rotation = 0u;
+    uint selector = 0u;
+    uint p_bits = 0u;
+    if (thread < 8u) {
+        m = 4u;
+        rotation = thread >> 1;
+        selector = thread & 1u;
+    } else if (thread < 12u) {
+        m = 5u;
+        rotation = thread - 8u;
+    } else {
+        p_bits = thread - 12u;
+    }
+    uvec4 e0, e1, c0, c1, r0, r1;
+    SubsetBox(base, m, 0u, 0u, rotation, e0, e1);
+    QuantizeEnds(m, rotation, e0, e1, SubsetP(m, p_bits, 0u), c0, c1, r0, r1);
+    shared_error[gl_LocalInvocationIndex] = ProjectedError(base, m, 0u, 0u, rotation, selector, r0, r1);
+    shared_candidate[gl_LocalInvocationIndex] = PackCandidate(m, selector, rotation, 0u, p_bits);
+    barrier();
+    for (uint stride = 8u; stride > 0u; stride >>= 1) {
+        if (thread < stride) {
+            ReduceStep(gl_LocalInvocationIndex, stride);
+        }
+        barrier();
+    }
+    if (thread == 0u && block.x < blocks_x) {
+        best[BlockIndex(block)] = uvec2(shared_error[base], shared_candidate[base]);
+    }
+}
+
+// Blocks the one-subset modes already hold within this error (16 texels at a summed squared error
+// of 8: ~45 dB) skip the partitioned passes.
+const uint GOOD_ENOUGH_ERROR = 16u * 8u;
+
+shared uint shared_best_error;
+
+// How far quantization moved the endpoints (the try passes pick p-bits by it).
+uint EndpointError(uvec4 e0, uvec4 e1, uvec4 r0, uvec4 r1, uint channels) {
+    const ivec4 d0 = ivec4(r0) - ivec4(e0);
+    const ivec4 d1 = ivec4(r1) - ivec4(e1);
+    uint error = 0u;
+    for (uint c = 0u; c < channels; ++c) {
+        error += uint(d0[c] * d0[c] + d1[c] * d1[c]);
+    }
+    return error;
+}
+
+void TryPartitions() {
+    const uint part = gl_LocalInvocationIndex;
+    const uvec3 block = gl_WorkGroupID;
+    const uint index = BlockIndex(block);
+    if (part < 16u) {
+        shared_texels[part] = LoadTexel(block, part);
+    }
+    if (part == 0u) {
+        shared_best_error = best[index].x;
+    }
+    barrier();
+    if (shared_best_error <= GOOD_ENOUGH_ERROR) {
+        return; // the whole workgroup: no barrier follows for any of it
+    }
+
+    const uint m = mode;
+    const uint subsets = Subsets(m);
+    const uint mask = PartitionMask(m, part);
+    uint error = 0xFFFFFFFFu;
+    uint p_bits = 0u;
+    if (m != 0u || part < 16u) { // mode 0 has 16 partitions
+        const uint p_count = m == 1u ? 2u : (PBits(m) == 2u ? 4u : 1u);
+        const uint channels = m == 7u ? 4u : 3u;
+        error = 0u;
+        for (uint subset = 0u; subset < subsets; ++subset) {
+            uvec4 e0, e1;
+            SubsetBox(0u, m, mask, subset, 0u, e0, e1);
+            // The p-bits that move the endpoints least (DirectXTex tries each on the texels;
+            // the last pass refits the endpoints with every choice).
+            uint best_p = 0u;
+            uint best_endpoint_error = 0xFFFFFFFFu;
+            for (uint p = 0u; p < p_count; ++p) {
+                const uvec2 pair = m == 1u ? uvec2(p, p) : uvec2(p & 1u, p >> 1);
+                uvec4 c0, c1, r0, r1;
+                QuantizeEnds(m, 0u, e0, e1, pair, c0, c1, r0, r1);
+                const uint moved = EndpointError(e0, e1, r0, r1, channels);
+                if (moved < best_endpoint_error) {
+                    best_endpoint_error = moved;
+                    best_p = p;
+                }
+            }
+            const uvec2 pair = m == 1u ? uvec2(best_p, best_p) : uvec2(best_p & 1u, best_p >> 1);
+            uvec4 c0, c1, r0, r1;
+            QuantizeEnds(m, 0u, e0, e1, pair, c0, c1, r0, r1);
+            error += ProjectedError(0u, m, mask, subset, 0u, 0u, r0, r1);
+            p_bits |= best_p << (m == 1u ? subset : 2u * subset);
+        }
+    }
+    shared_error[part] = error;
+    shared_candidate[part] = PackCandidate(m, 0u, 0u, part, p_bits);
+    barrier();
+    for (uint stride = 32u; stride > 0u; stride >>= 1) {
+        if (part < stride) {
+            ReduceStep(part, stride);
+        }
+        barrier();
+    }
+    if (part == 0u && shared_error[0] < shared_best_error) {
+        best[index] = uvec2(shared_error[0], shared_candidate[0]);
+    }
+}
+
+// The last pass: per subset endpoint codes, decoded endpoints and the texels' indices.
+uvec4 g_c0[3];
+uvec4 g_c1[3];
+uint g_color_index[16];
+uint g_alpha_index[16];
+
+// The index of `bits` bits among first..last for which `r0`, `r1` interpolate nearest to `x`
+// (the channels `channel_mask` selects), alpha-safe entries first: `alpha_channel` (4: none)
+// holds the true alpha, compared with `alpha`. `safe` tells whether the chosen one is.
+uint NearestIndex(uvec4 r0, uvec4 r1, uint bits, uint first, uint last, ivec4 x, ivec4 channel_mask,
+                  uint alpha_channel, uint alpha, out bool safe) {
+    uint best_index = first;
+    uint best_error = 0xFFFFFFFFu;
+    safe = false;
+    for (uint k = first; k <= last; ++k) {
+        const ivec4 r = ivec4(Interpolate(r0, r1, Weight(bits, k)));
+        const ivec4 d = (r - x) * channel_mask;
+        const uint e = uint(Dot(d, d));
+        const bool k_safe = alpha_channel > 3u || AlphaSafe(alpha, uint(r[alpha_channel]));
+        if ((k_safe && !safe) || (k_safe == safe && e < best_error)) {
+            best_index = k;
+            best_error = e;
+            safe = k_safe;
+        }
+    }
+    return best_index;
+}
+
+// Picks every texel's indices of a subset for the decoded endpoints r0, r1 into the out arrays:
+// the nearest of the projected index and its neighbours, alpha-safe entries first (every index
+// when none of those is); returns the subset's error.
+uint FitIndices(uint base, uint m, uint mask, uint subset, uint rotation, uint selector,
+                uvec4 r0, uvec4 r1, out uint color_index[16], out uint alpha_index[16]) {
+    const bool separate_alpha = m == 4u || m == 5u;
+    const bool joint_alpha = m >= 6u;
+    const uint color_bits = ColorIndexBits(m, selector);
+    const uint alpha_bits = AlphaIndexBits(m, selector);
+    const uint color_top = (1u << color_bits) - 1u;
+    const uint alpha_top = (1u << alpha_bits) - 1u;
+    // The true alpha's channel in each index set's values (4: that set does not set it).
+    const uint alpha_channel = AlphaChannel(m, rotation);
+    const uint color_alpha = joint_alpha || (separate_alpha && rotation != 0u) ? alpha_channel : 4u;
+    const uint alpha_alpha = separate_alpha && rotation == 0u ? 3u : 4u;
+    const ivec4 color_mask = joint_alpha ? ivec4(1) : ivec4(1, 1, 1, 0);
+    ivec4 span = (ivec4(r1) - ivec4(r0)) * color_mask;
+    const int norm = Dot(span, span);
+    const int alpha_span = int(r1.w) - int(r0.w);
+    uint error = 0u;
+    for (uint i = 0u; i < 16u; ++i) {
+        color_index[i] = 0u;
+        alpha_index[i] = 0u;
+        if (SubsetOf(m, mask, i) != subset) {
+            continue;
+        }
+        const uvec4 texel = Texel(base + i);
+        const ivec4 x = ivec4(Rotate(texel, rotation));
+        const ivec4 d = (x - ivec4(r0)) * color_mask;
+        const uint projected = ProjectIndex(d, span, norm, color_bits);
+        bool safe;
+        uint index = NearestIndex(r0, r1, color_bits, projected > 0u ? projected - 1u : 0u,
+                                  min(projected + 1u, color_top), x, color_mask, color_alpha,
+                                  texel.a, safe);
+        if (!safe) {
+            index = NearestIndex(r0, r1, color_bits, 0u, color_top, x, color_mask, color_alpha,
+                                 texel.a, safe);
+        }
+        color_index[i] = index;
+        uvec4 reconstructed = Interpolate(r0, r1, Weight(color_bits, index));
+        if (separate_alpha) {
+            const uint alpha_projected =
+                ProjectIndex(ivec4(x.w - int(r0.w), 0, 0, 0), ivec4(alpha_span, 0, 0, 0),
+                             alpha_span * alpha_span, alpha_bits);
+            const ivec4 alpha_mask = ivec4(0, 0, 0, 1);
+            index = NearestIndex(r0, r1, alpha_bits, alpha_projected > 0u ? alpha_projected - 1u : 0u,
+                                 min(alpha_projected + 1u, alpha_top), x, alpha_mask, alpha_alpha,
+                                 texel.a, safe);
+            if (!safe) {
+                index = NearestIndex(r0, r1, alpha_bits, 0u, alpha_top, x, alpha_mask, alpha_alpha,
+                                     texel.a, safe);
+            }
+            alpha_index[i] = index;
+            reconstructed.w = Interpolate(r0, r1, Weight(alpha_bits, index)).w;
+        } else if (!joint_alpha) {
+            reconstructed.w = 255u;
+        }
+        error += TexelError(texel, Rotate(reconstructed, rotation));
+    }
+    return error;
+}
+
+// Least-squares endpoints for the subset's current indices (the channels each index set covers),
+// unquantized; false when the indices don't determine them.
+bool RefitEnds(uint base, uint m, uint mask, uint subset, uint rotation, uint selector,
+               uvec4 fallback0, uvec4 fallback1, out uvec4 e0, out uvec4 e1) {
+    const bool separate_alpha = m == 4u || m == 5u;
+    const uint color_bits = ColorIndexBits(m, selector);
+    const uint alpha_bits = AlphaIndexBits(m, selector);
+    // Normal equations per index set: [aa ab; ab bb] [e0; e1] = [ax; bx].
+    vec3 color_sums = vec3(0.0);
+    vec3 alpha_sums = vec3(0.0);
+    vec4 color_ax = vec4(0.0);
+    vec4 color_bx = vec4(0.0);
+    float alpha_ax = 0.0;
+    float alpha_bx = 0.0;
+    for (uint i = 0u; i < 16u; ++i) {
+        if (SubsetOf(m, mask, i) != subset) {
+            continue;
+        }
+        const vec4 x = vec4(Rotate(Texel(base + i), rotation));
+        const float b = float(Weight(color_bits, g_color_index[i])) / 64.0;
+        const float a = 1.0 - b;
+        color_sums += vec3(a * a, a * b, b * b);
+        color_ax += a * x;
+        color_bx += b * x;
+        if (separate_alpha) {
+            const float ba = float(Weight(alpha_bits, g_alpha_index[i])) / 64.0;
+            const float aa = 1.0 - ba;
+            alpha_sums += vec3(aa * aa, aa * ba, ba * ba);
+            alpha_ax += aa * x.w;
+            alpha_bx += ba * x.w;
+        }
+    }
+    const float det = color_sums.x * color_sums.z - color_sums.y * color_sums.y;
+    if (abs(det) < 1e-4) {
+        return false;
+    }
+    const vec4 f0 = (color_sums.z * color_ax - color_sums.y * color_bx) / det;
+    const vec4 f1 = (color_sums.x * color_bx - color_sums.y * color_ax) / det;
+    e0 = uvec4(clamp(round(f0), 0.0, 255.0));
+    e1 = uvec4(clamp(round(f1), 0.0, 255.0));
+    if (separate_alpha) {
+        const float alpha_det = alpha_sums.x * alpha_sums.z - alpha_sums.y * alpha_sums.y;
+        if (abs(alpha_det) < 1e-4) {
+            e0.w = fallback0.w;
+            e1.w = fallback1.w;
+        } else {
+            e0.w = uint(clamp(round((alpha_sums.z * alpha_ax - alpha_sums.y * alpha_bx) / alpha_det), 0.0, 255.0));
+            e1.w = uint(clamp(round((alpha_sums.x * alpha_bx - alpha_sums.y * alpha_ax) / alpha_det), 0.0, 255.0));
+        }
+    }
+    return true;
+}
+
+uvec4 g_block;
+uint g_bit;
+
+void Put(uint value, uint bits) {
+    if (bits == 0u) {
+        return;
+    }
+    value &= (1u << bits) - 1u;
+    const uint word = g_bit >> 5;
+    const uint shift = g_bit & 31u;
+    g_block[word] |= value << shift;
+    if (shift + bits > 32u) {
+        g_block[word + 1u] |= value >> (32u - shift);
+    }
+    g_bit += bits;
+}
+
+void EncodeBlock() {
+    const uint base = gl_LocalInvocationIndex * 16u;
+    const uvec3 block = uvec3(gl_WorkGroupID.x * 64u + gl_LocalInvocationIndex, gl_WorkGroupID.yz);
+    if (block.x >= blocks_x) {
+        return;
+    }
+    for (uint i = 0u; i < 16u; ++i) {
+        shared_texels[base + i] = LoadTexel(block, i);
+    }
+    const uint index = BlockIndex(block);
+    const uint candidate = best[index].y;
+    const uint m = candidate & 7u;
+    const uint selector = (candidate >> 3) & 1u;
+    const uint rotation = (candidate >> 4) & 3u;
+    const uint part = (candidate >> 6) & 63u;
+    const uint p_bits = candidate >> 12;
+    const uint subsets = Subsets(m);
+    const uint mask = PartitionMask(m, part);
+    const bool separate_alpha = m == 4u || m == 5u;
+    const uint color_bits = ColorIndexBits(m, selector);
+    const uint alpha_bits = AlphaIndexBits(m, selector);
+
+    for (uint subset = 0u; subset < subsets; ++subset) {
+        uvec4 e0, e1, r0, r1;
+        uint color_index[16];
+        uint alpha_index[16];
+        SubsetBox(base, m, mask, subset, rotation, e0, e1);
+        QuantizeEnds(m, rotation, e0, e1, SubsetP(m, p_bits, subset), g_c0[subset], g_c1[subset], r0, r1);
+        uint error = FitIndices(base, m, mask, subset, rotation, selector, r0, r1,
+                                color_index, alpha_index);
+        for (uint i = 0u; i < 16u; ++i) {
+            if (SubsetOf(m, mask, i) == subset) {
+                g_color_index[i] = color_index[i];
+                g_alpha_index[i] = alpha_index[i];
+            }
+        }
+        // Least-squares refits of the endpoints for the indices, each with the p-bits that
+        // move it least, while they lower the error.
+        const uint p_count = m == 1u ? 2u : (PBits(m) == 2u ? 4u : 1u);
+        const uint channels = m >= 6u ? 4u : 3u;
+        for (uint round_ = 0u; round_ < 2u; ++round_) {
+            uvec4 f0, f1;
+            if (!RefitEnds(base, m, mask, subset, rotation, selector, e0, e1, f0, f1)) {
+                break;
+            }
+            uvec4 c0, c1;
+            uint moved = 0xFFFFFFFFu;
+            for (uint p = 0u; p < p_count; ++p) {
+                const uvec2 pair = m == 1u ? uvec2(p, p) : uvec2(p & 1u, p >> 1);
+                uvec4 q0, q1, s0, s1;
+                QuantizeEnds(m, rotation, f0, f1, pair, q0, q1, s0, s1);
+                const uint p_moved = EndpointError(f0, f1, s0, s1, channels);
+                if (p_moved < moved) {
+                    moved = p_moved;
+                    c0 = q0;
+                    c1 = q1;
+                    r0 = s0;
+                    r1 = s1;
+                }
+            }
+            const uint refit = FitIndices(base, m, mask, subset, rotation, selector, r0, r1,
+                                          color_index, alpha_index);
+            if (refit >= error) {
+                break;
+            }
+            error = refit;
+            g_c0[subset] = c0;
+            g_c1[subset] = c1;
+            for (uint i = 0u; i < 16u; ++i) {
+                if (SubsetOf(m, mask, i) == subset) {
+                    g_color_index[i] = color_index[i];
+                    g_alpha_index[i] = alpha_index[i];
+                }
+            }
+        }
+        // The anchor texel's index must have its top bit clear: swap the endpoints (p-bits
+        // with them) and mirror the indices, which decodes to the same texels.
+        const uint anchor = Anchor(m, part, subset);
+        const uint color_top = 1u << (color_bits - 1u);
+        if ((g_color_index[anchor] & color_top) != 0u) {
+            const uvec4 c0 = g_c0[subset];
+            if (separate_alpha) {
+                g_c0[subset].xyz = g_c1[subset].xyz;
+                g_c1[subset].xyz = c0.xyz;
+            } else {
+                g_c0[subset] = g_c1[subset];
+                g_c1[subset] = c0;
+            }
+            for (uint i = 0u; i < 16u; ++i) {
+                if (SubsetOf(m, mask, i) == subset) {
+                    g_color_index[i] = (1u << color_bits) - 1u - g_color_index[i];
+                }
+            }
+        }
+        if (separate_alpha && (g_alpha_index[0] & (1u << (alpha_bits - 1u))) != 0u) {
+            const uint a0 = g_c0[0].w;
+            g_c0[0].w = g_c1[0].w;
+            g_c1[0].w = a0;
+            for (uint i = 0u; i < 16u; ++i) {
+                g_alpha_index[i] = (1u << alpha_bits) - 1u - g_alpha_index[i];
+            }
+        }
+    }
+
+    g_block = uvec4(0u);
+    g_bit = 0u;
+    Put(1u << m, m + 1u);
+    Put(part, PartitionBits(m));
+    if (separate_alpha) {
+        Put(rotation, 2u);
+    }
+    if (m == 4u) {
+        Put(selector, 1u);
+    }
+    const uint p_bit = PBits(m) != 0u ? 1u : 0u;
+    const uint color_precision = ColorPrecision(m) - p_bit;
+    for (uint c = 0u; c < 3u; ++c) {
+        for (uint subset = 0u; subset < subsets; ++subset) {
+            Put(g_c0[subset][c] >> p_bit, color_precision);
+            Put(g_c1[subset][c] >> p_bit, color_precision);
+        }
+    }
+    if (AlphaPrecision(m) != 0u) {
+        const uint alpha_p = m >= 6u ? 1u : 0u;
+        for (uint subset = 0u; subset < subsets; ++subset) {
+            Put(g_c0[subset].w >> alpha_p, AlphaPrecision(m) - alpha_p);
+            Put(g_c1[subset].w >> alpha_p, AlphaPrecision(m) - alpha_p);
+        }
+    }
+    if (PBits(m) == 2u) {
+        for (uint subset = 0u; subset < subsets; ++subset) {
+            Put(g_c0[subset].x & 1u, 1u);
+            Put(g_c1[subset].x & 1u, 1u);
+        }
+    } else if (PBits(m) == 1u) {
+        for (uint subset = 0u; subset < subsets; ++subset) {
+            Put(g_c0[subset].x & 1u, 1u);
+        }
+    }
+    if (separate_alpha) {
+        // The 2-bit index set comes first: mode 4's selector gives colour the 3-bit one.
+        const bool alpha_first = m == 4u && selector != 0u;
+        for (uint i = 0u; i < 16u; ++i) {
+            Put(alpha_first ? g_alpha_index[i] : g_color_index[i], 2u - (i == 0u ? 1u : 0u));
+        }
+        const uint second_bits = m == 4u ? 3u : 2u;
+        for (uint i = 0u; i < 16u; ++i) {
+            Put(alpha_first ? g_color_index[i] : g_alpha_index[i], second_bits - (i == 0u ? 1u : 0u));
+        }
+    } else {
+        const uint anchor1 = subsets > 1u ? Anchor(m, part, 1u) : 0u;
+        const uint anchor2 = subsets > 2u ? Anchor(m, part, 2u) : 0u;
+        for (uint i = 0u; i < 16u; ++i) {
+            const bool anchor = i == 0u || i == anchor1 || i == anchor2;
+            Put(g_color_index[i], color_bits - (anchor ? 1u : 0u));
+        }
+    }
+    blocks[index] = g_block;
+}
+
+void main() {
+    if (STAGE == 0u) {
+        TryModes456();
+    } else if (STAGE == 1u) {
+        TryPartitions();
+    } else {
+        EncodeBlock();
+    }
+}

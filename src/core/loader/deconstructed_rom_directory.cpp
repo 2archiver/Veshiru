@@ -578,7 +578,7 @@ ResultStatus AppLoader_DeconstructedRomDirectory::ReadTitle(std::string& out_tit
     return ResultStatus::Success;
 }
 
-ResultStatus AppLoader_DeconstructedRomDirectory::ReadControlData(FileSys::NACP& out_control) {
+ResultStatus AppLoader_DeconstructedRomDirectory::ReadControlData(FileSys::NACP& out_control) const {
     if (!control) {
         return ResultStatus::ErrorNoControl;
     }

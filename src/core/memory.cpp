@@ -35,10 +35,13 @@
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/nx2_thread_stats.h"
 #include "core/memory.h"
+#include "core/memory/page_tracker.h"
+#include "core/memory/page_tracker_state.h"
 #include "video_core/gpu.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/nx2_async_readback.h"
+#include "video_core/nx2_fast_draw.h"
 #include "video_core/rasterizer_download_area.h"
 
 namespace Core::Memory {
@@ -56,7 +59,7 @@ static inline bool AddressSpaceContains(const Common::PageTable& table, const Co
 // Implementation class used to keep the specifics of the memory subsystem hidden
 // from outside classes. This also allows modification to the internals of the memory
 // subsystem without needing to rebuild all files that make use of the memory interface.
-struct Memory::Impl {
+struct Memory::Impl final : PageClaimSink {
     explicit Impl(Core::System& system_) : system{system_} {}
 
     void SetCurrentPageTable(Kernel::KProcess& process) {
@@ -89,12 +92,25 @@ struct Memory::Impl {
         if (current_page_table->fastmem_arena) {
             host_buffer->Map(GetInteger(base), GetInteger(target) - DramMemoryMap::Base, size, perms, separate_heap);
         }
+        // Tracked contents changed with the mapping; their claims go back on the new pages, after
+        // the host mapping that reset their protection. Only remaps of the tracked (current)
+        // table move its claims.
+        if (&page_table == current_page_table && !page_tracker_state.Empty()) [[unlikely]] {
+            std::scoped_lock lk{read_trap_mutex};
+            page_tracker_state.OnRemap(GetInteger(base) >> VESHIRU_PAGEBITS,
+                                       (GetInteger(base) + size) >> VESHIRU_PAGEBITS, true);
+        }
     }
 
     void UnmapRegion(Common::PageTable& page_table, Common::ProcessAddress base, u64 size,
                      bool separate_heap) {
         ASSERT_MSG((size & VESHIRU_PAGEMASK) == 0, "non-page aligned size: {:016X}", size);
         ASSERT_MSG((base & VESHIRU_PAGEMASK) == 0, "non-page aligned base: {:016X}", GetInteger(base));
+        if (&page_table == current_page_table && !page_tracker_state.Empty()) [[unlikely]] {
+            std::scoped_lock lk{read_trap_mutex};
+            page_tracker_state.OnRemap(GetInteger(base) >> VESHIRU_PAGEBITS,
+                                       (GetInteger(base) + size) >> VESHIRU_PAGEBITS, false);
+        }
         MapPages(page_table, base / VESHIRU_PAGESIZE, size / VESHIRU_PAGESIZE, 0,
                  Common::PageType::Unmapped);
 
@@ -328,32 +344,29 @@ struct Memory::Impl {
         });
     }
 
-    [[nodiscard]] inline const u8* GetSpan(const VAddr addr, const std::size_t size) const noexcept {
-        const auto first = current_page_table->entries[addr >> VESHIRU_PAGEBITS].Block();
-        const auto last = current_page_table->entries[(addr + size) >> VESHIRU_PAGEBITS].Block();
-        if (Common::PageTable::PageEntryData::CanFastSpan(first, last)) {
-            return GetPointerSilent(addr);
-        }
-        if (first != Common::PageTable::PageEntryData::INVALID_BLOCK_ID &&
-            last != Common::PageTable::PageEntryData::INVALID_BLOCK_ID) {
+    [[nodiscard]] u8* GetSpan(const VAddr addr, const std::size_t size) const noexcept {
+        if (!AddressSpaceContains(*current_page_table, addr, size) ||
+            addr >= (u64{1} << current_page_table->GetAddressSpaceBits())) {
             return nullptr;
         }
-        return GetContiguousSpan(addr, size);
-    }
-    [[nodiscard]] inline u8* GetSpan(const VAddr addr, const std::size_t size) noexcept {
-        const auto first = current_page_table->entries[addr >> VESHIRU_PAGEBITS].Block();
-        const auto last = current_page_table->entries[(addr + size) >> VESHIRU_PAGEBITS].Block();
-        if (Common::PageTable::PageEntryData::CanFastSpan(first, last)) {
-            return GetPointerSilent(addr);
+        const u64 first_page = addr >> VESHIRU_PAGEBITS;
+        const u64 last_page = (addr + (size != 0 ? size - 1 : 0)) >> VESHIRU_PAGEBITS;
+        const auto offset = current_page_table->entries[first_page].Pointer(true);
+        for (u64 page = first_page + 1; page <= last_page; ++page) {
+            if (current_page_table->entries[page].Pointer(true) != offset) {
+                return nullptr;
+            }
         }
-        if (first != Common::PageTable::PageEntryData::INVALID_BLOCK_ID &&
-            last != Common::PageTable::PageEntryData::INVALID_BLOCK_ID) {
-            return nullptr;
-        }
-        return GetContiguousSpan(addr, size);
+        return GetPointerSilent(addr);
     }
 
-    bool WriteBlockImpl(const Common::ProcessAddress addr, const void* buffer, const std::size_t size, bool unsafe) {
+    /// Who writes: the guest or one of its services (Safe: device caches and the page tracker see
+    /// it), a host writer that only skips the device caches (Unsafe: the page tracker still sees
+    /// it, because the guest's memory changed) or the HLE's own result write-back (Untracked:
+    /// the mirror that holds the bytes already has them).
+    enum class WriteMode : u8 { Safe, Unsafe, Untracked };
+
+    bool WriteBlockImpl(const Common::ProcessAddress addr, const void* buffer, const std::size_t size, WriteMode mode) {
         return WalkBlock(addr, size,
         [addr, size](const std::size_t offset, const std::size_t copy_amount, const Common::ProcessAddress current_vaddr) {
             LOG_ERROR(HW_Memory, "Unmapped @ {:#016x} (start address = {:#016x}, size = {})", GetInteger(current_vaddr), GetInteger(addr), size);
@@ -362,11 +375,32 @@ struct Memory::Impl {
             std::memcpy(ptr, reinterpret_cast<u8 const*>(buffer) + offset, copy_amount);
         },
         [&](const Common::ProcessAddress current_vaddr, const std::size_t offset, const std::size_t copy_amount, u8* const ptr) {
-            if (!unsafe) {
-                HandleRasterizerWrite(GetInteger(current_vaddr), copy_amount);
+            bool rasterizer_write = false;
+            if (mode == WriteMode::Safe) {
+                rasterizer_write = RasterizerPreWrite(GetInteger(current_vaddr), copy_amount);
+            } else if (mode == WriteMode::Unsafe) {
+                TrackerPreWrite(GetInteger(current_vaddr), copy_amount);
+                // The caches aren't told, but constant buffer data equal to memory must be.
+                VideoCommon::Nx2FastDraw::BeginMemoryChange();
+                rasterizer_write = true;
             }
             std::memcpy(ptr, reinterpret_cast<u8 const*>(buffer) + offset, copy_amount);
+            if (rasterizer_write) {
+                EndRasterizerWrite();
+            }
+            if (mode != WriteMode::Untracked) {
+                NotifyHostWrite(GetInteger(current_vaddr), copy_amount);
+            }
         });
+    }
+
+    /// Memory changed through a raw pointer or a landed store: tracked pages turn dirty and lose
+    /// their write trap. The device caches are not told.
+    void NotifyHostWrite(u64 vaddr, size_t size) {
+        if (size == 0 || page_tracker_state.Empty()) [[likely]] {
+            return;
+        }
+        TrackerWrite(vaddr, size);
     }
 
     bool ZeroBlock(const Common::ProcessAddress addr, const std::size_t size) {
@@ -378,8 +412,12 @@ struct Memory::Impl {
             std::memset(ptr, 0, copy_amount);
         },
         [&](const Common::ProcessAddress current_vaddr, const std::size_t offset, const std::size_t copy_amount, u8* const ptr) {
-            HandleRasterizerWrite(GetInteger(current_vaddr), copy_amount);
+            const bool rasterizer_write = RasterizerPreWrite(GetInteger(current_vaddr), copy_amount);
             std::memset(ptr, 0, copy_amount);
+            if (rasterizer_write) {
+                EndRasterizerWrite();
+            }
+            NotifyHostWrite(GetInteger(current_vaddr), copy_amount);
         });
     }
 
@@ -390,11 +428,11 @@ struct Memory::Impl {
             ZeroBlock(dest_addr + offset, copy_amount);
         },
         [&](const std::size_t offset, const std::size_t copy_amount, const u8* const ptr) {
-            WriteBlockImpl(dest_addr + offset, ptr, copy_amount, false);
+            WriteBlockImpl(dest_addr + offset, ptr, copy_amount, WriteMode::Safe);
         },
         [&](const Common::ProcessAddress current_vaddr, const std::size_t offset, const std::size_t copy_amount, u8* const ptr) {
             HandleRasterizerDownload(GetInteger(current_vaddr), copy_amount);
-            WriteBlockImpl(dest_addr + offset, ptr, copy_amount, false);
+            WriteBlockImpl(dest_addr + offset, ptr, copy_amount, WriteMode::Safe);
         });
     }
 
@@ -425,7 +463,7 @@ struct Memory::Impl {
         auto on_rasterizer = [&](const Common::ProcessAddress current_vaddr, const std::size_t offset, const std::size_t block_size) {
             // dc cvac: Store to point of coherency
             // CPU flush -> GPU invalidate
-            HandleRasterizerWrite(GetInteger(current_vaddr), block_size);
+            HandleCacheStore(GetInteger(current_vaddr), block_size);
         };
         return PerformCacheOperation(dest_addr, size, on_rasterizer);
     }
@@ -434,7 +472,7 @@ struct Memory::Impl {
         auto on_rasterizer = [&](const Common::ProcessAddress current_vaddr, const std::size_t offset, const std::size_t block_size) {
             // dc civac: Store to point of coherency, and invalidate from cache
             // CPU flush -> GPU invalidate
-            HandleRasterizerWrite(GetInteger(current_vaddr), block_size);
+            HandleCacheStore(GetInteger(current_vaddr), block_size);
         };
         return PerformCacheOperation(dest_addr, size, on_rasterizer);
     }
@@ -500,7 +538,42 @@ struct Memory::Impl {
         if (vaddr == 0 || !AddressSpaceContains(*current_page_table, vaddr, size)) {
             return;
         }
+        if (!page_tracker_enabled.load(std::memory_order_relaxed)) [[likely]] {
+            MarkRegionClaim(vaddr, size, PageClaim{.device = cached}, false);
+            return;
+        }
+        // With the page tracker on, page types change under the trap lock, so the tracker never
+        // acts on a page whose cached state changed after it looked at it.
+        const u64 page_begin = vaddr >> VESHIRU_PAGEBITS;
+        const u64 page_end = ((vaddr + size - 1) >> VESHIRU_PAGEBITS) + 1;
+        std::scoped_lock lk{read_trap_mutex};
+        if (page_tracker_state.Empty()) {
+            MarkRegionClaim(vaddr, size, PageClaim{.device = cached}, true);
+            return;
+        }
+        // Pages the tracker holds stay cached for it when the device releases them.
+        page_tracker_state.SetDeviceCached(page_begin, page_end, cached);
+    }
 
+    /// Whether the device memory manager caches the page: only it sets the page type on pages
+    /// the tracker does not cover. Called with read_trap_mutex held.
+    bool DeviceCached(u64 page) const override {
+        return page < current_page_table->entries.size() &&
+               std::as_const(current_page_table->entries)[page].Type() ==
+                   Common::PageType::RasterizerCachedMemory;
+    }
+
+    /// The page tracker's decision for [page_begin, page_end). Called with read_trap_mutex held.
+    void ApplyClaim(u64 page_begin, u64 page_end, PageClaim claim) override {
+        MarkRegionClaim(page_begin << VESHIRU_PAGEBITS, (page_end - page_begin) << VESHIRU_PAGEBITS,
+                        claim, true);
+    }
+
+    /// Gives the pages of [vaddr, vaddr + size) the page type and host protection of `claim`:
+    /// guest accesses to a cached page take the slow path (writes always, reads under reactive
+    /// flushing or an access trap).
+    void MarkRegionClaim(u64 vaddr, u64 size, PageClaim claim, bool trap_locked) {
+        const bool cached = claim.Cached();
         if (current_page_table->fastmem_arena) {
             Common::MemoryPermission perm{};
             // EDEN_NX2_NO_REACTIVE=1 drops the read traps on Switch 2 programs. Opt-in: without
@@ -512,7 +585,7 @@ struct Memory::Impl {
             const bool reactive_flushing =
                 Settings::ReactiveFlushing() &&
                 !(nx2_no_reactive && Settings::CurrentProgramIsSwitch2());
-            if (!reactive_flushing || !cached) {
+            if (!claim.access && !(claim.device && reactive_flushing)) {
                 perm |= Common::MemoryPermission::Read;
             }
             if (!cached) {
@@ -520,7 +593,7 @@ struct Memory::Impl {
             }
             host_buffer->Protect(vaddr, size, perm);
             if (cached && perm != Common::MemoryPermission{}) {
-                ProtectArmedPages(vaddr, size);
+                ProtectArmedPages(vaddr, size, trap_locked);
             }
         }
 
@@ -643,11 +716,14 @@ struct Memory::Impl {
     }
 
     /// Takes read permission away again from armed pages that were just cached again.
-    void ProtectArmedPages(u64 vaddr, u64 size) {
+    void ProtectArmedPages(u64 vaddr, u64 size, bool trap_locked) {
         if (armed_read_trap_count.load(std::memory_order_relaxed) == 0) {
             return;
         }
-        std::scoped_lock lk{read_trap_mutex};
+        std::unique_lock lk{read_trap_mutex, std::defer_lock};
+        if (!trap_locked) {
+            lk.lock();
+        }
         const u64 page_end = ((vaddr + size - 1) >> VESHIRU_PAGEBITS) + 1;
         for (auto it = armed_read_traps.lower_bound(vaddr >> VESHIRU_PAGEBITS);
              it != armed_read_traps.end() && *it < page_end; ++it) {
@@ -664,9 +740,12 @@ struct Memory::Impl {
         const u64 page_end = ((vaddr + size - 1) >> VESHIRU_PAGEBITS) + 1;
         auto it = armed_read_traps.lower_bound(vaddr >> VESHIRU_PAGEBITS);
         while (it != armed_read_traps.end() && *it < page_end) {
-            // Still cached (this read came through the rasterizer path): writes stay trapped.
-            host_buffer->Protect(*it << VESHIRU_PAGEBITS, VESHIRU_PAGESIZE,
-                                 Common::MemoryPermission::Read);
+            // Still cached (this read came through the rasterizer path): writes stay trapped, and
+            // reads too while the page tracker waits for the next access.
+            if (page_tracker_state.Empty() || !page_tracker_state.AccessArmed(*it)) {
+                host_buffer->Protect(*it << VESHIRU_PAGEBITS, VESHIRU_PAGESIZE,
+                                     Common::MemoryPermission::Read);
+            }
             it = armed_read_traps.erase(it);
             armed_read_trap_count.fetch_sub(1, std::memory_order_relaxed);
         }
@@ -706,10 +785,6 @@ struct Memory::Impl {
             }
             const u16 current_block =
                 Common::PageTable::PageEntryData::BlockIdForMapping(mapping_id);
-            if (mapping_id == Common::PageTable::PageEntryData::INVALID_BLOCK_ID) {
-                LOG_WARNING(HW_Memory,
-                            "Page table block ids are exhausted; validating spans page by page");
-            }
 
             page_table.entries.CommitRegion(base, end);
             while (base != end) {
@@ -776,24 +851,6 @@ struct Memory::Impl {
             GetInteger(vaddr), []() {}, []() {});
     }
 
-    [[nodiscard]] u8* GetContiguousSpan(VAddr addr, std::size_t size) const noexcept {
-        u8* const base = GetPointerSilent(addr);
-        if (base == nullptr) {
-            return nullptr;
-        }
-
-        const VAddr end = addr + size;
-        const VAddr first_page = ((addr >> VESHIRU_PAGEBITS) + 1) << VESHIRU_PAGEBITS;
-        const std::uintptr_t base_ptr = reinterpret_cast<std::uintptr_t>(base);
-        for (VAddr page = first_page; page < end; page += VESHIRU_PAGESIZE) {
-            const std::uintptr_t expected = base_ptr + (page - addr);
-            if (reinterpret_cast<std::uintptr_t>(GetPointerSilent(page)) != expected) {
-                return nullptr;
-            }
-        }
-        return base;
-    }
-
     /// @brief Reads a particular data type out of memory at the given virtual address.
     /// @param vaddr The virtual address to read the data type from.
     /// @tparam T The data type to read out of memory.
@@ -830,6 +887,8 @@ struct Memory::Impl {
     template <typename T>
     inline void Write(Common::ProcessAddress vaddr, const T data) noexcept requires(std::is_trivially_copyable_v<T>) {
         const u64 addr = GetInteger(vaddr);
+        bool cached = false;
+        bool rasterizer_write = false;
         if (auto const ptr = GetPointerImpl(addr, [addr, data]() {
             // As with unmapped reads, a guest spinning on a bad pointer writes unmapped memory
             // tens of thousands of times a second: keep the first ones and then a sample.
@@ -840,12 +899,24 @@ struct Memory::Impl {
                 LOG_ERROR(HW_Memory, "Unmapped Write{} @ {:#016x} = {:#016x} (#{})",
                           sizeof(T) * 8, addr, u64(data), count);
             }
-        }, [&]() { HandleRasterizerWrite(addr, sizeof(T)); }); ptr) [[likely]]
+        }, [&]() {
+            cached = true;
+            rasterizer_write = RasterizerPreWrite(addr, sizeof(T));
+        }); ptr) [[likely]] {
             std::memcpy(ptr, &data, sizeof(T));
+            if (cached) [[unlikely]] {
+                NotifyHostWrite(addr, sizeof(T));
+            }
+        }
+        if (rasterizer_write) [[unlikely]] {
+            EndRasterizerWrite();
+        }
     }
 
     template <typename T>
     bool WriteExclusive(Common::ProcessAddress vaddr, const T data, const T expected) {
+        bool cached = false;
+        bool rasterizer_write = false;
         u8* const ptr = GetPointerImpl(
             GetInteger(vaddr),
             [vaddr, data]() {
@@ -856,14 +927,28 @@ struct Memory::Impl {
                               sizeof(T) * 8, GetInteger(vaddr), static_cast<u64>(data), count);
                 }
             },
-            [&]() { HandleRasterizerWrite(GetInteger(vaddr), sizeof(T)); });
+            [&]() {
+                cached = true;
+                rasterizer_write = RasterizerPreWrite(GetInteger(vaddr), sizeof(T));
+            });
+        SCOPE_EXIT {
+            if (rasterizer_write) {
+                EndRasterizerWrite();
+            }
+        };
         if (ptr) {
-            return Common::AtomicCompareAndSwap(reinterpret_cast<T*>(ptr), data, expected);
+            const bool result = Common::AtomicCompareAndSwap(reinterpret_cast<T*>(ptr), data, expected);
+            if (cached && result) [[unlikely]] {
+                NotifyHostWrite(GetInteger(vaddr), sizeof(T));
+            }
+            return result;
         }
         return true;
     }
 
     bool WriteExclusive128(Common::ProcessAddress vaddr, const u128 data, const u128 expected) {
+        bool cached = false;
+        bool rasterizer_write = false;
         u8* const ptr = GetPointerImpl(
             GetInteger(vaddr),
             [vaddr, data]() {
@@ -876,11 +961,108 @@ struct Memory::Impl {
                               static_cast<u64>(data[0]), count);
                 }
             },
-            [&]() { HandleRasterizerWrite(GetInteger(vaddr), sizeof(u128)); });
+            [&]() {
+                cached = true;
+                rasterizer_write = RasterizerPreWrite(GetInteger(vaddr), sizeof(u128));
+            });
+        SCOPE_EXIT {
+            if (rasterizer_write) {
+                EndRasterizerWrite();
+            }
+        };
         if (ptr) {
-            return Common::AtomicCompareAndSwap(reinterpret_cast<u64*>(ptr), data, expected);
+            const bool result = Common::AtomicCompareAndSwap(reinterpret_cast<u64*>(ptr), data, expected);
+            if (cached && result) [[unlikely]] {
+                NotifyHostWrite(GetInteger(vaddr), sizeof(u128));
+            }
+            return result;
         }
         return true;
+    }
+
+    /// Runs the access-trap callbacks of tracked pages in [vaddr, vaddr + size) on this thread,
+    /// before the access lands, without the trap lock. Returns whether the device caches still
+    /// have to see the access (a page there is untracked or device cached).
+    bool TrackerAccess(u64 vaddr, size_t size) {
+        if (size == 0) {
+            return true;
+        }
+        vaddr &= 0xffffffffffffULL;
+        const u64 page_begin = vaddr >> VESHIRU_PAGEBITS;
+        const u64 page_end = ((vaddr + size - 1) >> VESHIRU_PAGEBITS) + 1;
+        std::vector<PageTrackerState::AccessHit> hits;
+        bool device_path;
+        {
+            std::scoped_lock lk{read_trap_mutex};
+            device_path = page_tracker_state.CollectAccessHits(page_begin, page_end, hits);
+        }
+        if (hits.empty()) {
+            return device_path;
+        }
+        for (const PageTrackerState::AccessHit& hit : hits) {
+            if (hit.callback) {
+                (*hit.callback)(hit.page_begin << VESHIRU_PAGEBITS,
+                                (hit.page_end - hit.page_begin) << VESHIRU_PAGEBITS);
+            }
+        }
+        std::scoped_lock lk{read_trap_mutex};
+        page_tracker_state.FinishAccess(hits);
+        // The callbacks ran without the lock and may have changed the tracking (untracked or
+        // device-cached pages): decide on the state the access lands in.
+        return page_tracker_state.NeedsDevicePath(page_begin, page_end);
+    }
+
+    /// A cached page is about to be written: access traps there call back first.
+    void TrackerPreWrite(u64 vaddr, size_t size) {
+        if (page_tracker_state.HasAccessTraps()) [[unlikely]] {
+            TrackerAccess(vaddr, size);
+        }
+    }
+
+    /// A guest write to cached pages: tracked pages turn dirty and lose their write trap. Returns
+    /// whether the device caches still have to see the write.
+    bool TrackerWrite(u64 vaddr, size_t size) {
+        if (size == 0) {
+            return true;
+        }
+        vaddr &= 0xffffffffffffULL;
+        std::scoped_lock lk{read_trap_mutex};
+        return page_tracker_state.OnWrite(vaddr >> VESHIRU_PAGEBITS,
+                                          ((vaddr + size - 1) >> VESHIRU_PAGEBITS) + 1);
+    }
+
+    /// Whether the device caches have to see an access to [vaddr, vaddr + size).
+    bool TrackerDevicePath(u64 vaddr, size_t size) {
+        if (page_tracker_state.Empty() || size == 0) {
+            return true;
+        }
+        vaddr &= 0xffffffffffffULL;
+        std::scoped_lock lk{read_trap_mutex};
+        return page_tracker_state.NeedsDevicePath(vaddr >> VESHIRU_PAGEBITS,
+                                                  ((vaddr + size - 1) >> VESHIRU_PAGEBITS) + 1);
+    }
+
+    /// A store to cached pages is about to land: access traps call back first, and the device
+    /// caches see it unless only the page tracker caches those pages. The page tracker counts the
+    /// store once it landed (NotifyHostWrite), so a collect in between cannot miss it.
+    bool RasterizerPreWrite(VAddr v_address, size_t size) {
+        if (!page_tracker_state.Empty()) [[unlikely]] {
+            TrackerPreWrite(v_address, size);
+            if (!TrackerDevicePath(v_address, size)) {
+                return false;
+            }
+        }
+        HandleRasterizerWrite(v_address, size);
+        return true;
+    }
+
+    /// A data cache clean of cached pages: the page tracker and the device caches see a write.
+    void HandleCacheStore(VAddr v_address, size_t size) {
+        if (!page_tracker_state.Empty() && !TrackerWrite(v_address, size)) [[unlikely]] {
+            return;
+        }
+        HandleRasterizerWrite(v_address, size);
+        EndRasterizerWrite();
     }
 
     /// A rasterizer-cached page whose host pointer is outside the emulated physical memory has no
@@ -901,6 +1083,13 @@ struct Memory::Impl {
     }
 
     void HandleRasterizerDownload(VAddr v_address, size_t size) {
+        if (!page_tracker_state.Empty()) [[unlikely]] {
+            // Access traps call back first. Pages only the tracker caches have nothing for the
+            // device caches to flush.
+            if (!TrackerAccess(v_address, size)) {
+                return;
+            }
+        }
         if (!Kernel::Nx2ThreadStats::g_enabled) {
             DownloadFromRasterizer(v_address, size);
             return;
@@ -955,7 +1144,9 @@ struct Memory::Impl {
         });
     }
 
+    /// Callers store the bytes after this and call EndRasterizerWrite once they landed.
     void HandleRasterizerWrite(VAddr v_address, size_t size) {
+        VideoCommon::Nx2FastDraw::BeginMemoryChange();
         if (!Kernel::Nx2ThreadStats::g_enabled) {
             WriteToRasterizer(v_address, size);
             return;
@@ -965,6 +1156,10 @@ struct Memory::Impl {
         WriteToRasterizer(v_address, size);
         Kernel::Nx2ThreadStats::CountMemory(Kernel::Nx2ThreadStats::t_run,
                                             timing.GetClockTicks() - start, false);
+    }
+
+    void EndRasterizerWrite() {
+        VideoCommon::Nx2FastDraw::EndMemoryChange();
     }
 
     void WriteToRasterizer(VAddr v_address, size_t size) {
@@ -1018,6 +1213,10 @@ struct Memory::Impl {
     };
 
     void InvalidateGPUMemory(u8* p, size_t size) {
+        // NCE stores the bytes once the trap returns: flagged before they land (pages it
+        // untracks are flagged once unwatched).
+        VideoCommon::Nx2FastDraw::BeginMemoryChange();
+        VideoCommon::Nx2FastDraw::EndMemoryChange();
         constexpr size_t sys_core = Core::Hardware::NUM_CPU_CORES - 1;
         const size_t core = (std::min)(system.GetCurrentHostThreadID(),
                                      sys_core); // any other calls threads go to syscore.
@@ -1047,7 +1246,11 @@ struct Memory::Impl {
     std::atomic<u64> read_trap_generation{};
     std::set<u64> armed_read_traps;
     std::atomic<size_t> armed_read_trap_count{};
+    /// Guards read traps, and page types and the page tracker while the tracker is enabled.
     std::mutex read_trap_mutex;
+    std::atomic<bool> page_tracker_enabled{};
+    PageTrackerState page_tracker_state{*this};
+    Core::Memory::PageTracker page_tracker{*this};
     std::array<GPUDirtyState, Core::Hardware::NUM_CPU_CORES> rasterizer_write_areas{};
     std::array<Common::ScratchBuffer<u32>, Core::Hardware::NUM_CPU_CORES> scratch_buffers{};
     std::span<Core::GPUDirtyMemoryManager> gpu_dirty_managers;
@@ -1210,12 +1413,21 @@ u8* Memory::GetSpan(const VAddr src_addr, const std::size_t size) {
 
 bool Memory::WriteBlock(const Common::ProcessAddress dest_addr, const void* src_buffer,
                         const std::size_t size) {
-    return impl->WriteBlockImpl(dest_addr, src_buffer, size, false);
+    return impl->WriteBlockImpl(dest_addr, src_buffer, size, Impl::WriteMode::Safe);
 }
 
 bool Memory::WriteBlockUnsafe(const Common::ProcessAddress dest_addr, const void* src_buffer,
                               const std::size_t size) {
-    return impl->WriteBlockImpl(dest_addr, src_buffer, size, true);
+    return impl->WriteBlockImpl(dest_addr, src_buffer, size, Impl::WriteMode::Unsafe);
+}
+
+bool Memory::WriteBlockUntracked(const Common::ProcessAddress dest_addr, const void* src_buffer,
+                                 const std::size_t size) {
+    return impl->WriteBlockImpl(dest_addr, src_buffer, size, Impl::WriteMode::Untracked);
+}
+
+void Memory::NotifyHostWrite(Common::ProcessAddress dest_addr, std::size_t size) {
+    impl->NotifyHostWrite(GetInteger(dest_addr), size);
 }
 
 bool Memory::CopyBlock(Common::ProcessAddress dest_addr, Common::ProcessAddress src_addr,
@@ -1268,7 +1480,20 @@ bool Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
         },
         [&] { rasterizer = true; });
     if (rasterizer) {
-        impl->InvalidateGPUMemory(ptr, size);
+        bool device_path = true;
+        if (!impl->page_tracker_state.Empty()) [[unlikely]] {
+            // The store runs again after this returns: access traps call back before it, and a
+            // tracked page turns dirty and writable.
+            impl->TrackerPreWrite(GetInteger(vaddr), size);
+            device_path = impl->TrackerWrite(GetInteger(vaddr), size);
+        }
+        if (device_path) {
+            impl->InvalidateGPUMemory(ptr, size);
+        } else {
+            // Even when only the page tracker watches these pages, bump the fast-draw change epoch.
+            VideoCommon::Nx2FastDraw::BeginMemoryChange();
+            VideoCommon::Nx2FastDraw::EndMemoryChange();
+        }
     }
 
 #ifdef __ANDROID__
@@ -1286,6 +1511,97 @@ bool Memory::InvalidateSeparateHeap(void* fault_address) {
 #else
     return false;
 #endif
+}
+
+void Memory::EnablePageTracker() {
+    impl->page_tracker_enabled.store(true, std::memory_order_relaxed);
+}
+
+PageTracker& Memory::PageTracker() {
+    return impl->page_tracker;
+}
+
+u64 PageTracker::Register(u64 va, u64 size, bool armed) {
+    va &= 0xffffffffffffULL;
+    if (size == 0 || !impl.page_tracker_enabled.load(std::memory_order_relaxed) ||
+        impl.current_page_table == nullptr ||
+        !AddressSpaceContains(*impl.current_page_table, va, size)) {
+        return 0;
+    }
+    std::scoped_lock lk{impl.read_trap_mutex};
+    return impl.page_tracker_state.Register(va >> VESHIRU_PAGEBITS,
+                                            ((va + size - 1) >> VESHIRU_PAGEBITS) + 1, armed);
+}
+
+void PageTracker::Unregister(u64 id) {
+    std::scoped_lock lk{impl.read_trap_mutex};
+    impl.page_tracker_state.Unregister(id);
+}
+
+void PageTracker::Arm(u64 id, u64 va, u64 size) {
+    if (size == 0) {
+        return;
+    }
+    va &= 0xffffffffffffULL;
+    std::scoped_lock lk{impl.read_trap_mutex};
+    impl.page_tracker_state.Arm(id, va >> VESHIRU_PAGEBITS, ((va + size - 1) >> VESHIRU_PAGEBITS) + 1);
+}
+
+void PageTracker::CollectDirty(u64 id, u64 va, u64 size, std::vector<std::pair<u64, u64>>& runs) {
+    if (size == 0) {
+        return;
+    }
+    va &= 0xffffffffffffULL;
+    const size_t first = runs.size();
+    {
+        std::scoped_lock lk{impl.read_trap_mutex};
+        impl.page_tracker_state.CollectDirty(id, va >> VESHIRU_PAGEBITS,
+                                             ((va + size - 1) >> VESHIRU_PAGEBITS) + 1, runs);
+    }
+    for (size_t i = first; i < runs.size(); ++i) {
+        runs[i].first <<= VESHIRU_PAGEBITS;
+        runs[i].second <<= VESHIRU_PAGEBITS;
+    }
+}
+
+bool PageTracker::AnyDirty(u64 id, u64 va, u64 size) {
+    if (size == 0) {
+        return false;
+    }
+    va &= 0xffffffffffffULL;
+    std::scoped_lock lk{impl.read_trap_mutex};
+    return impl.page_tracker_state.AnyDirty(id, va >> VESHIRU_PAGEBITS,
+                                            ((va + size - 1) >> VESHIRU_PAGEBITS) + 1);
+}
+
+std::shared_ptr<const std::atomic<u64>> PageTracker::WriteEpoch(u64 id) {
+    std::scoped_lock lk{impl.read_trap_mutex};
+    return impl.page_tracker_state.WriteEpoch(id);
+}
+
+void PageTracker::SetAccessCallback(u64 id, AccessCallback callback) {
+    std::scoped_lock lk{impl.read_trap_mutex};
+    impl.page_tracker_state.SetAccessCallback(id, std::move(callback));
+}
+
+void PageTracker::ArmAccessTrap(u64 id, u64 va, u64 size) {
+    if (size == 0) {
+        return;
+    }
+    va &= 0xffffffffffffULL;
+    std::scoped_lock lk{impl.read_trap_mutex};
+    impl.page_tracker_state.ArmAccess(id, va >> VESHIRU_PAGEBITS,
+                                      ((va + size - 1) >> VESHIRU_PAGEBITS) + 1);
+}
+
+void PageTracker::DisarmAccessTrap(u64 id, u64 va, u64 size) {
+    if (size == 0) {
+        return;
+    }
+    va &= 0xffffffffffffULL;
+    std::scoped_lock lk{impl.read_trap_mutex};
+    impl.page_tracker_state.DisarmAccess(id, va >> VESHIRU_PAGEBITS,
+                                         ((va + size - 1) >> VESHIRU_PAGEBITS) + 1);
 }
 
 } // namespace Core::Memory

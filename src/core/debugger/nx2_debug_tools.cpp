@@ -29,9 +29,11 @@
 #include "core/debugger/nx2_debug_tools.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "core/hle/kernel/k_process.h"
+#include "core/hle/nvn/hle_running.h"
 #include "core/memory.h"
 #include "hid_core/hid_core.h"
 #include "video_core/gpu.h"
+#include "video_core/nvn_draw_probe.h"
 #include "video_core/nx2_debug_control.h"
 #include "video_core/renderer_base.h"
 
@@ -218,6 +220,7 @@ json Status(ToolState& state, const json& params) {
         {"dump_dir", state.dump_directory.generic_string()},
         {"log_filter", state.log_filter},
         {"rejected", HexList(VideoCore::Nx2Debug::RejectedHashes())},
+        {"vtx_hle", NvnHle::HleRunning()},
     };
     if (renderer_before.presents && renderer_after.presents) {
         const auto rates = VideoCore::PresentRatesBetween(*renderer_before.presents,
@@ -485,6 +488,15 @@ json RejectShaders(ToolState&, const json& params) {
     }
     const bool reject = params.value("reject", true);
     const u64 generation = VideoCore::Nx2Debug::SetRejected(hashes, reject);
+    if (NvnHle::HleRunning()) {
+        // The set is kept, but only the emulated GPU's shader cache reads it.
+        return {{"rejected", HexList(VideoCore::Nx2Debug::RejectedHashes())},
+                {"applied", false},
+                {"vtx_hle", true},
+                {"note", "VTX-HLE is active: reject_shaders only affects the emulated GPU path, "
+                         "VTX-HLE draws are not changed. Use nvn_draw_skip with the stage or "
+                         "compute hashes nvn_draws lists to drop VTX-HLE draws or dispatches."}};
+    }
     const int timeout = Param<int>(params, "timeout_s", 5, 0, 60);
     const bool applied = hashes.empty() ||
                          VideoCore::Nx2Debug::WaitRejectApplied(generation, std::chrono::seconds{timeout});
@@ -701,6 +713,236 @@ json InputSequence(ToolState& state, const json& params, const ClientGone& clien
     return RunInput(state, steps, params, client_gone);
 }
 
+namespace Probe = VideoCommon::NvnDrawProbe;
+
+constexpr std::array<const char*, Probe::StageCount> PROBE_STAGES{
+    "vertex", "fragment", "geometry", "tess_control", "tess_eval", "compute", "task", "mesh"};
+
+json StageHashes(const Probe::DrawInfo& info) {
+    json out = json::object();
+    for (size_t stage = 0; stage < Probe::StageCount; ++stage) {
+        if (info.hashes[stage] != 0) {
+            out[PROBE_STAGES[stage]] = Hex(info.hashes[stage]);
+        }
+    }
+    return out;
+}
+
+/// Polls until done() or the timeout, in short slices so a stopping server does not wait it out.
+template <typename Done>
+void PollFor(const ToolState& state, std::chrono::milliseconds timeout, Done&& done) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!done() && !state.stopping.load(std::memory_order_relaxed) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(50ms);
+    }
+}
+
+json NvnDraws(ToolState& state, const json& params) {
+    const size_t limit = Param<size_t>(params, "limit", 40, 1, 2000);
+    const u32 presents = Param<u32>(params, "arm_presents", 600, 1, 100000);
+    std::optional<u64> filter;
+    if (const std::string text = params.value("hash", std::string{}); !text.empty()) {
+        filter = ParseDrawHash(text);
+    }
+    const u64 before = Probe::LastCensus().present;
+    const bool running = Probe::ArmCensus(presents);
+    Probe::Census census = Probe::LastCensus();
+    if (!running) {
+        // Armed just now: wait for the first full frame.
+        PollFor(state, 3s, [&] {
+            census = Probe::LastCensus();
+            return census.present > before;
+        });
+    }
+    json out = {{"census_armed_presents", presents}};
+    if (census.present == 0) {
+        out["note"] = "Census armed; no present recorded yet (is the game running on VTX-HLE?). "
+                      "Call again.";
+        return out;
+    }
+    if (!running && census.present == before) {
+        out["stale"] = true;
+        out["note"] = "No present within 3 s (paused or loading?): this census is an older one.";
+    }
+    out["present"] = census.present;
+    out["draws"] = census.draws;
+    out["skipped_draws"] = census.skipped;
+    out["pipelines_total"] = census.rows.size();
+    json rows = json::array();
+    for (const Probe::Row& row : census.rows) {
+        if (rows.size() >= limit) {
+            break;
+        }
+        const Probe::DrawInfo& first = row.first;
+        if (filter && std::ranges::find(first.hashes, *filter) == first.hashes.end()) {
+            continue;
+        }
+        json entry = {{"hashes", StageHashes(first)},
+                      {"draws", row.draws},
+                      {"elements", row.elements},
+                      {"mode", first.mode == 0xFFFFFFFFu ? json("mesh") : json(first.mode)},
+                      {"indexed", first.indexed},
+                      {"indirect", first.indirect},
+                      {"mesh", first.mesh}};
+        if (row.skipped != 0) {
+            entry["skipped"] = row.skipped;
+        }
+        json streams = json::array();
+        for (u32 i = 0; i < first.stream_count; ++i) {
+            const Probe::Stream& stream = first.streams[i];
+            streams.push_back({{"slot", stream.slot},
+                               {"guest", HexAddress(stream.address)},
+                               {"size", stream.size},
+                               {"pool", HexAddress(stream.pool_address)},
+                               {"pool_offset", HexAddress(stream.pool_offset)},
+                               {"staged", stream.staged}});
+        }
+        entry["first_draw_streams"] = std::move(streams);
+        entry["first_draw_count"] = first.count;
+        if (first.indexed) {
+            entry["first_draw_index"] = {{"guest", HexAddress(first.index_address)},
+                                         {"bytes", first.index_bytes},
+                                         {"type", first.index_type},
+                                         {"staged", first.index_staged}};
+        }
+        rows.push_back(std::move(entry));
+    }
+    out["pipelines"] = std::move(rows);
+    out["dispatch_count"] = census.dispatches;
+    out["skipped_dispatches"] = census.skipped_dispatches;
+    out["dispatch_programs_total"] = census.dispatch_rows.size();
+    json dispatches = json::array();
+    for (const Probe::DispatchRow& row : census.dispatch_rows) {
+        if (dispatches.size() >= limit) {
+            break;
+        }
+        if (filter && row.hash != *filter) {
+            continue;
+        }
+        dispatches.push_back({{"hash", Hex(row.hash)},
+                              {"count", row.count},
+                              {"groups", row.groups},
+                              {"indirect", row.indirect},
+                              {"skipped", row.skipped}});
+    }
+    out["dispatches"] = std::move(dispatches);
+    out["format"] = "One row per distinct (stage hashes, primitive mode, indexed, indirect, mesh) "
+                    "of the last recorded present, most draws first. elements = sum of direct "
+                    "vertex/index counts (0 for indirect and mesh draws). mode = NVNdrawPrimitive. "
+                    "first_draw_* describe the first draw of the row; staged = it binds the pass's "
+                    "device-local staged copy. dispatches: one row per compute program hash (the "
+                    "gpuprof one), most dispatches first; groups = sum of x*y*z of the direct ones, "
+                    "indirect = indirect dispatches, skipped = dropped by nvn_draw_skip.";
+    return out;
+}
+
+json SkipState() {
+    std::vector<u64> hashes;
+    Probe::SkipMode mode{};
+    Probe::GetSkip(hashes, mode);
+    const bool only = mode == Probe::SkipMode::Only;
+    return {{"mode", only ? "only" : "skip"},
+            {"hashes", HexList(hashes)},
+            {"note", only ? "Every draw is skipped unless one of its stage hashes is listed; "
+                            "dispatches with a listed compute hash are skipped."
+                          : "Draws with any listed stage hash and dispatches with a listed "
+                            "compute hash are skipped."}};
+}
+
+json NvnDrawSkip(ToolState&, const json& params) {
+    const std::string action = params.value("action", std::string{"get"});
+    std::vector<u64> given;
+    for (const json& hash : params.value("hashes", json::array())) {
+        given.push_back(ParseDrawHash(hash.get<std::string>()));
+    }
+    std::vector<u64> current;
+    Probe::SkipMode mode{};
+    Probe::GetSkip(current, mode);
+    if (params.contains("mode")) {
+        const std::string text = params.at("mode").get<std::string>();
+        if (text != "skip" && text != "only") {
+            throw std::runtime_error{fmt::format("mode \"{}\": want skip or only", text)};
+        }
+        mode = text == "only" ? Probe::SkipMode::Only : Probe::SkipMode::Skip;
+    }
+    if (action == "set") {
+        current = given;
+    } else if (action == "add") {
+        current.insert(current.end(), given.begin(), given.end());
+    } else if (action == "remove") {
+        std::erase_if(current,
+                      [&](u64 hash) { return std::ranges::find(given, hash) != given.end(); });
+    } else if (action == "clear") {
+        current.clear();
+        mode = Probe::SkipMode::Skip;
+    } else if (action != "get") {
+        throw std::runtime_error{
+            fmt::format("action \"{}\": want get, set, add, remove or clear", action)};
+    }
+    if (action != "get" || params.contains("mode")) {
+        Probe::SetSkip(std::move(current), mode);
+        LOG_INFO(Debug, "Debug server nvn_draw_skip {}: {}", action, SkipState().dump());
+    }
+    return SkipState();
+}
+
+json NvnDrawDump(ToolState& state, const json& params) {
+    if (!params.contains("hash")) {
+        const Probe::DumpState dump = Probe::GetDump();
+        return {{"armed", dump.armed},   {"done", dump.done},   {"hash", Hex(dump.hash)},
+                {"kind", dump.kind},     {"count", dump.count}, {"written", dump.written},
+                {"path", dump.path},     {"error", dump.error}};
+    }
+    const u64 hash = ParseDrawHash(params.at("hash").get<std::string>());
+    if (hash == 0) {
+        throw std::runtime_error{"hash 0 matches every unused stage"};
+    }
+    const u32 count = Param<u32>(params, "count", 1, 1, Probe::MaxDumpCount);
+    const int wait_ms = Param<int>(params, "wait_ms", 3000, 0, 10000);
+    std::filesystem::create_directories(state.dump_directory);
+    const std::string directory = state.dump_directory.generic_string();
+    Probe::ArmDump(hash, directory, count);
+    Probe::DumpState dump = Probe::GetDump();
+    PollFor(state, std::chrono::milliseconds{wait_ms}, [&] {
+        dump = Probe::GetDump();
+        return dump.done;
+    });
+    if (!dump.error.empty()) {
+        throw std::runtime_error{dump.error};
+    }
+    json out = {{"hash", Hex(hash)}, {"directory", directory}, {"count", count},
+                {"written", dump.written}};
+    if (!dump.kind.empty()) {
+        out["kind"] = dump.kind;
+    }
+    if (!dump.path.empty()) {
+        out["path"] = dump.path;
+    }
+    if (dump.written == 0) {
+        out["note"] = "Armed: no draw or dispatch with that hash was recorded yet. Call "
+                      "nvn_draw_dump without arguments later to get the path.";
+    } else if (!dump.done) {
+        out["note"] = fmt::format("{} of {} written so far; the file grows as more match. Call "
+                                  "nvn_draw_dump without arguments later.",
+                                  dump.written, count);
+    }
+    return out;
+}
+
+json NvnStats(ToolState&, const json& params) {
+    std::vector<Common::Log::RingLine> ring = Common::Log::ReadRing(0);
+    std::vector<std::string> lines;
+    lines.reserve(ring.size());
+    for (Common::Log::RingLine& line : ring) {
+        lines.push_back(std::move(line.text));
+    }
+    json out = NvnStatsFromLog(lines, Param<size_t>(params, "census_lines", 12, 0, 200));
+    out["vtx_hle"] = NvnHle::HleRunning();
+    out["presents"] = g_nx2_present_count.load(std::memory_order_relaxed);
+    return out;
+}
+
 Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
     const auto handler = [&state](json (*tool)(ToolState&, const json&)) -> Handler {
         return [state, tool](const json& params, const ClientGone&) { return tool(*state, params); };
@@ -726,6 +968,10 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
         {"read_gpu_memory", handler(ReadGpuMemory)},
         {"input", waiting(Input)},
         {"input_sequence", waiting(InputSequence)},
+        {"nvn_draws", handler(NvnDraws)},
+        {"nvn_draw_skip", handler(NvnDrawSkip)},
+        {"nvn_draw_dump", handler(NvnDrawDump)},
+        {"nvn_stats", handler(NvnStats)},
     };
 }
 
@@ -744,6 +990,70 @@ u64 ParseShaderHash(std::string_view text) {
             text)};
     }
     return value;
+}
+
+u64 ParseDrawHash(std::string_view text) {
+    const std::string_view digits =
+        text.starts_with("0x") || text.starts_with("0X") ? text.substr(2) : text;
+    u64 value = 0;
+    const auto [end, error] =
+        std::from_chars(digits.data(), digits.data() + digits.size(), value, 16);
+    if (digits.empty() || digits.size() > 16 || error != std::errc{} ||
+        end != digits.data() + digits.size()) {
+        throw std::runtime_error{fmt::format(
+            "bad hash \"{}\": want 1 to 16 hex digits of a stage hash as nvn_draws lists it", text)};
+    }
+    return value;
+}
+
+json NvnStatsFromLog(std::span<const std::string> lines, size_t census_lines) {
+    const auto latest = [&](std::string_view needle) -> json {
+        for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
+            if (it->find(needle) != std::string::npos) {
+                return *it;
+            }
+        }
+        return nullptr;
+    };
+    // The lines of the latest report starting at a header line; `part` marks its other lines.
+    const auto block = [&](std::string_view header, std::string_view part, size_t keep,
+                           size_t& total) {
+        json out = json::array();
+        total = 0;
+        auto it = std::find_if(lines.rbegin(), lines.rend(), [&](const std::string& line) {
+            return line.find(header) != std::string::npos;
+        });
+        if (it == lines.rend()) {
+            return out;
+        }
+        for (auto line = it.base() - 1; line != lines.end(); ++line) {
+            if (line->find(part) == std::string::npos) {
+                continue;
+            }
+            if (total++ < keep) {
+                out.push_back(*line);
+            }
+        }
+        return out;
+    };
+    size_t gpuprof_total = 0;
+    size_t census_total = 0;
+    json out = {
+        {"memory", latest("[nvn] memory:")},
+        {"status", latest("[nvn] status:")},
+        {"replay_stage", latest("[nvn] replay stage=")},
+        {"gpuprof_window",
+         block("[nvn] gpuprof 10 s window (", "[nvn] gpuprof 10 s window", 16, gpuprof_total)},
+        {"storage_census", block("images, estimated MiB", "[nvn] storage census:", census_lines,
+                                 census_total)},
+    };
+    out["storage_census_total"] = census_total;
+    out["log_lines"] = lines.size();
+    if (out["memory"].is_null() && out["status"].is_null()) {
+        out["note"] = "No [nvn] heartbeat in the log ring: VTX-HLE is not running, or the lines are "
+                      "older than the ring (the debug server keeps the last 20000 lines).";
+    }
+    return out;
 }
 
 std::vector<u8> ParseHexBytes(std::string_view text) {
@@ -966,6 +1276,8 @@ Service::~Service() {
     g_nx2_present_time_services.fetch_sub(1, std::memory_order_relaxed);
     VideoCore::Nx2Debug::EndSession();
     server.reset();
+    // A skip set left by a client does not outlive the boot it was made for.
+    VideoCommon::NvnDrawProbe::Reset();
 }
 
 std::unique_ptr<Service> MaybeStartService(System& system, std::string title, u64 program_id) {

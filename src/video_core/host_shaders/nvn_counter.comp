@@ -1,0 +1,78 @@
+// SPDX-FileCopyrightText: Copyright 2026 Vortex727 (FUKKO)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#version 450
+
+// NVN HLE (Vulkan::Nvn::CounterEngine). One invocation, one scratch buffer.
+//   mode 2:     accumulator at word `acc` (64-bit) += the query result at words base+10..11.
+//   mode 3:     resolve of a CounterBatch: `count` events, 2 bits each in `program` (0 = the next
+//               query result of the area at words base.. is added, 1 = reset to 0, 2 = the
+//               running total is stored as the next report value at words out..), starting from
+//               and ending in the accumulator at word `acc`.
+//   mode 4:     `count` render conditions in consecutive 64-byte slots from word `base`
+//               (NVN_CONDITIONAL_RENDER_MODE_RENDER_IF_EQUAL, or _NOT_EQUAL when bit i of
+//               `program` is set). The two 64-bit counters of slot i's report pair were copied to
+//               its words 0..1 and 4..5; the predicate (1 = render) is stored at its word 8 for
+//               VK_EXT_conditional_rendering.
+
+layout(local_size_x = 1) in;
+
+layout(std430, binding = 0) buffer Scratch {
+    uint data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint base;
+    uint mode;
+    uint acc;
+    uint count;
+    uint out_base;
+    uint program[16];
+};
+
+void Add(inout uint low, inout uint high, uint add_low, uint add_high) {
+    uint carry;
+    low = uaddCarry(low, add_low, carry);
+    high = high + add_high + carry;
+}
+
+void Compare(uint slot, bool not_equal) {
+    const bool equal = data[slot] == data[slot + 4u] && data[slot + 1u] == data[slot + 5u];
+    const bool render = not_equal ? !equal : equal;
+    data[slot + 8u] = render ? 1u : 0u;
+}
+
+void main() {
+    if (mode == 4u) {
+        for (uint i = 0u; i < count; ++i) {
+            Compare(base + i * 16u, ((program[i >> 5u] >> (i & 31u)) & 1u) != 0u);
+        }
+    } else if (mode == 2u) {
+        uint low = data[acc];
+        uint high = data[acc + 1u];
+        Add(low, high, data[base + 10u], data[base + 11u]);
+        data[acc] = low;
+        data[acc + 1u] = high;
+    } else {
+        uint low = data[acc];
+        uint high = data[acc + 1u];
+        uint query = 0u;
+        uint report = 0u;
+        for (uint i = 0u; i < count; ++i) {
+            const uint kind = (program[i >> 4u] >> ((i & 15u) * 2u)) & 3u;
+            if (kind == 0u) {
+                Add(low, high, data[base + query * 2u], data[base + query * 2u + 1u]);
+                ++query;
+            } else if (kind == 1u) {
+                low = 0u;
+                high = 0u;
+            } else {
+                data[out_base + report * 2u] = low;
+                data[out_base + report * 2u + 1u] = high;
+                ++report;
+            }
+        }
+        data[acc] = low;
+        data[acc + 1u] = high;
+    }
+}

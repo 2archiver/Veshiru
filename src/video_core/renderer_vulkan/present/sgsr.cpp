@@ -143,4 +143,63 @@ VkImageView SGSR::Draw(const Device& device, Scheduler& scheduler, size_t image_
     return *images.image_view;
 }
 
+VkImageView SGSR::Record(const Device& device, vk::CommandBuffer cmdbuf, size_t image_index,
+                         VkImage source_image, VkImageView source_image_view,
+                         VkExtent2D input_image_extent, const Common::Rectangle<f32>& crop_rect) {
+    Images& images = m_dynamic_images[image_index];
+    m_record_descriptor_sets = std::make_shared<RecordDescriptorSets>();
+    auto& sets = *m_record_descriptor_sets;
+    sets.pool = CreateWrappedDescriptorPool(device, 1, 1);
+    const std::array<VkDescriptorSetLayout, 1> layouts{*m_descriptor_set_layout};
+    sets.sets = CreateWrappedDescriptorSets(sets.pool, layouts);
+    auto const output_image = *images.image;
+    auto const descriptor_set = sets.sets[0];
+    auto const framebuffer = *images.framebuffer;
+    auto const pipeline = *m_stage_pipeline;
+
+    VkPipelineLayout layout = *m_pipeline_layout;
+    VkRenderPass renderpass = *m_renderpass;
+    VkExtent2D extent = m_extent;
+
+    const f32 input_image_width = f32(input_image_extent.width);
+    const f32 input_image_height = f32(input_image_extent.height);
+    const f32 crop_width = (crop_rect.right - crop_rect.left) * input_image_width;
+    const f32 crop_height = (crop_rect.bottom - crop_rect.top) * input_image_height;
+    static constexpr f32 EDGE_SHARPNESS_MAX = 2.0f;
+    const f32 edge_sharpness =
+        EDGE_SHARPNESS_MAX - f32(Settings::values.fsr_sharpening_slider.GetValue()) / 200.0f;
+
+    PushConstants viewport_con{};
+    viewport_con[0] = std::bit_cast<u32>(1.f / input_image_width);
+    viewport_con[1] = std::bit_cast<u32>(1.f / input_image_height);
+    viewport_con[2] = std::bit_cast<u32>(input_image_width);
+    viewport_con[3] = std::bit_cast<u32>(input_image_height);
+    viewport_con[4] = std::bit_cast<u32>(crop_width / input_image_width);
+    viewport_con[5] = std::bit_cast<u32>(crop_height / input_image_height);
+    viewport_con[6] = std::bit_cast<u32>((std::min)(crop_rect.left, crop_rect.right));
+    viewport_con[7] = std::bit_cast<u32>((std::min)(crop_rect.top, crop_rect.bottom));
+    viewport_con[8] = std::bit_cast<u32>(edge_sharpness);
+
+    std::vector<VkDescriptorImageInfo> infos;
+    infos.reserve(1);
+    const auto write =
+        CreateWriteDescriptorSet(infos, *m_sampler, source_image_view, sets.sets[0], 0);
+    device.GetLogical().UpdateDescriptorSets(std::span{&write, 1}, {});
+    const VkImageLayout old_layout =
+        m_images_ready || m_record_images_ready ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    m_record_images_ready = true;
+
+    TransitionImageLayout(cmdbuf, source_image, VK_IMAGE_LAYOUT_GENERAL);
+    TransitionImageLayout(cmdbuf, output_image, VK_IMAGE_LAYOUT_GENERAL, old_layout);
+    BeginRenderPass(cmdbuf, renderpass, framebuffer, extent);
+    cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, descriptor_set, {});
+    cmdbuf.PushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                         viewport_con);
+    cmdbuf.Draw(3, 1, 0, 0);
+    cmdbuf.EndRenderPass();
+    TransitionImageLayout(cmdbuf, output_image, VK_IMAGE_LAYOUT_GENERAL);
+    return *images.image_view;
+}
+
 } // namespace Vulkan

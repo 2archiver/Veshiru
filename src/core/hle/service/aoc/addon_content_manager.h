@@ -26,10 +26,16 @@ public:
     explicit IAddOnContentManager(Core::System& system);
     ~IAddOnContentManager() override;
 
+    Result CountAddOnContentByApplicationId(Out<u32> out_count, u64 application_id);
+    Result ListAddOnContentByApplicationId(Out<u32> out_count,
+                                           OutBuffer<BufferAttr_HipcMapAlias> out_addons,
+                                           u32 offset, u32 count, u64 application_id);
     Result CountAddOnContent(Out<u32> out_count, ClientProcessId process_id);
     Result ListAddOnContent(Out<u32> out_count, OutBuffer<BufferAttr_HipcMapAlias> out_addons,
                             u32 offset, u32 count, ClientProcessId process_id);
+    Result GetAddOnContentBaseIdByApplicationId(Out<u64> out_title_id, u64 application_id);
     Result GetAddOnContentBaseId(Out<u64> out_title_id, ClientProcessId process_id);
+    Result PrepareAddOnContentByApplicationId(s32 addon_index, u64 application_id);
     Result PrepareAddOnContent(s32 addon_index, ClientProcessId process_id);
     Result GetAddOnContentListChangedEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
     Result GetAddOnContentListChangedEventWithProcessId(

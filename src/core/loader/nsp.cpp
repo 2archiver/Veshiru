@@ -264,7 +264,7 @@ ResultStatus AppLoader_NSP::ReadTitle(std::string& title) {
     return ResultStatus::Success;
 }
 
-ResultStatus AppLoader_NSP::ReadControlData(FileSys::NACP& nacp) {
+ResultStatus AppLoader_NSP::ReadControlData(FileSys::NACP& nacp) const {
     if (nacp_file == nullptr) {
         return ResultStatus::ErrorNoControl;
     }

@@ -8,20 +8,35 @@
 
 #pragma once
 
+#include "common/settings_enums.h"
 #include "video_core/renderer_vulkan/present/window_adapt_pass.h"
 
 namespace Vulkan {
 
 class MemoryAllocator;
 
-std::unique_ptr<WindowAdaptPass> MakeNearestNeighbor(const Device& device, VkFormat frame_format);
-std::unique_ptr<WindowAdaptPass> MakeBilinear(const Device& device, VkFormat frame_format);
-std::unique_ptr<WindowAdaptPass> MakeBicubic(const Device& device, VkFormat frame_format, VkCubicFilterWeightsQCOM qcom_weights);
-std::unique_ptr<WindowAdaptPass> MakeSpline1(const Device& device, VkFormat frame_format);
-std::unique_ptr<WindowAdaptPass> MakeGaussian(const Device& device, VkFormat frame_format);
-std::unique_ptr<WindowAdaptPass> MakeLanczos(const Device& device, VkFormat frame_format);
-std::unique_ptr<WindowAdaptPass> MakeScaleForce(const Device& device, VkFormat frame_format);
-std::unique_ptr<WindowAdaptPass> MakeArea(const Device& device, VkFormat frame_format);
-std::unique_ptr<WindowAdaptPass> MakeMmpx(const Device& device, VkFormat frame_format);
+std::unique_ptr<WindowAdaptPass> MakeWindowAdaptPass(
+    const Device& device, VkFormat frame_format, Settings::ScalingFilter filter,
+    bool push_descriptor = false);
+
+std::unique_ptr<WindowAdaptPass> MakeNearestNeighbor(const Device& device, VkFormat frame_format,
+                                                     bool push_descriptor = false);
+std::unique_ptr<WindowAdaptPass> MakeBilinear(const Device& device, VkFormat frame_format,
+                                              bool push_descriptor = false);
+std::unique_ptr<WindowAdaptPass> MakeBicubic(const Device& device, VkFormat frame_format,
+                                             VkCubicFilterWeightsQCOM qcom_weights,
+                                             bool push_descriptor = false);
+std::unique_ptr<WindowAdaptPass> MakeSpline1(const Device& device, VkFormat frame_format,
+                                             bool push_descriptor = false);
+std::unique_ptr<WindowAdaptPass> MakeGaussian(const Device& device, VkFormat frame_format,
+                                              bool push_descriptor = false);
+std::unique_ptr<WindowAdaptPass> MakeLanczos(const Device& device, VkFormat frame_format,
+                                             bool push_descriptor = false);
+std::unique_ptr<WindowAdaptPass> MakeScaleForce(const Device& device, VkFormat frame_format,
+                                                bool push_descriptor = false);
+std::unique_ptr<WindowAdaptPass> MakeArea(const Device& device, VkFormat frame_format,
+                                          bool push_descriptor = false);
+std::unique_ptr<WindowAdaptPass> MakeMmpx(const Device& device, VkFormat frame_format,
+                                          bool push_descriptor = false);
 
 } // namespace Vulkan

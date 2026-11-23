@@ -2,7 +2,9 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
+#include <vector>
 
 #include "common/common_types.h"
 #include "core/file_sys/vfs/vfs_types.h"
@@ -48,11 +50,15 @@ public:
     [[nodiscard]] std::shared_ptr<NCA> GetEntry(u64 title_id, StorageId storage,
                                                 ContentRecordType type) const;
 
+    void SetLooseAOC(u64 title_id, VirtualFile romfs);
+    [[nodiscard]] std::vector<u64> GetLooseAOCTitleIDs() const;
+
 private:
     VirtualFile file;
     VirtualFile packed_update_raw;
 
     VirtualFile base;
+    std::map<u64, VirtualFile> loose_aoc;
 
     bool updatable;
 

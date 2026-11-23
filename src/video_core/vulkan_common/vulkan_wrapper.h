@@ -235,6 +235,8 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkCmdDrawIndexedIndirectCount vkCmdDrawIndexedIndirectCount{};
     PFN_vkCmdDrawIndirectByteCountEXT vkCmdDrawIndirectByteCountEXT{};
     PFN_vkCmdDrawMeshTasksEXT vkCmdDrawMeshTasksEXT{};
+    PFN_vkCmdDrawMeshTasksIndirectEXT vkCmdDrawMeshTasksIndirectEXT{};
+    PFN_vkCmdDrawMeshTasksIndirectCountEXT vkCmdDrawMeshTasksIndirectCountEXT{};
     PFN_vkCmdEndConditionalRenderingEXT vkCmdEndConditionalRenderingEXT{};
     PFN_vkCmdEndDebugUtilsLabelEXT vkCmdEndDebugUtilsLabelEXT{};
     PFN_vkCmdEndQuery vkCmdEndQuery{};
@@ -244,6 +246,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkCmdPipelineBarrier vkCmdPipelineBarrier{};
     PFN_vkCmdPipelineBarrier2 vkCmdPipelineBarrier2{};
     PFN_vkCmdPushConstants vkCmdPushConstants{};
+    PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSetKHR{};
     PFN_vkCmdPushDescriptorSetWithTemplateKHR vkCmdPushDescriptorSetWithTemplateKHR{};
     PFN_vkCmdResetQueryPool vkCmdResetQueryPool{};
     PFN_vkCmdWriteTimestamp vkCmdWriteTimestamp{};
@@ -1306,6 +1309,12 @@ public:
                                      dynamic_offsets.size(), dynamic_offsets.data());
     }
 
+    void PushDescriptorSetKHR(VkPipelineBindPoint bind_point, VkPipelineLayout layout, u32 set,
+                              Span<VkWriteDescriptorSet> writes) const noexcept {
+        dld->vkCmdPushDescriptorSetKHR(handle, bind_point, layout, set, writes.size(),
+                                       writes.data());
+    }
+
     void PushDescriptorSetWithTemplateKHR(VkDescriptorUpdateTemplate update_template,
                                           VkPipelineLayout layout, u32 set,
                                           const void* data) const noexcept {
@@ -1353,6 +1362,18 @@ public:
 
     void DrawMeshTasksEXT(u32 group_count_x, u32 group_count_y, u32 group_count_z) const noexcept {
         dld->vkCmdDrawMeshTasksEXT(handle, group_count_x, group_count_y, group_count_z);
+    }
+
+    void DrawMeshTasksIndirectEXT(VkBuffer buffer, VkDeviceSize offset, u32 draw_count,
+                                  u32 stride) const noexcept {
+        dld->vkCmdDrawMeshTasksIndirectEXT(handle, buffer, offset, draw_count, stride);
+    }
+
+    void DrawMeshTasksIndirectCountEXT(VkBuffer buffer, VkDeviceSize offset, VkBuffer count_buffer,
+                                       VkDeviceSize count_offset, u32 max_draw_count,
+                                       u32 stride) const noexcept {
+        dld->vkCmdDrawMeshTasksIndirectCountEXT(handle, buffer, offset, count_buffer, count_offset,
+                                                max_draw_count, stride);
     }
 
     void DrawIndirectCount(VkBuffer src_buffer, VkDeviceSize src_offset, VkBuffer count_buffer,

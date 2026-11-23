@@ -17,6 +17,8 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan_vertex_repack.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/astc_decoder.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/bc_encoder.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nvn_bc_copy.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/bc7_encoder.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_color_float.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/blit_color_srgb_to_linear.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/block_linear_unswizzle_2d.comp
@@ -46,6 +48,12 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/full_screen_triangle.vert
     ${CMAKE_CURRENT_SOURCE_DIR}/fxaa.frag
     ${CMAKE_CURRENT_SOURCE_DIR}/fxaa.vert
+    ${CMAKE_CURRENT_SOURCE_DIR}/nvn_alias_transfer.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nvn_counter.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nvn_mesh_indirect.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nvn_quad_indirect.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nvn_vertex_stage.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nvn_wb_merge.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/opengl_convert_s8d24.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/opengl_copy_bc4.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/opengl_fidelityfx_fsr.frag
@@ -182,7 +190,9 @@ foreach(SOURCE_FILE IN ITEMS ${SHADER_FILES})
     # Skip compiling to SPIR-V OpenGL exclusive files
     if (NOT ${FILENAME} MATCHES "opengl.*")
         set(SPIRV_DEPENDENCIES)
-        if (FILENAME STREQUAL "convert_abgr8_to_x8d24.frag" OR
+        if (FILENAME MATCHES "^smaa_")
+            list(APPEND SPIRV_DEPENDENCIES ${CMAKE_CURRENT_SOURCE_DIR}/opengl_smaa.glsl)
+        elseif (FILENAME STREQUAL "convert_abgr8_to_x8d24.frag" OR
             FILENAME STREQUAL "convert_x8d24_to_abgr8.frag")
             list(APPEND SPIRV_DEPENDENCIES ${CMAKE_CURRENT_SOURCE_DIR}/x8d24_conversion.glsl)
         endif()

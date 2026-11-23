@@ -68,6 +68,20 @@ struct ConstBufferAddr {
     u32 count;
     bool has_secondary;
     u32 handle_program{~0U}; ///< index in Info::handle_programs for a handle computed per draw
+    bool bindless{};         ///< the handle (`handle`) is only known at run time
+    IR::U32 handle;          ///< with `bindless`: the guest handle word, as the shader computes it
+};
+
+/// Window of 16-byte {u64 address, u32 size, u32 pad} buffer descriptors in the driver bank (c0)
+/// of an NVN2 compute program: `count` consecutive entries starting at byte `base`. NVN2 lays this
+/// bank out per compute shader (push constants, uniform entries, storage entries, ...), so the
+/// recompiler cannot assume a fixed base for it. `active == false` (every legacy environment)
+/// keeps the fixed per-stage base; an active window with `count == 0` means the program has no
+/// buffer entries at all.
+struct NvnBufferWindow {
+    u32 base{};
+    u32 count{};
+    bool active{};
 };
 
 class Environment {
@@ -127,6 +141,19 @@ public:
 
     [[nodiscard]] virtual std::optional<ReplaceConstant> GetReplaceConstBuffer(u32 bank,
                                                                                u32 offset) = 0;
+
+    /// Compute programs of the NVN2 HLE override this; every other environment keeps the fixed
+    /// per-stage storage buffer table.
+    [[nodiscard]] virtual NvnBufferWindow NvnComputeBufferWindow() const {
+        return {};
+    }
+
+    /// A program VTX-HLE (the NVN2 high-level emulation) replays: its driver bank (c0) is laid out
+    /// by the HLE (task and mesh stages have their own storage tables) and its storage buffers are
+    /// collected with the HLE's rules (raw global memory). The emulated GPU never sets it.
+    [[nodiscard]] virtual bool IsNvnHleProgram() const {
+        return false;
+    }
 
     virtual void Dump(u64 pipeline_hash, u64 shader_hash) = 0;
 

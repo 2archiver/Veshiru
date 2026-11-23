@@ -1,0 +1,177 @@
+// SPDX-FileCopyrightText: Copyright 2026 Vortex727 (FUKKO)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#version 450
+
+// NVN HLE (Vulkan::Nvn::WriteBackMerge, nvn_write_back.h). Brings GPU results held in a device-local
+// copy of guest memory back to the guest's own bytes (the imported pool buffer), writing only the
+// words the GPU changed: `result` (the copy after the GPU work) against `snapshot` (the same bytes
+// before it). Words the GPU left alone keep whatever the CPU wrote there meanwhile. Idea after the
+// TotK recompilation's write-back merge (vk_memory.c, shaders/wb_merge.comp, MIT).
+//
+// One invocation per guest word of the part. A whole word is stored when it changed; the first and
+// the last word may lie only partly inside the part (`head_mask`, `tail_mask`: the bytes inside):
+// there only the changed bytes inside are replaced, with atomics so the other bytes of the word stay
+// as they are.
+//
+// Line mode (`FLAG_LINES`): a store of an isolated word into host memory over PCIe costs 10-20 ns,
+// a full line 3-5 ns (tests.exe "[.write-back-bench]": 0.8 MiB of scattered changed words 2.4 ms,
+// 16 MiB of contiguous ones 0.64 ms). The guest buffer is cut into units of `1 << unit_shift` words
+// (8: a 32-byte sector, 32: a 128-byte line; aligned as the host memory is, `line_phase`): a unit
+// with one changed word stores that word, as above; a unit with several, all inside the part, is
+// stored whole: the changed words from `result`, the others as the guest holds them at that moment
+// (read just before). A CPU store to one of those others can only be lost when it lands between
+// that read and the unit's store (about a microsecond), not at any time between the snapshot and
+// the merge as with a plain copy. The host only sets FLAG_LINES for pages no CPU store can reach
+// while the merge runs (nvn_line_guard.h: access traps), so that window is closed.
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Result {
+    uint result[];
+};
+
+layout(std430, binding = 1) readonly buffer Snapshot {
+    uint snapshot[];
+};
+
+layout(std430, binding = 2) coherent buffer Guest {
+    uint guest[];
+};
+
+// Diagnostic counters (EDEN_NX2_NVN_WB_MONITOR): per slot the changed words and the dirty units
+// (8 or 32 guest words). Only touched when `stat_slot` is not NO_STAT.
+layout(std430, binding = 3) buffer Stats {
+    uint stats[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint result_word;
+    uint snapshot_word;
+    uint guest_word;
+    uint words;
+    uint head_mask;
+    uint tail_mask;
+    uint stat_slot;
+    uint line_phase; // (guest binding word offset in its buffer + guest_word) % unit words
+    uint flags;      // FLAG_LINES; bits 8..11: log2 of the unit words
+} pc;
+
+const uint NO_STAT = 0xFFFFFFFFu;
+const uint FLAG_LINES = 1u;
+const uint MAX_UNITS_PER_GROUP = 32u; // 256 invocations of units of at least 8 words
+
+shared uint line_changed[MAX_UNITS_PER_GROUP];
+shared uint line_inside[MAX_UNITS_PER_GROUP];
+shared uint line_special[MAX_UNITS_PER_GROUP];
+
+// Changed bits of word i of the part (head/tail words: only the bytes inside the part).
+uint changed_bits(uint i, out uint after) {
+    uint mask = 0xFFFFFFFFu;
+    if (i == 0u) {
+        mask &= pc.head_mask;
+    }
+    if (i == pc.words - 1u) {
+        mask &= pc.tail_mask;
+    }
+    after = result[pc.result_word + i];
+    return (after ^ snapshot[pc.snapshot_word + i]) & mask;
+}
+
+// Stores the changed bits of word i whole or, for a partial word, byte by byte.
+void store_changed(uint i, uint after, uint changed) {
+    if (changed == 0u) {
+        return;
+    }
+    if (i != 0u && i != pc.words - 1u) {
+        guest[pc.guest_word + i] = after;
+        return;
+    }
+    uint mask = 0xFFFFFFFFu;
+    if (i == 0u) {
+        mask &= pc.head_mask;
+    }
+    if (i == pc.words - 1u) {
+        mask &= pc.tail_mask;
+    }
+    if (mask == 0xFFFFFFFFu) {
+        guest[pc.guest_word + i] = after;
+        return;
+    }
+    uint bytes = 0u;
+    for (uint b = 0u; b < 32u; b += 8u) {
+        if (((changed >> b) & 0xFFu) != 0u) {
+            bytes |= 0xFFu << b;
+        }
+    }
+    atomicAnd(guest[pc.guest_word + i], ~bytes);
+    atomicOr(guest[pc.guest_word + i], after & bytes);
+}
+
+void main() {
+    if (pc.flags == 0u && pc.stat_slot == NO_STAT) {
+        const uint i = gl_GlobalInvocationID.x;
+        if (i < pc.words) {
+            uint after;
+            const uint changed = changed_bits(i, after);
+            store_changed(i, after, changed);
+        }
+        return;
+    }
+
+    // Virtual index: units start at multiples of their size (the part's first word sits
+    // `line_phase` words into its unit).
+    // At least 8 (the shared arrays hold 32 units): the plain merge's counters count units of 8.
+    const uint unit_words = 1u << max((pc.flags >> 8) & 15u, 3u);
+    const uint t = gl_LocalInvocationIndex;
+    const uint line = t / unit_words;
+    const uint lane = t % unit_words;
+    const uint v = gl_WorkGroupID.x * gl_WorkGroupSize.x + t;
+    const bool inside = v >= pc.line_phase && v - pc.line_phase < pc.words;
+    const uint i = v - pc.line_phase;
+    uint after = 0u;
+    uint changed = 0u;
+    if (inside) {
+        changed = changed_bits(i, after);
+    }
+    if (lane == 0u) {
+        line_changed[line] = 0u;
+        line_inside[line] = 0u;
+        line_special[line] = 0u;
+    }
+    barrier();
+    if (changed != 0u) {
+        atomicAdd(line_changed[line], 1u);
+    }
+    if (inside) {
+        atomicAdd(line_inside[line], 1u);
+        if ((i == 0u && pc.head_mask != 0xFFFFFFFFu) ||
+            (i == pc.words - 1u && pc.tail_mask != 0xFFFFFFFFu)) {
+            atomicOr(line_special[line], 1u); // a partial word is here: exact path
+        }
+    }
+    barrier();
+    const uint count = line_changed[line];
+    if (count == 0u) {
+        return;
+    }
+    if (pc.stat_slot != NO_STAT && lane == 0u) {
+        atomicAdd(stats[2u * pc.stat_slot], count);
+        atomicAdd(stats[2u * pc.stat_slot + 1u], 1u);
+    }
+    const bool whole_line = (pc.flags & FLAG_LINES) != 0u && count >= 2u &&
+                            line_inside[line] == unit_words && line_special[line] == 0u;
+    if (!whole_line) {
+        if (inside) {
+            store_changed(i, after, changed);
+        }
+        return;
+    }
+    uint out_word = after;
+    if (count < unit_words) {
+        // The guest's current word where the GPU changed nothing.
+        const uint current = guest[pc.guest_word + i];
+        out_word = changed != 0u ? after : current;
+    }
+    guest[pc.guest_word + i] = out_word;
+}

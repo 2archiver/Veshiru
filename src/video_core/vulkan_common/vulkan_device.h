@@ -67,6 +67,7 @@ VK_DEFINE_HANDLE(VmaPool)
     FEATURE(EXT, ExtendedDynamicState, EXTENDED_DYNAMIC_STATE, extended_dynamic_state)             \
     FEATURE(EXT, ExtendedDynamicState2, EXTENDED_DYNAMIC_STATE_2, extended_dynamic_state2)         \
     FEATURE(EXT, ExtendedDynamicState3, EXTENDED_DYNAMIC_STATE_3, extended_dynamic_state3)         \
+    FEATURE(EXT, GraphicsPipelineLibrary, GRAPHICS_PIPELINE_LIBRARY, graphics_pipeline_library)    \
     FEATURE(EXT, 4444Formats, 4444_FORMATS, format_a4b4g4r4)                                       \
     FEATURE(EXT, IndexTypeUint8, INDEX_TYPE_UINT8, index_type_uint8)                               \
     FEATURE(EXT, LineRasterization, LINE_RASTERIZATION, line_rasterization)                        \
@@ -123,11 +124,13 @@ VK_DEFINE_HANDLE(VmaPool)
     EXTENSION(KHR, MAINTENANCE_3, maintenance3)                                                    \
     EXTENSION(KHR, MAINTENANCE_7, maintenance7)                                                    \
     EXTENSION(KHR, MAINTENANCE_8, maintenance8)                                                    \
+    EXTENSION(KHR, PIPELINE_LIBRARY, pipeline_library)                                             \
     EXTENSION(NV, DEVICE_DIAGNOSTICS_CONFIG, device_diagnostics_config)                            \
     EXTENSION(NV, GEOMETRY_SHADER_PASSTHROUGH, geometry_shader_passthrough)                        \
     EXTENSION(NV, VIEWPORT_ARRAY2, viewport_array2)                                                \
     EXTENSION(NV, VIEWPORT_SWIZZLE, viewport_swizzle)                                              \
     EXTENSION(EXT, FILTER_CUBIC, filter_cubic)                                                     \
+    EXTENSION(EXT, EXTERNAL_MEMORY_HOST, external_memory_host)                                     \
     EXTENSION(IMG, FILTER_CUBIC, filter_cubic_img)                                                 \
     EXTENSION(QCOM, FILTER_CUBIC_WEIGHTS, filter_cubic_weights)
 
@@ -261,6 +264,10 @@ public:
     /// Reports a device loss.
     void ReportLoss() const;
 
+    /// Ends the process when submitted GPU work stopped making progress without the driver
+    /// reporting a loss (EDEN_NX2_GPU_WATCHDOG). Makes no Vulkan calls.
+    [[noreturn]] void ReportUnresponsive() const;
+
     /// Logs what VK_EXT_device_fault reports about a device loss.
     void ReportDeviceFault() const;
 
@@ -297,8 +304,15 @@ public:
     static constexpr VkDeviceSize DeviceBufferBlockSize = 8ULL << 20;
 
     /// The pool of that kind for a memory type, created on first use unless !create (null if
-    /// that failed or it doesn't exist).
-    VmaPool GetSeparatePool(SeparatePool kind, u32 memory_type, bool create = true) const;
+    /// that failed or it doesn't exist). Null for any allocator `user` but the device's own
+    /// (externally synchronized) one: a VmaPool is used only through the allocator that created it.
+    VmaPool GetSeparatePool(SeparatePool kind, u32 memory_type, VmaAllocator user,
+                            bool create = true) const;
+
+    /// Creates another VMA allocator over this device. Unlike GetAllocator(), which is externally
+    /// synchronized, it can be used from any thread (VTX-HLE's replay). The caller destroys it with
+    /// vmaDestroyAllocator() after every allocation made from it has been freed.
+    VmaAllocator CreateThreadSafeAllocator() const;
 
     /// Returns the logical device.
     const vk::Device& GetLogical() const {
@@ -379,6 +393,21 @@ public:
     }
 
     /// 2D images whose memory can be bound in parts, on the graphics queue.
+    /// Images of `type` whose memory can be bound in parts, on the graphics queue.
+    bool IsSparseResidencyImageSupported(VkImageType type) const {
+        if (!IsSparseBindingSupported()) {
+            return false;
+        }
+        switch (type) {
+        case VK_IMAGE_TYPE_2D:
+            return features.features.sparseResidencyImage2D;
+        case VK_IMAGE_TYPE_3D:
+            return features.features.sparseResidencyImage3D;
+        default:
+            return false;
+        }
+    }
+
     bool IsSparseResidencyImage2DSupported() const {
         return IsSparseBindingSupported() && features.features.sparseResidencyImage2D;
     }
@@ -686,6 +715,29 @@ FN_MAX_LIMIT_LIST
         return extensions.uniform_buffer_standard_layout;
     }
 
+    /// Returns true if the device supports VK_EXT_external_memory_host (enabled for VTX-HLE only).
+    bool IsExtExternalMemoryHostSupported() const {
+        return extensions.external_memory_host;
+    }
+
+    /// Returns true if vkCmdDrawIndirect may draw more than one command (multiDrawIndirect).
+    bool IsMultiDrawIndirectSupported() const {
+        return features.features.multiDrawIndirect;
+    }
+
+    /// Returns true if vkCmdDrawIndirectCount / vkCmdDrawIndexedIndirectCount are usable
+    /// (VK_KHR_draw_indirect_count is enabled).
+    bool IsKhrDrawIndirectCountSupported() const {
+        return extensions.draw_indirect_count;
+    }
+
+    /// Returns true if graphics pipelines can be fast-linked from VK_EXT_graphics_pipeline_library
+    /// libraries: the extension, fast linking and independent interpolation decorations are all
+    /// supported, and the nvn_pipeline_library setting asked for it on VTX-HLE.
+    bool IsExtGraphicsPipelineLibrarySupported() const {
+        return extensions.graphics_pipeline_library;
+    }
+
     /// Returns true if the device supports VK_KHR_push_descriptor.
     bool IsKhrPushDescriptorSupported() const {
         return extensions.push_descriptor;
@@ -753,6 +805,11 @@ FN_MAX_LIMIT_LIST
     /// Returns the largest patch size (control points, and TCS output vertices) a pipeline allows.
     u32 GetMaxTessellationPatchSize() const {
         return properties.properties.limits.maxTessellationPatchSize;
+    }
+
+    /// VK_EXT_mesh_shader limits (zero without the extension).
+    const VkPhysicalDeviceMeshShaderPropertiesEXT& MeshShaderProperties() const {
+        return properties.mesh_shader;
     }
 
     /// Returns true if the device supports task and mesh shaders (VK_EXT_mesh_shader).
@@ -1056,6 +1113,11 @@ FN_MAX_LIMIT_LIST
         return extensions.astc_decode_mode;
     }
 
+    /// VTX-HLE's bindless texture table (shader_recompiler/bindless_table.h): the device updates
+    /// sampled-image and sampler descriptors after binding while unused, indexes them with
+    /// non-uniform values, and holds the table's descriptors in one set.
+    bool IsBindlessTableSupported() const;
+
     /// Returns true if descriptor bindings is partially bound.
     bool IsDescriptorBindingPartiallyBoundSupported() const {
         return features.descriptor_indexing.descriptorBindingPartiallyBound;
@@ -1320,6 +1382,8 @@ FN_MAX_LIMIT_LIST
     void ShutdownGPULogging();
 
 private:
+    VmaAllocator CreateAllocator(bool externally_synchronized) const;
+
     /// Checks if the physical device is suitable and configures the object state
     /// with all necessary info about its properties.
     bool GetSuitability(bool requires_swapchain);
@@ -1419,11 +1483,14 @@ private:
         VkPhysicalDeviceSubgroupSizeControlProperties subgroup_size_control{};
         VkPhysicalDeviceTransformFeedbackPropertiesEXT transform_feedback{};
         VkPhysicalDeviceMaintenance5PropertiesKHR maintenance5{};
+        VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT graphics_pipeline_library{};
+        VkPhysicalDeviceMeshShaderPropertiesEXT mesh_shader{};
         VkPhysicalDevicePipelineBinaryPropertiesKHR pipeline_binary{};
         VkPhysicalDeviceDepthStencilResolveProperties depth_stencil_resolve{};
         VkPhysicalDeviceCustomBorderColorPropertiesEXT custom_border_color{};
         VkPhysicalDeviceCooperativeMatrixPropertiesKHR cooperative_matrix{};
         VkPhysicalDeviceShaderIntegerDotProductProperties integer_dot_product{};
+        VkPhysicalDeviceDescriptorIndexingProperties descriptor_indexing{};
 
         VkPhysicalDeviceProperties properties{};
     };

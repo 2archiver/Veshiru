@@ -53,7 +53,7 @@ public:
     ResultStatus ReadIcon(std::vector<u8>& buffer) override;
     ResultStatus ReadOriginalIcon(std::vector<u8>& buffer) const;
     ResultStatus ReadTitle(std::string& title) override;
-    ResultStatus ReadControlData(FileSys::NACP& nacp) override;
+    ResultStatus ReadControlData(FileSys::NACP& nacp) const override;
     ResultStatus ReadManualRomFS(FileSys::VirtualFile& out_file) override;
 
     ResultStatus ReadBanner(std::vector<u8>& buffer) override;

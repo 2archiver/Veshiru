@@ -197,6 +197,63 @@ bool IsBootableGameContainer(FileSys::VirtualFile file, FileType type, u64 progr
     return HasApplicationProgramContent(OpenContainerAsNsp(file, type, program_id, program_index));
 }
 
+bool IsSwitch2Program(FileSys::VirtualFile file, u64 program_id, std::size_t program_index) {
+    FileSys::ProgramMetadata metadata;
+    if (FileSys::NupContainer::IsNupFile(file)) {
+        FileSys::NupContainer nup{file};
+        if (nup.GetStatus() != ResultStatus::Success) {
+            return false;
+        }
+        const auto base = nup.FindBasePackage();
+        const auto update = nup.FindBestUpdatePackage();
+        std::optional<std::size_t> program;
+        if (update && nup.GetExeFSDir(*update) != nullptr) {
+            program = update;
+        } else if (base && nup.GetExeFSDir(*base) != nullptr) {
+            program = base;
+        }
+        const auto exefs = program ? nup.GetExeFSDir(*program) : nullptr;
+        const auto npdm = exefs != nullptr ? exefs->GetFile("main.npdm") : nullptr;
+        return npdm != nullptr && metadata.Load(npdm) == ResultStatus::Success &&
+               metadata.IsSwitch2();
+    }
+    const auto type = file != nullptr ? IdentifyFile(file) : FileType::Unknown;
+    if (type == FileType::XCI || type == FileType::XCZ) {
+        const FileSys::XCI xci{file, program_id, program_index};
+        if (xci.GetStatus() != ResultStatus::Success) {
+            return false;
+        }
+        const auto partition = xci.GetSecurePartitionNSP();
+        const auto program =
+            partition != nullptr
+                ? partition->GetNCA(xci.GetProgramTitleID(), FileSys::ContentRecordType::Program)
+                : nullptr;
+        const auto exefs = program != nullptr ? program->GetExeFS() : nullptr;
+        const auto npdm = exefs != nullptr ? exefs->GetFile("main.npdm") : nullptr;
+        return npdm != nullptr && metadata.Load(npdm) == ResultStatus::Success &&
+               metadata.IsSwitch2();
+    }
+    if (type == FileType::NSP || type == FileType::NSZ) {
+        const FileSys::NSP nsp{file, program_id, program_index};
+        if (nsp.GetStatus() != ResultStatus::Success) {
+            return false;
+        }
+        auto exefs = nsp.GetExeFS();
+        if (!nsp.IsExtractedType()) {
+            const auto program =
+                nsp.GetNCA(nsp.GetProgramTitleID(), FileSys::ContentRecordType::Program);
+            exefs = program != nullptr ? program->GetExeFS() : nullptr;
+        }
+        const auto npdm = exefs != nullptr ? exefs->GetFile("main.npdm") : nullptr;
+        return npdm != nullptr && metadata.Load(npdm) == ResultStatus::Success &&
+               metadata.IsSwitch2();
+    }
+    const auto dir = file != nullptr ? file->GetContainingDirectory() : nullptr;
+    const auto npdm = dir != nullptr ? dir->GetFile("main.npdm") : nullptr;
+    return npdm != nullptr && metadata.Load(npdm) == ResultStatus::Success &&
+           metadata.IsSwitch2();
+}
+
 bool IsMissingKeyStatus(ResultStatus status) {
     return status == ResultStatus::ErrorMissingProductionKeyFile ||
            status == ResultStatus::ErrorMissingHeaderKey ||

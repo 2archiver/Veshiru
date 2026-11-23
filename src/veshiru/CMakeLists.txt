@@ -166,6 +166,8 @@ add_executable(veshiru
     configuration/input_profiles.h
     configuration/shared_widget.cpp
     configuration/shared_widget.h
+    configuration/vtx_hle_grey.cpp
+    configuration/vtx_hle_grey.h
     debugger/controller.cpp
     debugger/controller.h
 

@@ -2150,14 +2150,19 @@ void Decompress(std::span<const uint8_t> data, uint32_t width, uint32_t height, 
     workers.WaitForRequests();
 }
 
-// What IsOpaque needs from a block's 11 mode bits, which are all DecodeBlockInfo reads (a void
-// extent block also needs bits 10 and 11 set, checked per block).
+// What IsOpaque and ClassifyChannels need from a block's 11 mode bits, which are all
+// DecodeBlockInfo reads (a void extent block also needs bits 10 and 11 set, checked per block).
 struct BlockModeInfo {
     bool error;
     bool void_extent;
     bool void_extent_hdr;
     bool dual_plane;
+    /// More than 64 weights: both decoders fill the block with the error colour.
+    bool too_many_weights;
     u16 weight_bits;
+    /// The weight grid; one larger than the block's footprint decodes to the error colour.
+    u8 grid_width;
+    u8 grid_height;
 };
 
 static std::array<BlockModeInfo, 2048> MakeBlockModeInfos() {
@@ -2172,11 +2177,70 @@ static std::array<BlockModeInfo, 2048> MakeBlockModeInfos() {
         info.void_extent_hdr = params.m_bVoidExtentHDR;
         info.error = params.m_bError && !info.void_extent;
         info.dual_plane = params.m_bDualPlane;
-        info.weight_bits = info.error || info.void_extent
-                               ? u16{0}
-                               : static_cast<u16>(params.GetPackedBitSize());
+        const bool weights = !info.error && !info.void_extent;
+        info.too_many_weights = weights && params.GetNumWeightValues() > 64;
+        info.weight_bits = weights ? static_cast<u16>(params.GetPackedBitSize()) : u16{0};
+        info.grid_width = weights ? static_cast<u8>(params.m_Width) : u8{0};
+        info.grid_height = weights ? static_cast<u8>(params.m_Height) : u8{0};
     }
     return infos;
+}
+
+// Decoding each block's mode bit by bit took ~12% of title 1's long frames, where every new ASTC
+// texture is scanned (its title screen streams them in by the thousand).
+static const std::array<BlockModeInfo, 2048>& BlockModeInfos() {
+    static const std::array<BlockModeInfo, 2048> mode_infos = MakeBlockModeInfos();
+    return mode_infos;
+}
+
+// The colour endpoint modes of a block's partitions, bit n for mode n. `extra_bits` is set to the
+// number of mode bits that sit just below the weights (DecompressBlock); reading them needs a
+// `weight_bits` of 24 to 96.
+// `endpoint_values` (optional): the colour endpoint integers all partitions need together (a
+// mode m endpoint pair takes (m / 4 + 1) * 2 of them).
+static u32 PartitionModes(std::span<const u8> block, u32 low, u32 partitions, u32 weight_bits,
+                          u32& extra_bits, u32* endpoint_values = nullptr) {
+    const auto values_of = [](u32 mode) { return ((mode >> 2) + 1) * 2; };
+    extra_bits = 0;
+    if (endpoint_values != nullptr) {
+        *endpoint_values = 0;
+    }
+    if (partitions == 1) {
+        const u32 mode = (low >> 13) & 0xF;
+        if (endpoint_values != nullptr) {
+            *endpoint_values = values_of(mode);
+        }
+        return 1U << mode;
+    }
+    // Bits 13-22 are the partition index.
+    const u32 base_cem = (low >> 23) & 0x3F;
+    const u32 base_mode = base_cem & 3;
+    if (base_mode == 0) {
+        if (endpoint_values != nullptr) {
+            *endpoint_values = partitions * values_of(base_cem >> 2);
+        }
+        return 1U << (base_cem >> 2);
+    }
+    extra_bits = partitions == 2 ? 2 : partitions == 3 ? 5 : 8;
+    const u32 extra_offset = 128 - weight_bits - extra_bits;
+    u32 extra = 0;
+    for (u32 bit = 0; bit < extra_bits; ++bit) {
+        const u32 position = extra_offset + bit;
+        extra |= ((block[position / 8] >> (position % 8)) & 1U) << bit;
+    }
+    u32 cem = ((extra << 6) | base_cem) >> 2;
+    const u32 classes = cem;
+    cem >>= partitions;
+    u32 modes = 0;
+    for (u32 i = 0; i < partitions; ++i) {
+        const u32 mode = ((base_mode - (((classes >> i) & 1) != 0 ? 0 : 1)) << 2) |
+                         ((cem >> (2 * i)) & 3);
+        modes |= 1U << mode;
+        if (endpoint_values != nullptr) {
+            *endpoint_values += values_of(mode);
+        }
+    }
+    return modes;
 }
 
 bool IsOpaque(std::span<const uint8_t> data) {
@@ -2184,9 +2248,7 @@ bool IsOpaque(std::span<const uint8_t> data) {
     // (10), LDR RGBA (12, 13) and HDR RGBA (14, 15).
     constexpr u32 AlphaModes = (1U << 4) | (1U << 5) | (1U << 10) | (1U << 12) | (1U << 13) |
                                (1U << 14) | (1U << 15);
-    // Decoding each block's mode bit by bit took ~12% of title 1's long frames, where every
-    // new ASTC texture is scanned (its title screen streams them in by the thousand).
-    static const std::array<BlockModeInfo, 2048> mode_infos = MakeBlockModeInfos();
+    const std::array<BlockModeInfo, 2048>& mode_infos = BlockModeInfos();
     for (size_t offset = 0; offset + 16 <= data.size(); offset += 16) {
         const std::span<const u8> block = data.subspan(offset, 16);
         u32 low;
@@ -2210,45 +2272,121 @@ bool IsOpaque(std::span<const uint8_t> data) {
         if (partitions == 4 && info.dual_plane) {
             continue;
         }
-        if (partitions == 1) {
-            if ((AlphaModes >> ((low >> 13) & 0xF)) & 1) {
-                return false;
-            }
-            continue;
-        }
-        // Bits 13-22 are the partition index.
-        const u32 base_cem = (low >> 23) & 0x3F;
-        const u32 base_mode = base_cem & 3;
-        if (base_mode == 0) {
-            if ((AlphaModes >> (base_cem >> 2)) & 1) {
-                return false;
-            }
-            continue;
-        }
-        // The rest of the per-partition modes sit just below the weights (DecompressBlock).
         const u32 weight_bits = info.weight_bits;
-        if (weight_bits < 24 || weight_bits > 96) {
+        if (partitions > 1 && ((low >> 23) & 3) != 0 && (weight_bits < 24 || weight_bits > 96)) {
             continue;
         }
-        const u32 extra_bits = partitions == 2 ? 2 : partitions == 3 ? 5 : 8;
-        const u32 extra_offset = 128 - weight_bits - extra_bits;
-        u32 extra = 0;
-        for (u32 bit = 0; bit < extra_bits; ++bit) {
-            const u32 position = extra_offset + bit;
-            extra |= ((block[position / 8] >> (position % 8)) & 1U) << bit;
-        }
-        u32 cem = ((extra << 6) | base_cem) >> 2;
-        const u32 classes = cem;
-        cem >>= partitions;
-        for (u32 i = 0; i < partitions; ++i) {
-            const u32 mode = ((base_mode - (((classes >> i) & 1) != 0 ? 0 : 1)) << 2) |
-                             ((cem >> (2 * i)) & 3);
-            if ((AlphaModes >> mode) & 1) {
-                return false;
-            }
+        u32 extra_bits;
+        if ((PartitionModes(block, low, partitions, weight_bits, extra_bits) & AlphaModes) != 0) {
+            return false;
         }
     }
     return true;
+}
+
+Channels ClassifyChannels(std::span<const uint8_t> data, uint32_t block_width,
+                          uint32_t block_height, bool* empty) {
+    // Luminance (0, 1) and luminance+alpha (4, 5) endpoints decode to R = G = B; LDR alpha comes
+    // from 4, 5, 10, 12 and 13. HDR endpoints (2, 3, 7, 11, 14, 15) count as RGBA.
+    constexpr u32 ColourModes = 0xFFC0;
+    constexpr u32 AlphaModes = (1U << 4) | (1U << 5) | (1U << 10) | (1U << 12) | (1U << 13);
+    constexpr u32 HdrModes =
+        (1U << 2) | (1U << 3) | (1U << 7) | (1U << 11) | (1U << 14) | (1U << 15);
+    constexpr u32 Colour = static_cast<u32>(Channels::Rgb);
+    constexpr u32 Alpha = static_cast<u32>(Channels::LuminanceAlpha);
+    constexpr u32 Everything = static_cast<u32>(Channels::Rgba);
+    const std::array<BlockModeInfo, 2048>& mode_infos = BlockModeInfos();
+    if (empty != nullptr) {
+        *empty = false;
+    }
+    u32 found = 0;
+    bool any_block = false;
+    for (size_t offset = 0; offset + 16 <= data.size(); offset += 16) {
+        const std::span<const u8> block = data.subspan(offset, 16);
+        u32 low;
+        std::memcpy(&low, block.data(), sizeof(low));
+        const BlockModeInfo& info = mode_infos[low & 0x7FF];
+        if (info.error) {
+            // All zero: the padding of a block-linear layout (rows to whole GOBs, levels and
+            // layers to their alignment), which nothing samples. Other blocks a decoder fills with
+            // the error colour (0, 0, 0, 0), or that the two decoders may read differently, are
+            // RGBA: encoders do not write them.
+            u64 high;
+            u32 middle;
+            std::memcpy(&middle, block.data() + 4, sizeof(middle));
+            std::memcpy(&high, block.data() + 8, sizeof(high));
+            if ((low | middle | high) == 0) {
+                continue;
+            }
+            return Channels::Rgba;
+        }
+        any_block = true;
+        if (info.void_extent) {
+            if ((low & 0xC00) != 0xC00 || info.void_extent_hdr) {
+                return Channels::Rgba;
+            }
+            // One RGBA16 UNORM colour in bits 64-127.
+            std::array<u16, 4> rgba;
+            std::memcpy(rgba.data(), block.data() + 8, sizeof(rgba));
+            if (rgba[0] != rgba[1] || rgba[1] != rgba[2]) {
+                found |= Colour;
+            }
+            if (rgba[3] != 0xFFFF) {
+                found |= Alpha;
+            }
+        } else {
+            const u32 partitions = ((low >> 11) & 3) + 1;
+            const u32 weight_bits = info.weight_bits;
+            if (info.too_many_weights || info.grid_width > block_width ||
+                info.grid_height > block_height || (partitions == 4 && info.dual_plane) ||
+                weight_bits < 24 || weight_bits > 96) {
+                return Channels::Rgba;
+            }
+            u32 extra_bits;
+            u32 endpoint_values;
+            const u32 modes =
+                PartitionModes(block, low, partitions, weight_bits, extra_bits, &endpoint_values);
+            // Mode, partition count and CEM fields, then the colour data below the weights.
+            const u32 header_bits = partitions == 1 ? 17 : 29;
+            const u32 selector_bits = info.dual_plane ? 2 : 0;
+            if ((modes & HdrModes) != 0 || endpoint_values > 18 ||
+                header_bits + extra_bits + selector_bits + weight_bits > 128) {
+                return Channels::Rgba;
+            }
+            // Error blocks: the colour bits cannot hold the endpoints even at the smallest
+            // endpoint range (6 levels, 13 bits per 5 values).
+            const u32 colour_bits = 128 - header_bits - extra_bits - selector_bits - weight_bits;
+            if (colour_bits < (13 * endpoint_values + 4) / 5) {
+                return Channels::Rgba;
+            }
+            if ((modes & ColourModes) != 0) {
+                found |= Colour;
+            }
+            if ((modes & AlphaModes) != 0) {
+                found |= Alpha;
+            }
+            if (info.dual_plane && (found & Colour) == 0) {
+                // The second weight plane on R, G or B splits luminance endpoints into colours;
+                // on alpha (selector 3) the three stay equal.
+                const u32 position = 128 - weight_bits - extra_bits - selector_bits;
+                u32 selector = 0;
+                for (u32 bit = 0; bit < 2; ++bit) {
+                    selector |= ((block[(position + bit) / 8] >> ((position + bit) % 8)) & 1U)
+                                << bit;
+                }
+                if (selector != 3) {
+                    found |= Colour;
+                }
+            }
+        }
+        if (found == Everything) {
+            return Channels::Rgba;
+        }
+    }
+    if (empty != nullptr) {
+        *empty = !any_block;
+    }
+    return static_cast<Channels>(found);
 }
 
 } // namespace Tegra::Texture::ASTC

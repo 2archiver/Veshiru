@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "common/math_util.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -20,6 +22,17 @@ public:
     VkImageView Draw(const Device& device, Scheduler& scheduler, size_t image_index, VkImage source_image,
                      VkImageView source_image_view, VkExtent2D input_image_extent,
                      const Common::Rectangle<f32>& crop_rect);
+    /// Records EASU and RCAS into an already-open command buffer (VTX-HLE's replay). Unlike
+    /// Draw(), this does not go through the scheduler.
+    VkImageView Record(const Device& device, vk::CommandBuffer cmdbuf, size_t image_index,
+                       VkImage source_image, VkImageView source_image_view,
+                       VkExtent2D input_image_extent, const Common::Rectangle<f32>& crop_rect);
+    [[nodiscard]] VkImage ResultImage(size_t image_index) const;
+    /// The descriptor sets of the last Record(); the caller keeps them alive until the command
+    /// buffer that bound them has completed.
+    [[nodiscard]] std::shared_ptr<void> TakeRecordResources() {
+        return std::move(m_record_descriptor_sets);
+    }
 
 private:
     void CreateImages(const Device& device);
@@ -64,6 +77,13 @@ private:
     };
     std::vector<Images> m_dynamic_images;
     bool m_images_ready{};
+
+    struct RecordDescriptorSets {
+        vk::DescriptorPool pool;
+        vk::DescriptorSets sets;
+    };
+    std::shared_ptr<RecordDescriptorSets> m_record_descriptor_sets;
+    bool m_record_images_ready{};
 };
 
 } // namespace Vulkan

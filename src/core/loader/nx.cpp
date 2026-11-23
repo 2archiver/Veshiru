@@ -1102,7 +1102,7 @@ ResultStatus AppLoader_NX::ReadPublisher(std::string& publisher) const {
     return ResultStatus::Success;
 }
 
-ResultStatus AppLoader_NX::ReadControlData(FileSys::NACP& control) {
+ResultStatus AppLoader_NX::ReadControlData(FileSys::NACP& control) const {
     if (impl->status != ResultStatus::Success) {
         return impl->status;
     }

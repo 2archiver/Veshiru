@@ -586,6 +586,7 @@ public:
                 if (!ParseTitleId(title_name) || !title.is_directory(ec)) {
                     continue;
                 }
+                const auto count_before = addons.size();
                 for (const auto& content : fs::directory_iterator(title.path(), ec)) {
                     if (content.is_directory(ec) && HasContent(content.path())) {
                         // dlc/<title_id>/<version>/ is a versioned add-on dump. Preserve the
@@ -598,6 +599,10 @@ public:
                         addons.emplace_back(title_name + "/" + ToUtf8(content.path().filename()),
                                             content.path());
                     }
+                }
+                // Also support dlc/<title_id>/romfs/ (unversioned add-on layout -> version 0).
+                if (addons.size() == count_before && HasContent(title.path())) {
+                    addons.emplace_back(title_name + "/0", title.path());
                 }
             }
             std::ranges::sort(addons);
@@ -711,15 +716,25 @@ private:
         bool have_icon = false;
         for (const auto& [index, loader] : loaders) {
             NACP control;
-            if (!have_control &&
-                loader->ReadControlData(control) == Loader::ResultStatus::Success) {
-                have_control = true;
-                tlvs.emplace_back(TlvNacp, control.GetRawBytes());
-                if (const auto name = control.GetApplicationName(); !name.empty()) {
-                    tlvs.emplace_back(TlvTitleName, StringBytes(name));
+            if (loader->ReadControlData(control) == Loader::ResultStatus::Success) {
+                const auto raw_bytes = control.GetRawBytes();
+                if (std::ranges::none_of(package_tlvs[index],
+                                         [](const auto& tlv) { return tlv.first == TlvNacp; })) {
+                    package_tlvs[index].emplace_back(TlvNacp, raw_bytes);
                 }
-                if (const auto publisher = control.GetDeveloperName(); !publisher.empty()) {
-                    tlvs.emplace_back(TlvPublisher, StringBytes(publisher));
+                if (!have_control) {
+                    have_control = true;
+                    if (index != target &&
+                        std::ranges::none_of(tlvs,
+                                             [](const auto& tlv) { return tlv.first == TlvNacp; })) {
+                        tlvs.emplace_back(TlvNacp, raw_bytes);
+                    }
+                    if (const auto name = control.GetApplicationName(); !name.empty()) {
+                        tlvs.emplace_back(TlvTitleName, StringBytes(name));
+                    }
+                    if (const auto publisher = control.GetDeveloperName(); !publisher.empty()) {
+                        tlvs.emplace_back(TlvPublisher, StringBytes(publisher));
+                    }
                 }
             }
             std::vector<u8> icon;

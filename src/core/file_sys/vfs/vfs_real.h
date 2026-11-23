@@ -25,10 +25,13 @@ struct NativeReadHandle;
 #endif
 
 struct FileReference : public Common::IntrusiveListBaseNode<FileReference> {
+    std::string path;
+    std::optional<u64> size;
     std::shared_ptr<Common::FS::IOFile> file{};
 #ifdef _WIN32
     std::shared_ptr<NativeReadHandle> read_handle{};
 #endif
+    bool detached{};
 };
 
 class RealVfsFile;
@@ -57,7 +60,12 @@ public:
 
 private:
     using ReferenceListType = Common::IntrusiveListBaseTraits<FileReference>::ListType;
-    std::map<std::string, std::weak_ptr<VfsFile>, std::less<>> cache;
+    struct CacheEntry {
+        std::weak_ptr<VfsFile> file;
+        FileReference* reference;
+    };
+    using FileCache = std::map<std::string, CacheEntry, std::less<>>;
+    FileCache cache;
     ReferenceListType open_references;
 #ifdef _WIN32
     ReferenceListType open_read_references;
@@ -73,13 +81,11 @@ private:
 
 private:
     friend class RealVfsFile;
-    std::unique_lock<std::shared_mutex> RefreshReference(const std::string& path, OpenMode perms,
-                                                         FileReference& reference);
+    void RefreshReferenceLocked(FileReference& reference, OpenMode perms);
 #ifdef _WIN32
-    std::shared_ptr<NativeReadHandle> AcquireReadHandle(const std::string& path,
-                                                        FileReference& reference);
+    std::shared_ptr<NativeReadHandle> AcquireReadHandle(FileReference& reference);
 #endif
-    void DropReference(std::unique_ptr<FileReference>&& reference, const std::string& path);
+    void DropReference(FileReference& reference);
 
 private:
     friend class RealVfsDirectory;
@@ -87,12 +93,15 @@ private:
                                   OpenMode perms = OpenMode::Read);
 
 private:
+    VirtualFile OpenFileLocked(const std::string& path, std::optional<u64> size, OpenMode perms);
+    bool RenameFileLocked(const std::string& old_path, const std::string& new_path);
+    Result DeleteFileWithResult(std::string_view path);
+    void DetachReferenceLocked(FileCache::iterator entry);
     void EvictSingleReferenceLocked();
 #ifdef _WIN32
     void EvictSingleReadReferenceLocked();
 #endif
     void CloseReferenceLocked(FileReference& reference);
-    void UncacheFileLocked(const std::string& path);
     void UncacheDirectoryLocked(std::string_view dir_path);
     void InsertReferenceIntoListLocked(FileReference& reference);
     void RemoveReferenceFromListLocked(FileReference& reference);
@@ -104,9 +113,7 @@ class RealVfsFile : public VfsFile {
     friend class RealVfsFilesystem;
 
 public:
-    RealVfsFile(RealVfsFilesystem& base, std::unique_ptr<FileReference> reference,
-                const std::string& path, OpenMode perms = OpenMode::Read,
-                std::optional<u64> size = {});
+    RealVfsFile(RealVfsFilesystem& base, std::unique_ptr<FileReference> reference, OpenMode perms);
     ~RealVfsFile() override;
 
     std::string GetName() const override;
@@ -120,12 +127,8 @@ public:
     bool Rename(std::string_view name) override;
 
 private:
-
     RealVfsFilesystem& base;
     std::unique_ptr<FileReference> reference;
-    // Only the path: a loose RomFS keeps one of these per file (title 1: 206k).
-    std::string path;
-    std::optional<u64> size;
     OpenMode perms;
 };
 
@@ -156,6 +159,7 @@ public:
     VirtualFile CreateFile(std::string_view name) override;
     bool DeleteSubdirectory(std::string_view name) override;
     bool DeleteFile(std::string_view name) override;
+    Result DeleteFileWithResult(std::string_view name) override;
     bool Rename(std::string_view name) override;
     std::string GetFullPath() const override;
     std::map<std::string, VfsEntryType, std::less<>> GetEntries() const override;

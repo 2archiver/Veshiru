@@ -324,7 +324,8 @@ u64 CoreTiming::GetClockTicks() const {
     // push its guest time 1.7x ahead of wall time (see GameSettings::NeedsGuestClockPacing).
     const auto cpu_clock = GameSettings::CpuClockHeldAtNormal() ? Settings::CpuClock::Normal
                                                                : Settings::values.cpu_clock.GetValue();
-    if (const u32 target = CpuClockTargetMhz(cpu_clock); target != CPU_CLOCK_BASE_MHZ) {
+    if (const u32 target = CpuClockTargetMhz(cpu_clock);
+        target != CPU_CLOCK_BASE_MHZ && !Settings::CurrentProgramIsSwitch2()) {
         fres = fres * target / CPU_CLOCK_BASE_MHZ;
     }
     if (::Settings::values.sync_core_speed.GetValue()) {

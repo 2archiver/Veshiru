@@ -77,12 +77,31 @@ VirtualFile RomFSFactory::OpenPatchedRomFSWithProgramIndex(u64 title_id, u8 prog
 }
 
 VirtualFile RomFSFactory::Open(u64 title_id, StorageId storage, ContentRecordType type) const {
+    if (type == ContentRecordType::Data) {
+        if (const auto it = loose_aoc.find(title_id); it != loose_aoc.end()) {
+            return it->second;
+        }
+    }
+
     const std::shared_ptr<NCA> res = GetEntry(title_id, storage, type);
     if (res == nullptr) {
         return nullptr;
     }
 
     return res->GetRomFS();
+}
+
+void RomFSFactory::SetLooseAOC(u64 title_id, VirtualFile romfs) {
+    loose_aoc.insert_or_assign(title_id, std::move(romfs));
+}
+
+std::vector<u64> RomFSFactory::GetLooseAOCTitleIDs() const {
+    std::vector<u64> ids;
+    ids.reserve(loose_aoc.size());
+    for (const auto& [title_id, _] : loose_aoc) {
+        ids.push_back(title_id);
+    }
+    return ids;
 }
 
 std::shared_ptr<NCA> RomFSFactory::GetEntry(u64 title_id, StorageId storage,
@@ -98,6 +117,7 @@ std::shared_ptr<NCA> RomFSFactory::GetEntry(u64 title_id, StorageId storage,
         return filesystem_controller.GetSDMCContents()->GetEntry(title_id, type);
     case StorageId::Host:
     case StorageId::GameCard:
+        return content_provider.GetEntry(title_id, type);
     default:
         UNIMPLEMENTED_MSG("Unimplemented storage_id={:02X}", static_cast<u8>(storage));
         return nullptr;

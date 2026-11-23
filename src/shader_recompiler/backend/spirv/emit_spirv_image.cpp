@@ -6,6 +6,7 @@
 #include <boost/container/static_vector.hpp>
 
 #include "common/settings.h"
+#include "shader_recompiler/bindless_table.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
@@ -238,8 +239,49 @@ private:
     spv::ImageOperandsMask mask{};
 };
 
+// The bindless table's image of a rebased handle word (texture id in bits 0..19) and, for a
+// sampled access, the sampler of its sampler id (bits 20..): the ids index arrays the host fills
+// from the game's pool registrations. An id past the capacity reads the last entry.
+Id BindlessIndex(EmitContext& ctx, Id handle, bool sampler) {
+    const Id id{sampler ? ctx.OpShiftRightLogical(ctx.U32[1], handle, ctx.Const(20U))
+                        : ctx.OpBitwiseAnd(ctx.U32[1], handle, ctx.Const(0xFFFFFU))};
+    const Id limit{ctx.Const((sampler ? BINDLESS_SAMPLER_CAPACITY : BINDLESS_TEXTURE_CAPACITY) -
+                             1)};
+    const Id clamped{ctx.OpUMin(ctx.U32[1], id, limit)};
+    DecorateNonUniform(ctx, clamped);
+    ctx.uses_nonuniform_sampled_image = true;
+    return clamped;
+}
+
+Id BindlessImage(EmitContext& ctx, const TextureDefinition& def, const IR::Value& handle_value) {
+    const Id handle{ctx.Def(handle_value)};
+    const Id pointer{
+        ctx.OpAccessChain(def.pointer_type, def.id, BindlessIndex(ctx, handle, false))};
+    const Id image{ctx.OpLoad(def.image_type, pointer)};
+    DecorateNonUniform(ctx, pointer);
+    DecorateNonUniform(ctx, image);
+    return image;
+}
+
+Id BindlessSampled(EmitContext& ctx, const TextureDefinition& def, const IR::Value& handle_value) {
+    const Id handle{ctx.Def(handle_value)};
+    const Id image{BindlessImage(ctx, def, handle_value)};
+    const Id sampler_pointer{ctx.OpAccessChain(ctx.bindless_sampler_pointer_type,
+                                               ctx.bindless_samplers,
+                                               BindlessIndex(ctx, handle, true))};
+    const Id sampler{ctx.OpLoad(ctx.bindless_sampler_type, sampler_pointer)};
+    DecorateNonUniform(ctx, sampler_pointer);
+    DecorateNonUniform(ctx, sampler);
+    const Id combined{ctx.OpSampledImage(def.sampled_type, image, sampler)};
+    DecorateNonUniform(ctx, combined);
+    return combined;
+}
+
 Id Texture(EmitContext& ctx, IR::TextureInstInfo info, [[maybe_unused]] const IR::Value& index) {
     const TextureDefinition& def{ctx.textures.at(info.descriptor_index)};
+    if (def.bindless) {
+        return BindlessSampled(ctx, def, index);
+    }
     if (def.count > 1) {
         auto const idx = index.IsImmediate() ? ctx.Const(index.U32()) : ctx.Def(index);
         const bool non_uniform{MarkNonUniform(ctx, idx, index, NonUniformKind::SampledImage)};
@@ -273,6 +315,9 @@ Id TextureImage(EmitContext& ctx, IR::TextureInstInfo info, const IR::Value& ind
         return ctx.OpLoad(ctx.image_buffer_type, def.id);
     } else {
         const TextureDefinition& def{ctx.textures.at(info.descriptor_index)};
+        if (def.bindless) {
+            return BindlessImage(ctx, def, index);
+        }
         if (def.count > 1) {
             auto const idx = index.IsImmediate() ? ctx.Const(index.U32()) : ctx.Def(index);
             const bool non_uniform{MarkNonUniform(ctx, idx, index, NonUniformKind::SampledImage)};

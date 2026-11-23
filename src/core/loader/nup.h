@@ -52,7 +52,8 @@ public:
     ResultStatus ReadProgramIds(std::vector<u64>& out_program_ids) override;
     ResultStatus ReadIcon(std::vector<u8>& buffer) override;
     ResultStatus ReadTitle(std::string& title) override;
-    ResultStatus ReadControlData(FileSys::NACP& control) override;
+    ResultStatus ReadDisplayVersion(std::string& version) override;
+    ResultStatus ReadControlData(FileSys::NACP& control) const override;
     ResultStatus ReadNSOModules(Modules& modules) override;
     ResultStatus ReadAddOnTitleIds(std::vector<u64>& out_title_ids) override;
     ResultStatus ReadAddOnRomFS(u64 title_id, FileSys::VirtualFile& out_file) override;
@@ -73,9 +74,15 @@ public:
     }
 
 private:
+    u64 AddonApplicationId() const;
+    bool MatchesAddonTitle(u64 addon_title_id) const;
+    void EnsureCompanionAddons() const;
+
     std::unique_ptr<FileSys::NupContainer> nup;
     std::unique_ptr<FileSys::NupContainer> base_nup;
     std::optional<std::size_t> base_nup_index;
+    mutable std::vector<std::unique_ptr<FileSys::NupContainer>> companion_addon_nups;
+    mutable bool companion_addons_searched{};
     std::optional<std::size_t> selected_update_index;
     std::unique_ptr<AppLoader> secondary_loader;
 
@@ -89,7 +96,7 @@ private:
     bool has_program{};
     // Filesystem service threads may request different carried add-ons concurrently.
     std::map<u64, FileSys::VirtualFile> addon_romfs;
-    std::mutex addon_romfs_mutex;
+    mutable std::mutex addon_romfs_mutex;
 };
 
 } // namespace Loader

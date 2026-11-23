@@ -134,6 +134,31 @@ struct Profile {
     u64 min_ssbo_alignment{};
     u32 max_user_clip_distances{};
 
+    /// VTX-HLE only: emit untracked global memory accesses through VK_KHR_buffer_device_address
+    /// (PhysicalStorageBuffer64). The device addresses come from a table of
+    /// {guest address, device address, size} entries (sorted by guest address, never overlapping)
+    /// in device memory; the driver bank (c0) holds the entry count (u32) at
+    /// RAW_GLOBAL_TABLE_OFFSET and the table's device address (u64) at
+    /// RAW_GLOBAL_TABLE_ADDRESS_OFFSET, past every word NVN2 defines in that bank (the mesh
+    /// stage's storage table ends at 0x870, the mesh-task dimensions at 0x8ec). A program
+    /// translated with HostTranslateInfo::nvn_raw_global_table_ssbo reads the table from its last
+    /// storage buffer instead: u32 words, the entry count at word 0 and the entries from
+    /// RAW_GLOBAL_TABLE_SSBO_ENTRIES_WORD. Needs int64 and the buffer device address feature.
+    bool support_raw_global_memory{};
+    static constexpr u32 RAW_GLOBAL_TABLE_OFFSET{0xF00};
+    static constexpr u32 RAW_GLOBAL_TABLE_ADDRESS_OFFSET{0xF08};
+    static constexpr u32 RAW_GLOBAL_TABLE_ENTRY_SIZE{24};
+    static constexpr u32 RAW_GLOBAL_TABLE_SSBO_ENTRIES_WORD{4};
+    /// HostTranslateInfo::raw_global_store_alias (driver bank table only): ranges raw stores
+    /// also write through to. Same entry layout and order as the raw table; c0 holds its entry
+    /// count (u32), device address (u64) and guest bounds [low, high) of its entries (u64 each;
+    /// count 0 leaves them 0, so no address is inside). After the raw coverage ring's address
+    /// (RawCoverage::BANK_RING_OFFSET, 0xF10).
+    static constexpr u32 RAW_GLOBAL_ALIAS_COUNT_OFFSET{0xF18};
+    static constexpr u32 RAW_GLOBAL_ALIAS_ADDRESS_OFFSET{0xF20};
+    static constexpr u32 RAW_GLOBAL_ALIAS_LOW_OFFSET{0xF28};
+    static constexpr u32 RAW_GLOBAL_ALIAS_HIGH_OFFSET{0xF30};
+
     bool SupportsSubgroupStage(Stage stage) const {
         return (supported_subgroup_stages & (1u << static_cast<u32>(stage))) != 0;
     }
