@@ -27,21 +27,7 @@ namespace {
 
 using namespace VideoCommon::Nvn;
 
-constexpr u64 AldAttribute(u32 rd, u32 byte_offset) {
-    return 0xefd8000000000000ULL | (u64{0xff} << 39) | (u64{byte_offset} << 20) | (u64{0xff} << 8) |
-           rd;
-}
-constexpr u64 AstAttribute(u32 rs, u32 byte_offset) {
-    return 0xeff0000000000000ULL | (u64{0xff} << 39) | (u64{byte_offset} << 20) | (u64{0xff} << 8) |
-           rs;
-}
-constexpr u64 FmulReg(u32 rd, u32 ra, u32 rb) {
-    return 0x5c68000000000000ULL | (u64{rb} << 20) | (u64{ra} << 8) | rd;
-}
 constexpr u64 Exit = 0xe30000000007000fULL;
-
-constexpr u32 AttributeGeneric0 = 0x80;
-constexpr u32 AttributePositionX = 0x70;
 
 class VertexEnvironment final : public Shader::Environment {
 public:

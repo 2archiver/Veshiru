@@ -3438,9 +3438,9 @@ TEST_CASE("NVN draw: with asynchronous shaders only the draws the emulated path 
         return std::array<Inst, 6>{{AddImm(0, 255, ONE_64TH), AddImm(1, 255, ONE_64TH),
                                     AddImm(2, 255, z), AddImm(3, 255, ONE), AstPosition, Exit}};
     };
-    const auto small = point(0);
+    const auto small_prog = point(0);
     const auto large = point(0x3e800000);
-    context.CreateProgram(MakeVertexProgram(VERTEX_PROGRAM, small));
+    context.CreateProgram(MakeVertexProgram(VERTEX_PROGRAM, small_prog));
     context.CreateProgram(MakeVertexProgram(VERTEX_PROGRAM + 1, large));
     // Every vertex stores 0x1337 at word 0 of storage buffer 0; the header says so.
     const auto store = StoreProgram(0, 0x1337);

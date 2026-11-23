@@ -138,9 +138,9 @@ TEST_CASE("Rescale: a pass is scaled only when every attachment is eligible", "[
     CHECK(scaled(X2, color, &depth));
     CHECK_FALSE(scaled(X1, color, &depth));
     // One attachment that cannot scale makes the whole pass guest-sized.
-    Shape small = SceneColor();
-    small.height = 200;
-    const std::array<Shape, 2> mixed{SceneColor(), small};
+    Shape small_shape = SceneColor();
+    small_shape.height = 200;
+    const std::array<Shape, 2> mixed{SceneColor(), small_shape};
     CHECK_FALSE(scaled(X2, mixed, nullptr));
     Shape no_blit_depth = SceneDepth();
     no_blit_depth.blit_ok = false;

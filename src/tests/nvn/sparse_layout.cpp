@@ -213,8 +213,8 @@ TEST_CASE("nvn sparse: a tile is 64 KiB of one block row of GOB columns", "[nvn]
         CHECK(u64{shape->tile_cols} * shape->tile_rows * c.block_bytes == Nvn::SPARSE_TILE_BYTES);
     }
     // Not tiled: smaller than one tile, not sparse, multisampled, packaged layout.
-    Nvn::Storage small = MakeSparse(NVN_FORMAT_R8, 128, 128, 1);
-    CHECK_FALSE(Nvn::SparseTileShape(small.desc, 1));
+    Nvn::Storage small_storage = MakeSparse(NVN_FORMAT_R8, 128, 128, 1);
+    CHECK_FALSE(Nvn::SparseTileShape(small_storage.desc, 1));
     Nvn::Storage plain = MakeSparse(NVN_FORMAT_R8, 1024, 1024, 1);
     plain.desc.flags = 0;
     CHECK_FALSE(Nvn::SparseTileShape(plain.desc, 1));

@@ -1487,9 +1487,9 @@ TEST_CASE("NVN smart BC: classes of hand-built blocks, mixed textures, padding a
             for (u32 m = 0; m < 2048 && !grid_found; ++m) {
                 const auto block = BlockWithMode(random, m, 0);
                 const std::vector<u8> big = DecodeAstcBlocks(block, 12, 12);
-                const std::vector<u8> small = DecodeAstcBlocks(block, 4, 4);
-                if (TexelChannels(big) == 0 && TexelChannels(small) == ALPHA &&
-                    std::all_of(small.begin(), small.end(), [](u8 v) { return v == 0; })) {
+                const std::vector<u8> tiny = DecodeAstcBlocks(block, 4, 4);
+                if (TexelChannels(big) == 0 && TexelChannels(tiny) == ALPHA &&
+                    std::all_of(tiny.begin(), tiny.end(), [](u8 v) { return v == 0; })) {
                     grid_found = true;
                     CHECK(Classify(block, 12, 12) == Channels::Luminance);
                     CHECK(Classify(block, 4, 4) == Channels::Rgba);

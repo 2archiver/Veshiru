@@ -25,14 +25,7 @@ namespace {
 
 using namespace AmpereExec;
 
-// Operand-patched instruction templates ------------------------------------------------------------
-
-constexpr Inst WithRegisters(Inst inst, u32 rd, u32 ra, u32 rb, u32 rc) {
-    inst.w[0] = (inst.w[0] & ~0xff00ffffU) | 0 | (rd << 16) | (ra << 24) | (inst.w[0] & 0xffff);
-    inst.w[1] = (inst.w[1] & ~0xffU) | rb;
-    inst.w[2] = (inst.w[2] & ~0xffU) | rc;
-    return inst;
-}
+// Instruction templates ---------------------------------------------------------------------------
 
 /// IMAD.MOV.U32 rd, RZ, RZ, rc
 constexpr Inst Mov(u32 rd, u32 rc) {
