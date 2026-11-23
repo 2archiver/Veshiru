@@ -1107,7 +1107,6 @@ add_library(core STATIC
     hle/service/nx2_stub_interface.h
     hle/service/nx2_gsv.h
     hle/service/nx2_native_image_directory.h
-    hle/service/nx2_native_pool.h
     hle/service/nx2_fence_action.h
     hle/service/nx2_frame_interval.h
     hle/service/nx2_movie_clock.h

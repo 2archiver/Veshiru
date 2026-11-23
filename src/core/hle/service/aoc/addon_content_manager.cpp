@@ -54,10 +54,6 @@ static u64 ResolveProgramAOCBaseTitleID(Core::System& system, u64 program_id) {
         FileSys::ResolveAOCBaseTitleID(program_id, metadata_base, carried));
 }
 
-static u64 GetCallerBaseTitleID(Core::System& system, const ClientProcessId& process_id) {
-    return FileSys::GetBaseTitleID(system.ResolveCallerProgramId(*process_id));
-}
-
 static std::vector<u64> AccumulateAOCTitleIDs(Core::System& system) {
     std::vector<u64> add_on_content;
     const auto& rcu = system.GetContentProvider();

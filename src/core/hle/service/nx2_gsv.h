@@ -84,7 +84,6 @@
 #include "core/hle/service/nvdrv/nvdrv_interface.h"
 #include "core/hle/service/nx2_stub_interface.h"
 #include "core/hle/service/nx2_native_image_directory.h"
-#include "core/hle/service/nx2_native_pool.h"
 #include "core/hle/service/nx2_fence_action.h"
 #include "core/hle/service/nx2_frame_interval.h"
 #include "core/hle/service/nx2_image_layout.h"

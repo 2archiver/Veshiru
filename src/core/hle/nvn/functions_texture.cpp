@@ -22,7 +22,7 @@
 #include "video_core/nvn/guest_layouts.h"
 #include "video_core/nvn/guest_memory.h"
 #include "video_core/nvn/sink.h"
-#include "core/hle/service/nx2_native_pool.h"
+#include "core/hle/service/nx2_image_layout.h"
 #include "video_core/renderer_vulkan/nvn/nvn_texture_layout.h"
 #include "video_core/textures/decoders.h"
 
