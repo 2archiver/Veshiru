@@ -1296,15 +1296,18 @@ void FileEnvironment::Deserialize(std::istream& file, std::streampos end) {
     if (const auto it{cbuf_values.find(HEADER_BYTE_OFFSET_RULE_KEY)}; it != cbuf_values.end()) {
         cbuf_values.erase(it);
     } else if (HasNativeInstructions() && !Tegra::Texture::UsesHeaderByteOffsetHandles(true)) {
-        const auto ambiguous = [this](const auto& entry) {
-            if (entry.first == 0 || entry.first % 32 != 0) {
-                return false;
+        const auto drop_ambiguous = [this](auto& map) {
+            for (auto it{map.begin()}; it != map.end();) {
+                if (it->first != 0 && it->first % 32 == 0) {
+                    dropped_texture_handles.push_back(it->first);
+                    it = map.erase(it);
+                } else {
+                    ++it;
+                }
             }
-            dropped_texture_handles.push_back(entry.first);
-            return true;
         };
-        std::erase_if(texture_types, ambiguous);
-        std::erase_if(texture_pixel_formats, ambiguous);
+        drop_ambiguous(texture_types);
+        drop_ambiguous(texture_pixel_formats);
     }
     for (size_t i = 0; i < num_storage_pointer_types; ++i) {
         u64 key;
