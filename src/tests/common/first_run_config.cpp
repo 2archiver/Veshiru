@@ -99,13 +99,17 @@ void CheckFreshProfile() {
     CHECK(values.astc_recompression.GetValue() == Settings::AstcRecompression::Bc3);
     CHECK(values.use_disk_shader_cache.GetValue());
     CHECK(values.use_vulkan_driver_pipeline_cache.GetValue());
-    CHECK_FALSE(values.renderer_force_max_clock.GetValue());
+    CHECK(values.renderer_force_max_clock.GetValue());
     CHECK(values.gpu_accuracy.GetValue() == Settings::GpuAccuracy::Low);
     CHECK(values.nvdec_emulation.GetValue() == Settings::NvdecEmulation::Gpu);
     CHECK(values.async_presentation.GetValue());
     CHECK(values.use_asynchronous_shaders.GetValue());
     CHECK(values.native_async_draws.GetValue() == Settings::NativeAsyncDraws::Bounded);
     CHECK(values.native_pipeline_wait_ms.GetValue() == 8);
+    CHECK(values.graphics_path.GetValue() == Settings::GraphicsPath::Hle);
+    CHECK(values.nvn_pipeline_library.GetValue());
+    CHECK(values.build_all_cached_shaders.GetValue());
+    CHECK(values.precache_shaders.GetValue() == Settings::PrecacheShaders::Ask);
     CHECK(values.texture_cache_memory_limit.GetValue() == 0);
 #if defined(_WIN32) || defined(__linux__)
     CHECK(values.pin_gpu_threads.GetValue());
@@ -142,7 +146,7 @@ void CheckUnchangedProfile() {
     CHECK(values.frame_pacing_mode.GetValue() == Settings::FramePacingMode::Target_Auto);
     CHECK(values.astc_recompression.GetValue() == Settings::AstcRecompression::Bc3);
     CHECK_FALSE(values.sync_memory_operations.GetValue());
-    CHECK_FALSE(values.renderer_force_max_clock.GetValue());
+    CHECK(values.renderer_force_max_clock.GetValue());
     CHECK(values.use_disk_shader_cache.GetValue());
     CHECK(values.use_vulkan_driver_pipeline_cache.GetValue());
     CHECK_FALSE(values.use_video_framerate.GetValue());
@@ -196,7 +200,9 @@ TEST_CASE("Absent global config receives the first-run profile and persists it",
                             "gpu_accuracy", "vram_usage_mode", "accelerate_astc",
                             "astc_recompression", "nvdec_emulation", "use_disk_shader_cache",
                             "use_vulkan_driver_pipeline_cache", "async_presentation",
-                            "use_asynchronous_shaders", "force_max_clock",
+                            "use_asynchronous_shaders", "force_max_clock", "graphics_path",
+                            "nvn_pipeline_library", "build_all_cached_shaders",
+                            "precache_shaders",
                             "texture_cache_memory_limit", "native_async_draws",
                             "native_pipeline_wait_ms", "pin_gpu_threads"}) {
         // Reload normalizes the marker: a seeded value that happens to equal the built-in

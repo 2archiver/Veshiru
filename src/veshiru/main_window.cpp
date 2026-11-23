@@ -5679,7 +5679,18 @@ void MainWindow::UpdateAPIText() {
     const auto api = Settings::values.renderer_backend.GetValue();
     const auto renderer_status_text = ConfigurationShared::TranslateMapText(
         translator, ConfigurationShared::renderer_backend_texts_map.find(api)->second);
-    renderer_status_button->setText(renderer_status_text.toUpper());
+    QString text = renderer_status_text.toUpper();
+    // 2.9: while a Switch 2 title runs, name the NVN path replaying it, so a log or a screenshot
+    // always says which renderer the picture came from.
+    if (QtCommon::emu_thread != nullptr && QtCommon::system != nullptr &&
+        QtCommon::system->IsPoweredOn()) {
+        const auto choice = Settings::ResolveNvnHle();
+        if (choice.reason != Settings::NvnHleReason::NotSwitch2) {
+            text += choice.hle ? QStringLiteral(" · VTX-HLE")
+                               : QStringLiteral(" · EMULATED");
+        }
+    }
+    renderer_status_button->setText(text);
 }
 
 void MainWindow::UpdateFilterText() {

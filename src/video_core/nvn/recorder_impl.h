@@ -400,6 +400,8 @@ struct AtomicStats {
     std::atomic<u64> program_code_unavailable{};
     std::atomic<u64> stage_fallback{};
     std::atomic<u64> reinitialized_objects{};
+    std::atomic<u64> pool_table_reconciled{};
+    std::atomic<u64> pool_table_unresolved{};
     std::atomic<u64> submissions{};
     std::atomic<u64> presents{};
     std::atomic<u64> lists_submitted{};
@@ -451,6 +453,19 @@ struct Recorder::Impl {
 
     DescriptorTable texture_table;
     DescriptorTable sampler_table;
+
+    /// PoolReconciler state: the global descriptor base of every live texture pool, and every
+    /// live texture serial by the guest address of its storage. A pool entry the guest wrote
+    /// itself (a bulk descriptor table write the HLE never sees) names a storage by address; the
+    /// replay resolves the id through these.
+    std::mutex pool_bases_mutex;
+    std::map<u32, u64> texture_pool_bases;
+    std::mutex textures_by_address_mutex;
+    std::unordered_multimap<u64, u64> textures_by_address;
+    [[nodiscard]] u64 TextureAddress(const TextureDesc& desc);
+    void IndexTexture(const TextureDesc& desc);
+    void UnindexTexture(const TextureDesc& desc);
+    [[nodiscard]] u64 TextureAtGuestAddress(u64 address, u32 width, u32 height);
 
     // Serializes seq assignment and every Sink call except Wait/SetCompletionCallback.
     std::mutex sink_mutex;

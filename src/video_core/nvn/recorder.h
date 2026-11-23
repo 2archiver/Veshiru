@@ -51,6 +51,8 @@ struct RecorderStats {
     u64 synthetic_lists;         ///< recorded lists at synthetic command memory held now
     u64 synthetic_list_bytes;    ///< ... and the host memory they take (words, references, actions)
     u64 synthetic_cap_evictions; ///< synthetic lists dropped by the byte cap (SetSyntheticListCap)
+    u64 pool_table_reconciled;   ///< pool ids resolved from descriptors the guest wrote itself
+    u64 pool_table_unresolved;   ///< reconcile asks whose guest entry named no live texture
 };
 
 /// Textures (not view objects) by who keeps them alive, at a PublishTextureHolders call; the
@@ -116,12 +118,16 @@ struct ShaderStageInput {
 /// Threading: command buffer methods are single-threaded per command buffer (as in NVN). Queue,
 /// pool and object methods may be called from any thread. Sink calls other than Wait are
 /// serialized by one mutex; the completion callback never takes it.
-class Recorder {
+class Recorder final : public PoolReconciler {
 public:
     Recorder(GuestMemory& memory, Sink& sink);
     ~Recorder();
     Recorder(const Recorder&) = delete;
     Recorder& operator=(const Recorder&) = delete;
+
+    /// PoolReconciler: the texture a guest-written pool descriptor names (0 when none),
+    /// registering its id so later submissions resolve it from their snapshot.
+    [[nodiscard]] u64 ResolveTextureId(u32 id) override;
 
     [[nodiscard]] RecorderStats Stats() const;
     /// Forwards the device's window origin / depth mode to the sink (Sink::SetDeviceModes).

@@ -218,7 +218,9 @@ void Config::SetUpIni() {
     if (new_global_config) {
         // Veshiru's first-run profile targets the development machine: i7-10750H, GTX 1650 4 GB,
         // 32 GB RAM. It is written only for a brand-new global config; imported Eglantine/Eden
-        // settings and every existing per-game override are left untouched.
+        // settings and every existing per-game override are left untouched. 2.9: the profile
+        // also carries the VTX-HLE path and its pipeline-library/async defaults, the set the
+        // 2.8 MKW and OoT measurements on this card came from.
         const auto seed = [this](const Settings::BasicSetting& setting, const std::string& value) {
             WriteStringSetting(setting.GetLabel(), value);
             WriteBooleanSetting(setting.GetLabel() + "\\default", false);
@@ -238,8 +240,14 @@ void Config::SetUpIni() {
         seed(Settings::values.use_vulkan_driver_pipeline_cache, ToString(true));
         seed(Settings::values.async_presentation, ToString(true));
         seed(Settings::values.use_asynchronous_shaders, ToString(true));
-        seed(Settings::values.renderer_force_max_clock, ToString(false));
+        // 2.9: keep the GPU at its clocks; a downclock between frames is a hitch (docs/perf).
+        seed(Settings::values.renderer_force_max_clock, ToString(true));
         seed(Settings::values.texture_cache_memory_limit, ToString(u32(0)));
+        // 2.9: VTX-HLE (NVN) with its fast pipeline links and its load-time pipeline builds.
+        seed(Settings::values.graphics_path, ToString(u32(Settings::GraphicsPath::Hle)));
+        seed(Settings::values.nvn_pipeline_library, ToString(true));
+        seed(Settings::values.build_all_cached_shaders, ToString(true));
+        seed(Settings::values.precache_shaders, ToString(u32(Settings::PrecacheShaders::Ask)));
         // Lichii/Smiley proven frame-pacing and pipeline defaults for a 4 GB NVIDIA card.
         seed(Settings::values.dma_accuracy, ToString(u32(Settings::DmaAccuracy::Default)));
         seed(Settings::values.gpu_fence_behavior, ToString(u32(Settings::GpuFenceBehavior::Default)));
@@ -249,7 +257,6 @@ void Config::SetUpIni() {
         seed(Settings::values.sync_memory_operations, ToString(false));
         seed(Settings::values.native_async_draws, ToString(u32(Settings::NativeAsyncDraws::Bounded)));
         seed(Settings::values.native_pipeline_wait_ms, ToString(u32(8)));
-        seed(Settings::values.precache_shaders, ToString(u32(Settings::PrecacheShaders::Off)));
         seed(Settings::values.use_video_framerate, ToString(false));
         seed(Settings::values.use_reactive_flushing, ToString(true));
         seed(Settings::values.barrier_feedback_loops, ToString(true));

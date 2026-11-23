@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "video_core/nvn/recorder_impl.h"
+#include "video_core/textures/texture.h"
 
 namespace VideoCommon::Nvn {
 
@@ -349,6 +350,7 @@ u64 Recorder::Impl::ViewSerialFor(TextureObject& texture, const TextureViewDesc&
     object->desc.serial = object->serial;
     object->desc.view_of = texture.serial;
     object->desc.view = view;
+    IndexTexture(object->desc);
     FlushDestroysLocked();
     sink.CreateTexture(object->desc);
     texture.views.emplace_back(view, object->serial);
@@ -800,6 +802,7 @@ void Recorder::Impl::OnComplete(u64 seq) {
 Recorder::Recorder(GuestMemory& memory, Sink& sink) : impl{std::make_unique<Impl>(memory, sink)} {
     SharedUniformSnapshot().Reset(UniformSnapshotMode::Off);
     sink.SetGuestMemory(&memory);
+    sink.SetPoolReconciler(this);
     Impl* state = impl.get();
     sink.SetCompletionCallback([state](u64 seq) { state->OnComplete(seq); });
 }
@@ -811,6 +814,7 @@ void Recorder::SetCompletionObserver(std::function<void(u64)> observer) {
 
 Recorder::~Recorder() {
     impl->sink.SetCompletionCallback({});
+    impl->sink.SetPoolReconciler(nullptr);
     FlushDestroys();
 }
 
@@ -842,7 +846,8 @@ RecorderStats Recorder::Stats() const {
         s.lists_submitted.load(),    s.records_recorded.load(),     s.records_dropped.load(),
         s.completion_actions.load(), s.retired_objects.load(), s.synthetic_evictions.load(),
         s.finalized_pool_lists.load(), s.synthetic_lists.load(), s.synthetic_list_bytes.load(),
-        s.synthetic_cap_evictions.load(),
+        s.synthetic_cap_evictions.load(), s.pool_table_reconciled.load(),
+        s.pool_table_unresolved.load(),
     };
 }
 
@@ -1346,12 +1351,20 @@ bool Recorder::TexturePoolInitialize(u64 pool_va_of_tp, u64 memory_pool_va, s64 
     object->offset = static_cast<u64>(offset);
     object->count = static_cast<u32>(count);
     object->base = impl->texture_table.Allocate(object->count);
+    {
+        std::lock_guard lock{impl->pool_bases_mutex};
+        impl->texture_pool_bases.emplace(object->base, object->serial);
+    }
     return true;
 }
 
 void Recorder::TexturePoolFinalize(u64 texture_pool_va) {
     if (const DescriptorPoolObject* object = impl->Lookup(
             impl->texture_pools, ObjectKind::TexturePool, texture_pool_va, __func__)) {
+        {
+            std::lock_guard lock{impl->pool_bases_mutex};
+            impl->texture_pool_bases.erase(object->base);
+        }
         impl->texture_table.Release(object->base);
         impl->Release(ObjectKind::TexturePool, texture_pool_va, object->serial);
     }
@@ -1539,6 +1552,7 @@ bool Recorder::TextureInitialize(u64 texture_va, const TextureDesc& desc, u64 me
     texture->desc.pool_offset = pool_offset;
     texture->desc.view_of = 0;
     std::memset(&texture->desc.view, 0, sizeof(texture->desc.view));
+    impl->IndexTexture(texture->desc);
     {
         std::lock_guard lock{impl->sink_mutex};
         impl->FlushDestroysLocked();
@@ -1560,8 +1574,116 @@ bool Recorder::TextureInitialize(u64 texture_va, const TextureDesc& desc, u64 me
 void Recorder::TextureFinalize(u64 texture_va) {
     if (const TextureObject* texture =
             impl->Lookup(impl->textures, ObjectKind::Texture, texture_va, __func__)) {
+        impl->UnindexTexture(texture->desc);
+        for (const auto& [view, view_serial] : texture->views) {
+            if (const TextureObject* view_object = impl->textures.Get(view_serial)) {
+                impl->UnindexTexture(view_object->desc);
+            }
+        }
         impl->Release(ObjectKind::Texture, texture_va, texture->serial);
     }
+}
+
+u64 Recorder::Impl::TextureAddress(const TextureDesc& desc) {
+    if (desc.pool_serial == 0) {
+        return desc.pkg_data;
+    }
+    const MemoryPoolObject* pool = memory_pools.Get(desc.pool_serial);
+    return pool != nullptr ? pool->address + desc.pool_offset : 0;
+}
+
+void Recorder::Impl::IndexTexture(const TextureDesc& desc) {
+    const u64 address = TextureAddress(desc);
+    if (address == 0) {
+        return;
+    }
+    std::lock_guard lock{textures_by_address_mutex};
+    textures_by_address.emplace(address, desc.serial);
+}
+
+void Recorder::Impl::UnindexTexture(const TextureDesc& desc) {
+    const u64 address = TextureAddress(desc);
+    if (address == 0) {
+        return;
+    }
+    std::lock_guard lock{textures_by_address_mutex};
+    const auto [begin, end] = textures_by_address.equal_range(address);
+    for (auto it = begin; it != end; ++it) {
+        if (it->second == desc.serial) {
+            textures_by_address.erase(it);
+            return;
+        }
+    }
+}
+
+u64 Recorder::Impl::TextureAtGuestAddress(u64 address, u32 width, u32 height) {
+    if (address == 0 || width == 0 || height == 0) {
+        return 0;
+    }
+    std::lock_guard lock{textures_by_address_mutex};
+    const auto [begin, end] = textures_by_address.equal_range(address);
+    u64 view_serial = 0;
+    for (auto it = begin; it != end; ++it) {
+        const TextureObject* texture = textures.Get(it->second);
+        if (texture == nullptr || texture->desc.width != width ||
+            texture->desc.height != height) {
+            continue;
+        }
+        // A plain texture wins over a view of one: the guest header carries no view object.
+        if (texture->desc.view_of == 0) {
+            return it->second;
+        }
+        if (view_serial == 0) {
+            view_serial = it->second;
+        }
+    }
+    return view_serial;
+}
+
+u64 Recorder::ResolveTextureId(u32 id) {
+    Impl& state = *impl;
+    u64 pool_serial = 0;
+    {
+        std::lock_guard lock{state.pool_bases_mutex};
+        const auto it = state.texture_pool_bases.upper_bound(id);
+        if (it == state.texture_pool_bases.begin()) {
+            return 0;
+        }
+        pool_serial = std::prev(it)->second;
+    }
+    const DescriptorPoolObject* pool = state.texture_pools.Get(pool_serial);
+    if (pool == nullptr || id < pool->base || id - pool->base >= pool->count) {
+        return 0;
+    }
+    const MemoryPoolObject* memory = state.memory_pools.Get(pool->pool_serial);
+    if (memory == nullptr) {
+        return 0;
+    }
+    // The SDK's own bulk table writes (nvnTexturePoolWriteDescriptorTableData: no driver
+    // function id, the bootstrap loader returns NULL) leave one Tegra texture header per id in
+    // the pool's guest bytes. Read the entry and resolve the storage it names by address; a
+    // pool whose entries the game pads to double width reads nothing valid at the first stride
+    // and hits at the second.
+    const u32 local = id - pool->base;
+    Tegra::Texture::TICEntry entry{};
+    u64 serial = 0;
+    for (const u64 stride : {u64{sizeof(TICEntry)}, u64{2 * sizeof(TICEntry)}}) {
+        const u64 va = memory->address + pool->offset + u64{local} * stride;
+        if (!state.memory.Read(va, &entry, sizeof(entry))) {
+            continue;
+        }
+        serial = state.TextureAtGuestAddress(entry.Address(), entry.Width(), entry.Height());
+        if (serial != 0) {
+            break;
+        }
+    }
+    if (serial == 0) {
+        ++state.stats.pool_table_unresolved;
+        return 0;
+    }
+    state.texture_table.Set(pool->base, local, serial);
+    ++state.stats.pool_table_reconciled;
+    return serial;
 }
 
 std::optional<TextureDesc> Recorder::GetTexture(u64 texture_va) {

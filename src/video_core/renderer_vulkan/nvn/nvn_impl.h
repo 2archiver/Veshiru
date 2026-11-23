@@ -761,6 +761,9 @@ struct Context::Impl {
     vk::CommandPool command_pool;
 
     std::atomic<VC::GuestMemory*> guest{nullptr};
+    /// The recorder's resolver for pool ids the guest wrote descriptors for itself (bulk table
+    /// writes the HLE never sees); nullptr until the recorder publishes it, and at detach.
+    std::atomic<VC::PoolReconciler*> reconciler{nullptr};
     /// The device's window origin / depth mode as the game set them (Sink::SetDeviceModes).
     std::atomic<u32> device_window_origin{0};
     std::atomic<u32> device_depth_mode{0};

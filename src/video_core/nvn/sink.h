@@ -13,6 +13,7 @@
 
 #include "common/common_types.h"
 #include "video_core/nvn/guest_memory.h"
+#include "video_core/nvn/pool_reconcile.h"
 
 namespace VideoCommon::Nvn {
 
@@ -266,6 +267,13 @@ public:
     /// (pool host pointers, texture contents, readback writes). Optional for test sinks.
     virtual void SetGuestMemory(GuestMemory* memory) {
         static_cast<void>(memory);
+    }
+
+    /// The recorder's resolver for descriptor pool ids the guest wrote itself (bulk table writes
+    /// the HLE never sees); nullptr at detach, and absent for test sinks. The replay asks it when
+    /// a draw's texture handle names no texture in the submission's snapshot.
+    virtual void SetPoolReconciler(PoolReconciler* reconciler) {
+        static_cast<void>(reconciler);
     }
 
     /// The device's window origin (NVNwindowOriginMode: 0 lower left, 1 upper left) and depth mode
