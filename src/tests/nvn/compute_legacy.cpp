@@ -108,7 +108,7 @@ TEST_CASE("NVN legacy compute treats a dynamic driver bank read as every buffer"
     ir.blocks = {&block};
     ir.post_order_blocks = {&block};
     Shader::IR::IREmitter emitter{block};
-    emitter.GetCbuf(emitter.Imm32(0), emitter.GetReg(Shader::IR::Reg::R1));
+    static_cast<void>(emitter.GetCbuf(emitter.Imm32(0), emitter.GetReg(Shader::IR::Reg::R1)));
     Shader::Optimization::CollectShaderInfoPass(env, ir);
     CHECK(ir.info.nvn_buffer_base == 0x310);
     CHECK(ir.info.nvn_buffer_count == 16);
