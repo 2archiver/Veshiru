@@ -695,6 +695,8 @@ std::vector<UnsupportedRow> Runtime::UnsupportedRows() {
         add("program_code_unavailable", s.program_code_unavailable);
         add("stage_fallback", s.stage_fallback);
         add("reinitialized_objects", s.reinitialized_objects);
+        add("pool_table_reconciled", s.pool_table_reconciled);
+        add("pool_table_unresolved", s.pool_table_unresolved);
         add("records_dropped", s.records_dropped);
     }
     if (gate != nullptr) {

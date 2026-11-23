@@ -43,6 +43,7 @@ public:
     void SetCompletionCallback(std::function<void(u64 seq)> callback) override;
     void SetFailureCallback(std::function<void(std::string reason)> callback) override;
     void SetGuestMemory(GuestMemory* memory) override;
+    void SetPoolReconciler(PoolReconciler* reconciler) override;
     void SetDeviceModes(u32 window_origin, u32 depth_mode) override;
     void SetTitleId(u64 title_id) override;
     void CollectStats(std::vector<SinkStat>& out) const override;

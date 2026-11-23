@@ -190,9 +190,16 @@ const std::shared_ptr<Texture>& DrawContext::TextureOfId(u32 id) const {
     if (!submission || id == 0 || id >= submission->texture_pool_snapshot.size()) {
         return none;
     }
-    const u64 serial = submission->texture_pool_snapshot[id];
+    u64 serial = submission->texture_pool_snapshot[id];
     if (serial == 0) {
-        return none;
+        // Nothing was registered at this id: the game may have written the pool entry itself
+        // (a bulk descriptor table write the HLE never sees). Ask the recorder to read the
+        // guest entry; a hit registers the id, so later submissions carry it in their snapshot.
+        VC::PoolReconciler* reconciler = impl.reconciler.load(std::memory_order_acquire);
+        serial = reconciler != nullptr ? reconciler->ResolveTextureId(id) : 0;
+        if (serial == 0) {
+            return none;
+        }
     }
     TextureSlot& slot = texture_slots[id % texture_slots.size()];
     if (slot.id == id && slot.serial == serial && slot.texture && slot.texture->live) {

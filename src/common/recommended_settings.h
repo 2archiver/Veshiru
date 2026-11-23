@@ -32,12 +32,17 @@ void ForEachRecommendedSetting(Values& settings, Func&& func) {
     entry(settings.frame_pacing_mode, FramePacingMode::Target_Auto);
     entry(settings.astc_recompression, AstcRecompression::Bc3);
     entry(settings.sync_memory_operations, false);
-    entry(settings.renderer_force_max_clock, false);
+    // 2.9: keep the GPU at its clocks; the measured runs hitch when it downclocks between frames.
+    entry(settings.renderer_force_max_clock, true);
     entry(settings.use_disk_shader_cache, true);
     entry(settings.use_vulkan_driver_pipeline_cache, true);
     entry(settings.native_async_draws, NativeAsyncDraws::Bounded);
     entry(settings.native_pipeline_wait_ms, 8);
-    entry(settings.precache_shaders, PrecacheShaders::Off);
+    entry(settings.precache_shaders, PrecacheShaders::Ask);
+    // 2.9: VTX-HLE (NVN) and its load-time pipeline work.
+    entry(settings.graphics_path, GraphicsPath::Hle);
+    entry(settings.nvn_pipeline_library, true);
+    entry(settings.build_all_cached_shaders, true);
     entry(settings.use_video_framerate, false);
     entry(settings.mkw_30fps, false);
     entry(settings.mkw_dynamic_fps, false);

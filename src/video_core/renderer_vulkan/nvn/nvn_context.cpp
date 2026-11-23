@@ -1663,6 +1663,10 @@ void Context::SetGuestMemory(VC::GuestMemory* memory) {
     impl->guest.store(memory, std::memory_order_release);
 }
 
+void Context::SetPoolReconciler(VC::PoolReconciler* reconciler) {
+    impl->reconciler.store(reconciler, std::memory_order_release);
+}
+
 ContextStats Context::Stats() const {
     const auto& s = impl->stats;
     constexpr auto relaxed = std::memory_order_relaxed;

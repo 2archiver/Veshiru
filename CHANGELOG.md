@@ -8,6 +8,59 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-11-23
+
+### Fixed
+
+- **VTX-HLE: UI layers the guest wrote into descriptor pools now resolve.** The SDK's bulk
+  descriptor table writes (`nvnTexturePoolWriteDescriptorTableData`, which carries no driver
+  function id: the bootstrap loader returns NULL and the SDK's own code runs) left Tegra texture
+  headers in pool guest memory and nothing in the recorder's registration table, so every draw
+  sampling those ids bound the transparent dummy and whole UI layers vanished (Mario Kart World's
+  character select: ~69 ids a frame in the unsupported TSV,
+  `descriptor fallback (graphics): texture handle names no texture`). `Recorder` now implements
+  `PoolReconciler` (`video_core/nvn/pool_reconcile.h`, published through `Sink::SetPoolReconciler`
+  with the guest-memory pointer's lifecycle): when a draw's handle names no texture, the replay
+  asks the recorder, which reads the pool entry at `base + id * sizeof(TICEntry)` (and at double
+  stride for padded pools) and resolves the storage the header names by guest address against the
+  live textures (`textures_by_address`, width/height checked, plain texture over view). A hit
+  registers the id in the descriptor table so later submissions carry it; counters
+  `pool_table_reconciled` / `pool_table_unresolved` join the recorder rows of the unsupported TSV.
+  See the NVN `DESIGN.md`, "Guest-written descriptor tables".
+
+### Added
+
+- **Simpler per-game properties (2.9 UI overhaul).** The per-game dialog now opens with a plain
+  words banner ("changes here override your global configuration for this game only…"), every
+  tab carries a one-line tooltip saying what it holds, and a new **Reset to Global** button puts
+  every override for the game back on its global value in one confirmed click (driving each
+  widget's own restore path; Add-Ons and input profiles untouched). The banner is styled by the
+  Veshiru theme (`QLabel#PerGameBanner`).
+
+### Changed
+
+- **Optimized defaults for everyone (2.9).** New global defaults, the first-run profile
+  (`frontend_common/config.cpp`) and the recommended-settings table
+  (`common/recommended_settings.h`) now agree on the set the 2.7/2.8 measurements on the
+  i7-10750H + GTX 1650 4 GB reference machine came from: `graphics_path` = VTX-HLE (NVN) for
+  Switch 2 titles, `use_asynchronous_shaders`, `async_presentation`, `nvn_pipeline_library` and
+  `build_all_cached_shaders` on, `native_async_draws` = Bounded, `renderer_force_max_clock` on
+  (a downclock between frames is a hitch), `precache_shaders` = Ask so the load screen builds the
+  driver cache once. Existing configs keep their values; `Use recommended settings` and brand-new
+  profiles pick the new set up.
+- **Version** bumped to 2.9.0; release notes in `docs/release-notes/2.9.0.md`.
+
+### Investigated
+
+- **Veshiru 1.3's Mario Kart World work, re-checked for 2.9.** 1.3 brought the R16G16B16A16_SFLOAT
+  HDR swapchain preservation for MKW and the Eglantine MKW fixes (`#870` legacy GPU timestamps,
+  `#871` lighting sparse atlas) into the emulated path; 2.9 verifies the VTX-HLE path keeps their
+  equivalents (HDR present tone-mapping, sparse/tiled storages) and that the MKW stability knobs
+  (`mkw_30fps`, `mkw_dynamic_fps`) stay off in every optimized profile.
+- **Eglantine `daily-20261122`, Lichii and Orchid releases** surveyed for 2.9 capability ideas
+  (async pipeline translation workers, graphics-server pool sizing, host page-out ordering); the
+  NVN replay's own counters guided what landed here.
+
 ## [2.8.0] - 2026-11-23
 
 ### Added

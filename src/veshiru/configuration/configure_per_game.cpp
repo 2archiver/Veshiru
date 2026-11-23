@@ -23,6 +23,7 @@
 #include <nlohmann/json.hpp>
 
 #include <QAbstractButton>
+#include <QBoxLayout>
 #include <QBuffer>
 #include <QByteArray>
 #include <QCheckBox>
@@ -424,6 +425,56 @@ ConfigurePerGame::ConfigurePerGame(QWidget* parent, u64 title_id_, const std::st
         }
         ui->tabWidget->addTab(ConfigurationShared::ScrollTab(tab),
                               ConfigurationShared::PageIcon(QString::fromLatin1(icon)), name);
+    }
+
+    // 2.9: say what this dialog is, in plain words, before the tabs start.
+    auto* const banner = new QLabel(tr("Changes here override your global configuration for this "
+                                       "game only. Anything left on \"Use global\" keeps following "
+                                       "the global value; Reset to Global returns every override "
+                                       "at once."),
+                                    this);
+    banner->setObjectName(QStringLiteral("PerGameBanner"));
+    banner->setWordWrap(true);
+    if (auto* const root = qobject_cast<QBoxLayout*>(layout())) {
+        root->insertWidget(0, banner);
+    }
+
+    // 2.9: one click puts every per-game override back on its global value, through each
+    // widget's own tested restore path.
+    auto* const reset_button =
+        ui->buttonBox->addButton(tr("Reset to Global"), QDialogButtonBox::ResetRole);
+    reset_button->setToolTip(tr("Return every setting overridden for this game to following your "
+                                "global configuration (saved with OK or Apply)."));
+    connect(reset_button, &QAbstractButton::clicked, this, [this] {
+        if (QMessageBox::question(this, tr("Reset game overrides?"),
+                                  tr("Every setting overridden for this game goes back to "
+                                     "following your global configuration. Add-Ons and input "
+                                     "profiles are not touched. Press OK or Apply afterwards to "
+                                     "save the reset.")) != QMessageBox::Yes) {
+            return;
+        }
+        for (auto* widget : findChildren<ConfigurationShared::Widget*>()) {
+            if (widget->restore_button != nullptr && widget->restore_button->isEnabled()) {
+                widget->restore_button->click();
+            }
+        }
+    });
+
+    // 2.9: plain-language tooltips so the tab strip needs no manual.
+    const QStringList tab_tips{
+        tr("DLC, updates and mods for this game"),
+        tr("Region, language and console behaviour for this game"),
+        tr("Emulated CPU accuracy and speed for this game"),
+        tr("Resolution, upscaling and the graphics path for this game"),
+        tr("Accuracy and performance trade-offs (advanced)"),
+        tr("Optional graphics extensions and post-processing"),
+        tr("Audio output for this game"),
+        tr("Controller profiles for this game"),
+        tr("Network and multiplayer for this game"),
+        tr("Applet behaviour (Mii editor, software keyboard) for this game"),
+    };
+    for (int i = 0; i < tab_tips.size() && i < ui->tabWidget->count(); ++i) {
+        ui->tabWidget->setTabToolTip(i, tab_tips.at(i));
     }
 
     setFocusPolicy(Qt::ClickFocus);

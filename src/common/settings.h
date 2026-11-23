@@ -363,11 +363,14 @@ struct Values {
 #endif
         "backend", Category::Renderer};
     SwitchableSetting<u32> vulkan_device{linkage, 0, "vulkan_device", Category::Renderer, Specialization::RuntimeList};
-    // Which GPU path runs a Switch 2 game's NVN graphics: the emulated Maxwell GPU (the default)
-    // or VTX-HLE, the NVN high-level emulation. Read when the game boots (the NVN hooks and the
-    // Vulkan device features depend on it), so it is not runtime modifiable. See ResolveNvnHle().
+    // Which GPU path runs a Switch 2 game's NVN graphics: the emulated Maxwell GPU or VTX-HLE,
+    // the NVN high-level emulation (the default since 2.9: it replays the game's own command
+    // lists instead of re-driving a GPU, which is the faster path on every host we measure;
+    // guest-written descriptor tables are reconciled, see the NVN DESIGN.md). Read when the game
+    // boots (the NVN hooks and the Vulkan device features depend on it), so it is not runtime
+    // modifiable. See ResolveNvnHle().
     SwitchableSetting<GraphicsPath> graphics_path{linkage,
-                                                  GraphicsPath::Emulated,
+                                                  GraphicsPath::Hle,
                                                   "graphics_path",
                                                   Category::Renderer,
                                                   Specialization::Default,
@@ -387,9 +390,10 @@ struct Values {
     // compiled once and fast-linked while the whole pipeline is compiled in the background. With
     // use_asynchronous_shaders the parts and links of draws that may be skipped run on the async
     // workers (the draw waits), else on the replay thread. Read when the Vulkan device and the
-    // NVN pipeline cache are created.
+    // NVN pipeline cache are created. Default on since 2.9: pipeline parts compile on workers
+    // while the game loads instead of stutters.
     SwitchableSetting<bool> nvn_pipeline_library{linkage,
-                                                 false,
+                                                 true,
                                                  "nvn_pipeline_library",
                                                  Category::Renderer,
                                                  Specialization::Default,
@@ -747,7 +751,9 @@ struct Values {
                                                    true,
                                                    true};
 
-    SwitchableSetting<bool> renderer_force_max_clock{linkage, false, "force_max_clock",
+    // 2.9 default: a downclocked GPU between frames shows up as hitches; keeping the clocks up
+    // is what the measured runs want. Battery-powered hosts can still turn it off.
+    SwitchableSetting<bool> renderer_force_max_clock{linkage, true, "force_max_clock",
                                                      Category::RendererAdvanced};
 
     SwitchableSetting<bool> use_disk_shader_cache{linkage, true, "use_disk_shader_cache",
@@ -758,7 +764,7 @@ struct Values {
         Specialization::Default};
 
     SwitchableSetting<NativeAsyncDraws> native_async_draws{linkage,
-                                                           NativeAsyncDraws::Wait,
+                                                           NativeAsyncDraws::Bounded,
                                                            "native_async_draws",
                                                            Category::RendererAdvanced,
                                                            Specialization::Default,
@@ -789,7 +795,8 @@ struct Values {
 
     // Build every cached graphics pipeline while the game loads, not only those recent sessions
     // used, and keep them built, up to the pipelines kept in memory (a quarter of the RAM).
-    SwitchableSetting<bool> build_all_cached_shaders{linkage, false, "build_all_cached_shaders",
+    // 2.9 default on: the load screen pays once so gameplay does not pay per effect.
+    SwitchableSetting<bool> build_all_cached_shaders{linkage, true, "build_all_cached_shaders",
                                                      Category::RendererAdvanced};
 
     SwitchableSetting<bool> enable_compute_pipelines{linkage, false, "enable_compute_pipelines",
@@ -857,12 +864,10 @@ struct Values {
                                                         Specialization::Default,
                                                         true,
                                                         true};
+    // 2.9 default on everywhere: presenting off the replay thread keeps a slow frame from
+    // stalling the next one (the menu's steady pacing against gameplay's came from this).
     SwitchableSetting<bool> async_presentation{linkage,
-#ifdef __ANDROID__
                                                true,
-#else
-                                               false,
-#endif
                                                "async_presentation", Category::RendererHacks};
 
     SwitchableSetting<bool> fix_bloom_effects{linkage, false, "fix_bloom_effects",
@@ -871,7 +876,10 @@ struct Values {
     SwitchableSetting<bool> emulate_bgr565{linkage, false, "emulate_bgr565",
                                             Category::RendererHacks};
 
-    SwitchableSetting<bool> use_asynchronous_shaders{linkage, false, "use_asynchronous_shaders",
+    // 2.9 default on: shader and pipeline work runs on workers instead of the frame that first
+    // needs it; with nvn_pipeline_library the parts a skipped draw may miss link in the
+    // background, so the trade stays bounded.
+    SwitchableSetting<bool> use_asynchronous_shaders{linkage, true, "use_asynchronous_shaders",
                                                      Category::RendererHacks};
 
     SwitchableSetting<GpuUnswizzleSize> gpu_unswizzle_texture_size{linkage,

@@ -358,6 +358,7 @@ public:
     void SetCompletionCallback(std::function<void(u64 seq)> callback) override;
     void SetFailureCallback(std::function<void(std::string reason)> callback) override;
     void SetGuestMemory(VideoCommon::Nvn::GuestMemory* memory) override;
+    void SetPoolReconciler(VideoCommon::Nvn::PoolReconciler* reconciler) override;
     void SetDeviceModes(u32 window_origin, u32 depth_mode) override;
     void SetTitleId(u64 title_id) override;
 

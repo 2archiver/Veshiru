@@ -567,6 +567,25 @@ D24S8/D32S8 are not stand-ins: copies, clears and attachments work on the host f
   submission order. If a submission fails while recording, the tracked layouts of the images it
   touched are reset to `UNDEFINED`.
 
+### Guest-written descriptor tables (`PoolReconciler`, `recorder.cpp`, `pool_reconcile.h`)
+
+The recorder's descriptor table only sees what the HLE sees: `nvnTexturePoolRegisterTexture` /
+`RegisterImage`. The SDK resolves some table writes itself - `nvnTexturePoolWriteDescriptorTableData`
+carries no driver function id (the bootstrap loader returns NULL and the SDK's own code runs), so a
+bulk write of pool entries leaves Tegra texture headers in the pool's guest bytes and nothing in the
+table. Draws sampling those ids bind the transparent dummy and whole UI layers vanish (Mario Kart
+World's character select: ~69 ids a frame). When a draw's handle names no texture
+(`DrawContext::TextureOfId`), the replay asks the recorder through `Sink::SetPoolReconciler`
+(published at Recorder construction, cleared at gate detach like the guest memory pointer):
+`Recorder::ResolveTextureId` finds the pool owning the global id (`texture_pool_bases`), reads the
+guest entry at `pool base + id * sizeof(TICEntry)` (and at double stride, for pools whose entries
+the game pads), and resolves the storage the header names by address against the live textures
+(`textures_by_address`, kept by `IndexTexture` / `UnindexTexture`; width and height must match, a
+plain texture wins over a view). A hit registers the id in the descriptor table, so later
+submissions carry it in their snapshot and never ask again; a miss costs one guest read of 32
+bytes and is counted. Counters: `pool_table_reconciled` / `pool_table_unresolved` (recorder rows of
+the unsupported TSV).
+
 ## Virtual pools
 
 A virtual pool (`PoolDesc` flag `0x200`) has no guest storage: the recorder gives it a GPU address

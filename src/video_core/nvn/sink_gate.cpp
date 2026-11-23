@@ -17,6 +17,7 @@ void SinkGate::Detach() {
     target->SetCompletionCallback({});
     target->SetFailureCallback({});
     target->SetGuestMemory(nullptr);
+    target->SetPoolReconciler(nullptr);
     target = nullptr;
 }
 
@@ -102,6 +103,13 @@ void SinkGate::SetGuestMemory(GuestMemory* memory) {
     std::shared_lock lock{mutex};
     if (target != nullptr) {
         target->SetGuestMemory(memory);
+    }
+}
+
+void SinkGate::SetPoolReconciler(PoolReconciler* reconciler) {
+    std::shared_lock lock{mutex};
+    if (target != nullptr) {
+        target->SetPoolReconciler(reconciler);
     }
 }
 

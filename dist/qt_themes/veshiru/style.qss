@@ -7,7 +7,8 @@
 
    A deep-navy technical surface with electric-blue accents, cool cyan highlights and
    restrained gradients. 2.6 lifts every surface and accent a step brighter and bluer than
-   2.5's Deep Current so the interface reads blue rather than near-black on dim panels. The
+   2.5's Deep Current so the interface reads blue rather than near-black on dim panels; 2.9
+   lifts the accent blues one more step (#4FA8FF / #74CBFF) to match the brighter brand mark. The
    token sheet below is the single source of truth for the palette; the rest of this file only
    refers to those values conceptually so a future recolour is a mechanical change.
 
@@ -18,8 +19,8 @@
      border           #274C74   border-subtle     #1A3355   divider    #17304F
      text primary     #EDF6FF   text secondary    #B3C8DE   muted      #7D97B3
      faint            #7290AE   disabled          #4A6180
-     primary blue     #3D9BFF   bright blue       #5FBEFF   pressed blue #2A80E6
-     cyan highlight   #5FE1FA   blue-soft         rgba(61, 155, 255, 0.18)
+     primary blue     #4FA8FF   bright blue       #74CBFF   pressed blue #3590F2
+     cyan highlight   #5FE1FA   blue-soft         rgba(79, 168, 255, 0.18)
      selection        #2A6FC0   selection text    #FFFFFF
      success          #3ED59A   warning           #F5C05C   error      #FF7288
      radius 6 / 8 / 10, control height 30, row height 30
@@ -30,7 +31,7 @@
 QWidget {
     color: #EDF6FF;
     background-color: #0A1526;
-    selection-background-color: rgba(61, 155, 255, 0.38);
+    selection-background-color: rgba(79, 168, 255, 0.38);
     selection-color: #ffffff;
     border: 0;
     outline: 0;
@@ -60,6 +61,16 @@ QLabel {
 
 QLabel:disabled {
     color: #4A6180;
+}
+
+/* The per-game properties banner: what the dialog overrides, in plain words. */
+QLabel#PerGameBanner {
+    color: #B3C8DE;
+    background-color: rgba(79, 168, 255, 0.10);
+    border: 1px solid #1A3355;
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin: 0 0 6px 0;
 }
 
 /* Menus ----------------------------------------------------------------- */
@@ -98,7 +109,7 @@ QMenu::item {
 }
 
 QMenu::item:selected {
-    background-color: #3D9BFF;
+    background-color: #4FA8FF;
     color: #06121F;
 }
 
@@ -160,22 +171,22 @@ QPushButton:focus {
 
 QPushButton:default {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                                stop:0 #5FBEFF, stop:1 #2A80E6);
-    border: 1px solid #5FBEFF;
+                                stop:0 #74CBFF, stop:1 #3590F2);
+    border: 1px solid #74CBFF;
     color: #06121F;
     font-weight: 600;
 }
 
 QPushButton:default:hover {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                                stop:0 #74C9FF, stop:1 #3D9BFF);
+                                stop:0 #74C9FF, stop:1 #4FA8FF);
     border-color: #5FE1FA;
     color: #06121F;
 }
 
 QPushButton:default:pressed {
-    background: #2A80E6;
-    border-color: #2A80E6;
+    background: #3590F2;
+    border-color: #3590F2;
     color: #06121F;
 }
 
@@ -237,7 +248,7 @@ QTextEdit {
     color: #EDF6FF;
     border: 1px solid #274C74;
     border-radius: 7px;
-    selection-background-color: rgba(61, 155, 255, 0.50);
+    selection-background-color: rgba(79, 168, 255, 0.50);
 }
 
 QLineEdit,
@@ -260,7 +271,7 @@ QComboBox:focus,
 QComboBox:on,
 QPlainTextEdit:focus,
 QTextEdit:focus {
-    border-color: #3D9BFF;
+    border-color: #4FA8FF;
 }
 
 QLineEdit:disabled,
@@ -514,7 +525,7 @@ QSlider::groove:horizontal {
 QSlider::sub-page:horizontal {
     height: 4px;
     border-radius: 2px;
-    background-color: #3D9BFF;
+    background-color: #4FA8FF;
 }
 
 QSlider::sub-page:horizontal:disabled {
@@ -542,7 +553,7 @@ QSlider::groove:vertical {
 QSlider::add-page:vertical {
     width: 4px;
     border-radius: 2px;
-    background-color: #3D9BFF;
+    background-color: #4FA8FF;
 }
 
 QSlider::handle:vertical {
@@ -563,7 +574,7 @@ QProgressBar {
 }
 
 QProgressBar::chunk {
-    background-color: #3D9BFF;
+    background-color: #4FA8FF;
     border-radius: 3px;
 }
 
@@ -650,7 +661,7 @@ QTabBar::tab:hover {
 
 QTabBar::tab:selected {
     color: #ffffff;
-    border-bottom: 2px solid #3D9BFF;
+    border-bottom: 2px solid #4FA8FF;
     font-weight: 600;
 }
 
@@ -822,8 +833,8 @@ QListWidget#selectorList::item:hover {
 }
 
 QListWidget#selectorList::item:selected {
-    background-color: rgba(61, 155, 255, 0.18);
-    border-left: 3px solid #3D9BFF;
+    background-color: rgba(79, 168, 255, 0.18);
+    border-left: 3px solid #4FA8FF;
     color: #ffffff;
     font-weight: 600;
 }
@@ -878,7 +889,7 @@ QDialog#WhatsNewDialog QLabel#WhatsNewText {
 }
 
 QDialog#WhatsNewDialog QLabel#WhatsNewBadge {
-    background-color: rgba(61, 155, 255, 0.18);
+    background-color: rgba(79, 168, 255, 0.18);
     border-radius: 8px;
 }
 
@@ -929,8 +940,8 @@ QPushButton#TogglableStatusBarButton:!checked {
 }
 
 QPushButton#RendererStatusBarButton {
-    background-color: rgba(61, 155, 255, 0.18);
-    color: #3D9BFF;
+    background-color: rgba(79, 168, 255, 0.18);
+    color: #4FA8FF;
 }
 
 QPushButton#TogglableStatusBarButton:hover,
