@@ -1667,7 +1667,8 @@ u64 Recorder::ResolveTextureId(u32 id) {
     const u32 local = id - pool->base;
     Tegra::Texture::TICEntry entry{};
     u64 serial = 0;
-    for (const u64 stride : {u64{sizeof(TICEntry)}, u64{2 * sizeof(TICEntry)}}) {
+    for (const u64 stride :
+         {u64{sizeof(Tegra::Texture::TICEntry)}, u64{2 * sizeof(Tegra::Texture::TICEntry)}}) {
         const u64 va = memory->address + pool->offset + u64{local} * stride;
         if (!state.memory.Read(va, &entry, sizeof(entry))) {
             continue;
