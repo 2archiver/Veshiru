@@ -4,12 +4,15 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <thread>
 
 #include <boost/asio.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "common/fs/file.h"
+#include "common/fs/fs_util.h"
 #include "common/page_table.h"
 #include "common/scope_exit.h"
 #include "core/core.h"
@@ -20,6 +23,8 @@
 #include "core/hle/kernel/kernel.h"
 #include "core/memory.h"
 #include "tests/core/system_test_context.h"
+#include "tests/temp_path.h"
+#include "video_core/nvn_draw_probe.h"
 #include "video_core/nx2_debug_control.h"
 
 namespace {
@@ -457,4 +462,233 @@ TEST_CASE("Injected input merges buttons and replaces sticks while installed", "
     controller.SetInputInjector({});
     REQUIRE(controller.GetNpadButtons().raw == None);
     REQUIRE(controller.GetSticks().left.x == 0);
+}
+
+TEST_CASE("Debug server draw hashes take 1 to 16 hex digits", "[core][nx2_debug_server]") {
+    REQUIRE(Core::Nx2Debug::ParseDrawHash("621c4755") == 0x621c4755);
+    REQUIRE(Core::Nx2Debug::ParseDrawHash("0x3DDFB1D7621C4755") == 0x3ddfb1d7621c4755);
+    for (const char* bad : {"", "0x", "3ddfb1d7621c47551", "3ddfb1d7621c475g", " 621c4755"}) {
+        REQUIRE_THROWS_AS(Core::Nx2Debug::ParseDrawHash(bad), std::runtime_error);
+    }
+}
+
+TEST_CASE("Debug server nvn_stats keeps the latest heartbeat lines", "[core][nx2_debug_server]") {
+    const std::vector<std::string> lines{
+        "[1] Core <Info> [nvn] status: presents=10",
+        "[1] Core <Info> [nvn] memory: synthetic lists 1",
+        "[1] Render.Vulkan <Info> [nvn] gpuprof 10 s window (10.0 s): presents=300",
+        "[1] Render.Vulkan <Info> [nvn] gpuprof 10 s window: gpu ms per frame old",
+        "[1] Render.Vulkan <Info> [nvn] storage census: 5 images, estimated MiB (count): old",
+        "[2] Core <Info> [nvn] status: presents=20",
+        "[2] Core <Info> [nvn] replay stage=3 seq=9 completed=8",
+        "[2] Render.Vulkan <Info> [nvn] gpuprof 10 s window (10.0 s): presents=600",
+        "[2] Render.Vulkan <Info> [nvn] gpuprof 10 s window: gpu ms per frame new",
+        "[2] Render.Vulkan <Info> [nvn] gpuprof tags top  1: other",
+        "[2] Render.Vulkan <Info> [nvn] storage census: 7 images, estimated MiB (count): new",
+        "[2] Render.Vulkan <Info> [nvn] storage census: cache holders MiB (count): a",
+        "[2] Render.Vulkan <Info> [nvn] storage census: #1 64x64x1",
+    };
+    const json stats = Core::Nx2Debug::NvnStatsFromLog(lines, 2);
+    REQUIRE(stats["status"] == lines[5]);
+    REQUIRE(stats["memory"] == lines[1]);
+    REQUIRE(stats["replay_stage"] == lines[6]);
+    REQUIRE(stats["gpuprof_window"] == json{lines[7], lines[8]});
+    REQUIRE(stats["storage_census"] == json{lines[10], lines[11]});
+    REQUIRE(stats["storage_census_total"] == 3);
+    REQUIRE_FALSE(stats.contains("note"));
+    const json empty = Core::Nx2Debug::NvnStatsFromLog({}, 2);
+    REQUIRE(empty["memory"].is_null());
+    REQUIRE(empty["gpuprof_window"].empty());
+    REQUIRE(empty.contains("note"));
+}
+
+TEST_CASE("NVN draw probe skips by stage hash and takes a census per full frame",
+          "[core][nx2_debug_server]") {
+    namespace Probe = VideoCommon::NvnDrawProbe;
+    Probe::Reset();
+    SCOPE_EXIT {
+        Probe::Reset();
+    };
+    REQUIRE_FALSE(Probe::Active());
+    Probe::DrawInfo a{};
+    a.hashes[0] = 0xa0;
+    a.hashes[1] = 0xa1;
+    a.count = 3;
+    Probe::DrawInfo b{};
+    b.hashes[0] = 0xb0;
+    b.count = 6;
+
+    Probe::SetSkip({0xa1}, Probe::SkipMode::Skip);
+    REQUIRE(Probe::Active());
+    REQUIRE(Probe::OnDraw(a));
+    REQUIRE_FALSE(Probe::OnDraw(b));
+    Probe::SetSkip({0xa1}, Probe::SkipMode::Only);
+    REQUIRE_FALSE(Probe::OnDraw(a));
+    REQUIRE(Probe::OnDraw(b));
+    Probe::SetSkip({}, Probe::SkipMode::Skip);
+    REQUIRE_FALSE(Probe::Active());
+
+    REQUIRE_FALSE(Probe::ArmCensus(1));
+    REQUIRE(Probe::Active());
+    (void)Probe::OnDraw(b); // the partial frame before the first present is dropped
+    Probe::OnPresent();
+    REQUIRE(Probe::LastCensus().present == 0);
+    (void)Probe::OnDraw(a);
+    (void)Probe::OnDraw(b);
+    (void)Probe::OnDraw(b);
+    Probe::OnPresent();
+    const Probe::Census census = Probe::LastCensus();
+    REQUIRE(census.present != 0);
+    REQUIRE(census.draws == 3);
+    REQUIRE(census.rows.size() == 2);
+    REQUIRE(census.rows[0].first.hashes[0] == 0xb0);
+    REQUIRE(census.rows[0].draws == 2);
+    REQUIRE(census.rows[0].elements == 12);
+    REQUIRE_FALSE(Probe::Active());
+
+    const Tests::TempDir temp_dir{"eden-nvn-draw-probe-test"};
+    const std::filesystem::path& directory = temp_dir.Path();
+    const std::string dir = Common::FS::ToUTF8String(directory.generic_u8string());
+    Probe::ArmDump(0xb0, dir);
+    REQUIRE_FALSE(Probe::DumpRequested(a).has_value());
+    const auto ticket = Probe::DumpRequested(b);
+    REQUIRE(ticket.has_value());
+    REQUIRE(ticket->path.starts_with(dir + "/nvn-draw-dump-00000000000000b0-p"));
+    REQUIRE(ticket->count == 1);
+    REQUIRE_FALSE(Probe::DumpRequested(b).has_value());
+    REQUIRE_FALSE(Probe::Active());
+    REQUIRE_FALSE(Probe::GetDump().done);
+    Probe::WriteDump(*ticket, "draw\n");
+    REQUIRE(Probe::GetDump().done);
+    REQUIRE(Probe::GetDump().path == ticket->path);
+}
+
+TEST_CASE("NVN draw probe dumps the next dispatches of a compute program into one file",
+          "[core][nx2_debug_server]") {
+    namespace Probe = VideoCommon::NvnDrawProbe;
+    Probe::Reset();
+    const Tests::TempDir temp_dir{"eden-nvn-dispatch-probe-test"};
+    const std::filesystem::path& directory = temp_dir.Path();
+    SCOPE_EXIT {
+        Probe::Reset();
+    };
+    const std::string dir = Common::FS::ToUTF8String(directory.generic_u8string());
+    const Probe::DispatchInfo sky{.hash = 0xfd1176a6c7fe62ce, .groups = {1, 1, 1}};
+    const Probe::DispatchInfo other{.hash = 0xc1, .groups = {8, 1, 1}};
+    Probe::DrawInfo draw{};
+    draw.hashes[0] = 0xfd1176a6c7fe62ce; // a draw never matches a dispatch dump that started
+
+    Probe::ArmDump(sky.hash, dir, 2);
+    REQUIRE(Probe::Active());
+    REQUIRE(Probe::GetDump().count == 2);
+    REQUIRE_FALSE(Probe::DumpRequested(other).has_value());
+    const auto first = Probe::DumpRequested(sky);
+    REQUIRE(first.has_value());
+    REQUIRE(first->path.starts_with(dir + "/nvn-dispatch-dump-fd1176a6c7fe62ce-p"));
+    REQUIRE((first->index == 0 && first->count == 2));
+    REQUIRE(Probe::GetDump().kind == "dispatch");
+    REQUIRE_FALSE(Probe::DumpRequested(draw).has_value());
+    REQUIRE(Probe::Active()); // one section left
+
+    // A constant buffer row as the replay formats it: 8.0 at 0x10 of c3, zero rows collapsed.
+    std::array<u8, 0x60> c3{};
+    const std::array<f32, 4> exposure{8.0f, 1.0f, 0.5f, -2.0f};
+    std::memcpy(c3.data() + 0x10, exposure.data(), sizeof(exposure));
+    const u32 marker = 0xdeadbeef;
+    std::memcpy(c3.data() + 0x50, &marker, sizeof(marker));
+    std::string section = "NVN dispatch dump 1 of 2\nbinding 2 compute c3 uniform slot 0:\n";
+    Probe::AppendRows(section, c3);
+    Probe::WriteDump(*first, section);
+    REQUIRE(Probe::GetDump().written == 1);
+    REQUIRE_FALSE(Probe::GetDump().done);
+
+    const auto second = Probe::DumpRequested(sky);
+    REQUIRE(second.has_value());
+    REQUIRE((second->index == 1 && second->path == first->path));
+    REQUIRE_FALSE(Probe::Active());
+    REQUIRE_FALSE(Probe::DumpRequested(sky).has_value());
+    Probe::WriteDump(*second, "NVN dispatch dump 2 of 2\n");
+    const Probe::DumpState state = Probe::GetDump();
+    REQUIRE((state.done && state.written == 2 && state.error.empty()));
+    REQUIRE(state.path == first->path);
+
+    const std::string text =
+        Common::FS::ReadStringFromFile(first->path, Common::FS::FileType::BinaryFile);
+    INFO(text);
+    REQUIRE(text == section + "NVN dispatch dump 2 of 2\n");
+    REQUIRE(text.find("  000000: zeros\n") != std::string::npos);
+    REQUIRE(text.find("  000010: 00 00 00 41 00 00 80 3f 00 00 00 3f 00 00 00 c0 | f32 8 1 0.5 -2 "
+                      "| u32 1090519040 1065353216 1056964608 3221225472\n") != std::string::npos);
+    REQUIRE(text.find("  000020..00004f: zeros (3 rows)\n") != std::string::npos);
+    REQUIRE(text.find("  000050: ef be ad de") != std::string::npos);
+
+    // Re-arming forgets the old dump; a section claimed before it is not counted.
+    Probe::ArmDump(sky.hash, dir, 99);
+    REQUIRE(Probe::GetDump().count == Probe::MaxDumpCount);
+    Probe::WriteDump(*second, "late\n");
+    REQUIRE(Probe::GetDump().written == 0);
+}
+
+TEST_CASE("NVN draw probe skips dispatches by compute hash and takes their census",
+          "[core][nx2_debug_server]") {
+    namespace Probe = VideoCommon::NvnDrawProbe;
+    Probe::Reset();
+    SCOPE_EXIT {
+        Probe::Reset();
+    };
+    const Probe::DispatchInfo direct{.hash = 0xc0, .groups = {4, 2, 1}, .indirect = false};
+    const Probe::DispatchInfo indirect{.hash = 0xc0, .groups = {}, .indirect = true};
+    const Probe::DispatchInfo other{.hash = 0xc1, .groups = {8, 1, 1}, .indirect = false};
+    Probe::DrawInfo draw{};
+    draw.hashes[0] = 0xa0;
+
+    Probe::SetSkip({0xc0}, Probe::SkipMode::Skip);
+    REQUIRE(Probe::Active());
+    REQUIRE(Probe::OnDispatch(direct));
+    REQUIRE(Probe::OnDispatch(indirect));
+    REQUIRE_FALSE(Probe::OnDispatch(other));
+    REQUIRE_FALSE(Probe::OnDraw(draw));
+    // Only mode selects draws; listed compute hashes still skip their dispatches.
+    Probe::SetSkip({0xa0, 0xc0}, Probe::SkipMode::Only);
+    REQUIRE_FALSE(Probe::OnDraw(draw));
+    REQUIRE(Probe::OnDispatch(direct));
+    REQUIRE_FALSE(Probe::OnDispatch(other));
+    Probe::SetSkip({}, Probe::SkipMode::Only);
+    REQUIRE(Probe::OnDraw(draw));
+    REQUIRE_FALSE(Probe::OnDispatch(direct));
+
+    Probe::SetSkip({0xc0}, Probe::SkipMode::Skip);
+    REQUIRE_FALSE(Probe::ArmCensus(1));
+    (void)Probe::OnDispatch(other); // the partial frame before the first present is dropped
+    Probe::OnPresent();
+    REQUIRE(Probe::LastCensus().dispatch_rows.empty());
+    (void)Probe::OnDispatch(direct);
+    (void)Probe::OnDispatch(direct);
+    (void)Probe::OnDispatch(indirect);
+    (void)Probe::OnDispatch(other);
+    (void)Probe::OnDraw(draw);
+    Probe::OnPresent();
+    const Probe::Census census = Probe::LastCensus();
+    REQUIRE(census.present != 0);
+    REQUIRE(census.draws == 1);
+    REQUIRE(census.dispatches == 4);
+    REQUIRE(census.skipped_dispatches == 3);
+    REQUIRE(census.dispatch_rows.size() == 2);
+    const Probe::DispatchRow& first = census.dispatch_rows[0];
+    REQUIRE(first.hash == 0xc0);
+    REQUIRE(first.count == 3);
+    REQUIRE(first.groups == 16);
+    REQUIRE(first.indirect == 1);
+    REQUIRE(first.skipped == 3);
+    const Probe::DispatchRow& second = census.dispatch_rows[1];
+    REQUIRE(second.hash == 0xc1);
+    REQUIRE(second.count == 1);
+    REQUIRE(second.groups == 8);
+    REQUIRE(second.indirect == 0);
+    REQUIRE(second.skipped == 0);
+
+    // The census is over; the skip set alone keeps the probe active.
+    REQUIRE(Probe::Active());
+    Probe::SetSkip({}, Probe::SkipMode::Skip);
+    REQUIRE_FALSE(Probe::Active());
 }

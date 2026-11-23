@@ -427,9 +427,34 @@ Id EmitStorageAtomicMaxF32x2(EmitContext& ctx, const IR::Value& binding, const I
 }
 
 namespace {
+/// VTX-HLE raw global memory: the atomic DefineRawGlobalMemoryFunctions defined for `opcode`.
+Id RawGlobalAtomic(EmitContext& ctx, IR::Opcode opcode, Id type, Id address, Id value) {
+    if (!ctx.raw_global_memory) {
+        throw NotImplementedException("SPIR-V Instruction");
+    }
+    const size_t index{static_cast<size_t>(opcode) -
+                       static_cast<size_t>(IR::Opcode::GlobalAtomicIAdd32)};
+    const Id func{ctx.raw_global_atomic_funcs[index]};
+    if (!Sirit::ValidId(func)) {
+        throw NotImplementedException("Global atomic {} is not supported by the host", opcode);
+    }
+    return ctx.OpFunctionCall(type, func, address, value);
+}
+
 /// A 32-bit global atomic through its routing function (EmitContext::DefineGlobalMemoryFunctions).
 Id GlobalAtomic(EmitContext& ctx, const IR::Inst& inst, EmitContext::GlobalAtomic kind, Id type,
                 const IR::Value& address, Id value) {
+    if (ctx.raw_global_memory) {
+        static constexpr std::array<IR::Opcode, static_cast<size_t>(EmitContext::GlobalAtomic::Count)>
+            opcodes{IR::Opcode::GlobalAtomicIAdd32, IR::Opcode::GlobalAtomicSMin32,
+                    IR::Opcode::GlobalAtomicUMin32, IR::Opcode::GlobalAtomicSMax32,
+                    IR::Opcode::GlobalAtomicUMax32, IR::Opcode::GlobalAtomicInc32,
+                    IR::Opcode::GlobalAtomicDec32,  IR::Opcode::GlobalAtomicAnd32,
+                    IR::Opcode::GlobalAtomicOr32,   IR::Opcode::GlobalAtomicXor32,
+                    IR::Opcode::GlobalAtomicExchange32, IR::Opcode::GlobalAtomicAddF32};
+        return RawGlobalAtomic(ctx, opcodes[static_cast<size_t>(kind)], type, ctx.Def(address),
+                               value);
+    }
     if (!ctx.profile.support_int64) {
         throw NotImplementedException("Global atomic addressing requires 64-bit integers");
     }
@@ -500,24 +525,24 @@ Id EmitGlobalAtomicCompareExchange32(EmitContext& ctx, IR::Inst* inst, const IR:
     return ctx.OpFunctionCall(ctx.U32[1], function, ctx.Def(address), comparator, value);
 }
 
-Id EmitGlobalAtomicIAdd64(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicIAdd64(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicIAdd64, ctx.U64, address, value);
 }
 
-Id EmitGlobalAtomicSMin64(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicSMin64(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicSMin64, ctx.U64, address, value);
 }
 
-Id EmitGlobalAtomicUMin64(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicUMin64(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicUMin64, ctx.U64, address, value);
 }
 
-Id EmitGlobalAtomicSMax64(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicSMax64(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicSMax64, ctx.U64, address, value);
 }
 
-Id EmitGlobalAtomicUMax64(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicUMax64(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicUMax64, ctx.U64, address, value);
 }
 
 Id EmitGlobalAtomicInc64(EmitContext&) {
@@ -528,40 +553,40 @@ Id EmitGlobalAtomicDec64(EmitContext&) {
     throw NotImplementedException("SPIR-V Instruction");
 }
 
-Id EmitGlobalAtomicAnd64(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicAnd64(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicAnd64, ctx.U64, address, value);
 }
 
-Id EmitGlobalAtomicOr64(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicOr64(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicOr64, ctx.U64, address, value);
 }
 
-Id EmitGlobalAtomicXor64(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicXor64(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicXor64, ctx.U64, address, value);
 }
 
-Id EmitGlobalAtomicExchange64(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicExchange64(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicExchange64, ctx.U64, address, value);
 }
 
-Id EmitGlobalAtomicIAdd32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicIAdd32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicIAdd32x2, ctx.U32[2], address, value);
 }
 
-Id EmitGlobalAtomicSMin32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicSMin32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicSMin32x2, ctx.U32[2], address, value);
 }
 
-Id EmitGlobalAtomicUMin32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicUMin32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicUMin32x2, ctx.U32[2], address, value);
 }
 
-Id EmitGlobalAtomicSMax32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicSMax32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicSMax32x2, ctx.U32[2], address, value);
 }
 
-Id EmitGlobalAtomicUMax32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicUMax32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicUMax32x2, ctx.U32[2], address, value);
 }
 
 Id EmitGlobalAtomicInc32x2(EmitContext&) {
@@ -572,48 +597,48 @@ Id EmitGlobalAtomicDec32x2(EmitContext&) {
     throw NotImplementedException("SPIR-V Instruction");
 }
 
-Id EmitGlobalAtomicAnd32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicAnd32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicAnd32x2, ctx.U32[2], address, value);
 }
 
-Id EmitGlobalAtomicOr32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicOr32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicOr32x2, ctx.U32[2], address, value);
 }
 
-Id EmitGlobalAtomicXor32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicXor32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicXor32x2, ctx.U32[2], address, value);
 }
 
-Id EmitGlobalAtomicExchange32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicExchange32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicExchange32x2, ctx.U32[2], address, value);
 }
 
 Id EmitGlobalAtomicAddF32(EmitContext& ctx, IR::Inst* inst, const IR::Value& address, Id value) {
     return GlobalAtomic(ctx, *inst, EmitContext::GlobalAtomic::AddF32, ctx.F32[1], address, value);
 }
 
-Id EmitGlobalAtomicAddF16x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicAddF16x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicAddF16x2, ctx.U32[1], address, value);
 }
 
-Id EmitGlobalAtomicAddF32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicAddF32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicAddF32x2, ctx.U32[1], address, value);
 }
 
-Id EmitGlobalAtomicMinF16x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicMinF16x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicMinF16x2, ctx.U32[1], address, value);
 }
 
-Id EmitGlobalAtomicMinF32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicMinF32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicMinF32x2, ctx.U32[1], address, value);
 }
 
-Id EmitGlobalAtomicMaxF16x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicMaxF16x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicMaxF16x2, ctx.U32[1], address, value);
 }
 
-Id EmitGlobalAtomicMaxF32x2(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitGlobalAtomicMaxF32x2(EmitContext& ctx, Id address, Id value) {
+    return RawGlobalAtomic(ctx, IR::Opcode::GlobalAtomicMaxF32x2, ctx.U32[1], address, value);
 }
 
 } // namespace Shader::Backend::SPIRV

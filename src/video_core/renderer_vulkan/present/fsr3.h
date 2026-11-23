@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "common/math_util.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -39,6 +41,13 @@ public:
                      VkImage source_image, VkImageView source_image_view,
                      VkExtent2D input_image_extent,
                      const Common::Rectangle<f32>& crop_rect);
+
+    VkImageView Record(const Device& device, vk::CommandBuffer cmdbuf, size_t image_index,
+                       VkImage source_image, VkImageView source_image_view,
+                       VkExtent2D input_image_extent, const Common::Rectangle<f32>& crop_rect);
+    [[nodiscard]] std::shared_ptr<void> TakeRecordResources() {
+        return std::move(m_record_descriptor_sets);
+    }
 
 private:
     // ΓöÇΓöÇ resource creation helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -78,18 +87,25 @@ private:
     vk::RenderPass m_renderpass;
     vk::Sampler m_sampler;
 
-    struct Images {
+    // One pair of intermediate images shared by every frame in flight, as in SMAA.
+    std::array<vk::Image, MaxStage> m_dynamic_images;
+    std::array<vk::ImageView, MaxStage> m_dynamic_image_views;
+    struct Frame {
         vk::DescriptorSets descriptor_sets;
-        std::array<vk::Image, MaxStage> images;
-        std::array<vk::ImageView, MaxStage> image_views;
         std::array<vk::Framebuffer, MaxStage> framebuffers;
     };
-    std::vector<Images> m_dynamic_images;
+    std::vector<Frame> m_frames;
 
     // Previous-frame history for temporal accumulation
     vk::Image m_prev_frame_image;
     vk::ImageView m_prev_frame_view;
+    struct RecordDescriptorSets {
+        vk::DescriptorPool pool;
+        vk::DescriptorSets sets;
+    };
+    std::shared_ptr<RecordDescriptorSets> m_record_descriptor_sets;
     bool m_images_ready{};
+    bool m_record_images_ready{};
     bool m_has_prev_frame{};
     u32 m_frame_counter{};
 };

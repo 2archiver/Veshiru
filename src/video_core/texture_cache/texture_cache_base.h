@@ -33,6 +33,7 @@
 #include <ranges>
 #include "common/scratch_buffer.h"
 #include "common/slot_vector.h"
+#include "video_core/texture_cache/util.h"
 #include "video_core/texture_cache/pending_download.h"
 #include "common/thread_worker.h"
 #include "video_core/compatible_formats.h"
@@ -572,6 +573,9 @@ private:
     /// Find or create an image view for the depth buffer
     [[nodiscard]] ImageViewId FindDepthBuffer();
 
+    [[nodiscard]] bool UsePaddedTargetWidths() const;
+    void ClipPaddedTarget(ImageInfo& info) const;
+
     /// Find or create a view for a render target with the given image parameters
     [[nodiscard]] ImageViewId FindRenderTargetView(const ImageInfo& info, GPUVAddr gpu_addr);
 
@@ -673,6 +677,7 @@ private:
     std::deque<TextureCacheGPUMap> gpu_page_table_storage;
 
     RenderTargets render_targets;
+    RenderTargetClip render_target_clip;
     u64 render_targets_serial = 0;
     u32 rt_active_mask = 0;
     std::array<ImageId, 8> rt_image_id{};

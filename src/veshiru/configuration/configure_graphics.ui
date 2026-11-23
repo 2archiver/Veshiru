@@ -47,6 +47,33 @@
       </widget>
      </item>
      <item>
+      <widget class="QGroupBox" name="graphics_path_group">
+       <property name="title">
+        <string>Graphics Path</string>
+       </property>
+       <layout class="QVBoxLayout" name="graphics_path_group_layout">
+        <item>
+         <widget class="QWidget" name="graphics_path_widget" native="true">
+          <layout class="QVBoxLayout" name="graphics_path_layout">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </item>
+     <item>
       <widget class="QGroupBox" name="groupBox">
        <property name="maximumSize">
         <size>

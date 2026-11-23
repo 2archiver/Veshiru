@@ -492,9 +492,12 @@ void GameListWorker::AddTitlesToGameList(GameListDir* parent_dir, GameListItemTy
 }
 
 void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::filesystem::path>& files,
-                                    GameListDir* parent_dir) {
-    const auto process_candidate = [this, target,
-                                    parent_dir](const std::filesystem::path& path) {
+                                    GameListDir* parent_dir,
+                                    FileSys::ManualContentProvider* target_provider) {
+    FileSys::ManualContentProvider* const content_provider =
+        target_provider != nullptr ? target_provider : provider;
+    const auto process_candidate = [this, target, parent_dir,
+                                    content_provider](const std::filesystem::path& path) {
         const auto physical_name = Common::FS::PathToUTF8String(path);
 
         // The incremental refresh, list pass: a file whose path, size and modification time
@@ -585,9 +588,9 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
 
         if (target == ScanTarget::FillManualContentProvider) {
             if (res2 == Loader::ResultStatus::Success && file_type == Loader::FileType::NCA) {
-                provider->AddEntry(FileSys::TitleType::Application,
-                                   FileSys::GetCRTypeFromNCAType(FileSys::NCA{file}.GetType()),
-                                   program_id, file);
+                content_provider->AddEntry(
+                    FileSys::TitleType::Application,
+                    FileSys::GetCRTypeFromNCAType(FileSys::NCA{file}.GetType()), program_id, file);
             } else if (file_type == Loader::FileType::NX) {
                 // An archive brings its own updates and add-ons, whatever the setting.
                 std::vector<u64> nx_program_ids;
@@ -595,21 +598,22 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
                     nx_program_ids.size() > 1) {
                     for (const u64 nx_id : nx_program_ids) {
                         Loader::AppLoader_NX app_loader{system, file, nx_id};
-                        app_loader.RegisterContent(*provider, true);
+                        app_loader.RegisterContent(*content_provider, true);
                     }
                 } else {
-                    static_cast<Loader::AppLoader_NX&>(*loader).RegisterContent(*provider, true);
+                    static_cast<Loader::AppLoader_NX&>(*loader).RegisterContent(*content_provider,
+                                                                                true);
                 }
             } else if (file_type == Loader::FileType::NUP) {
                 // Register bootable .nup titles (Switch 1 & Switch 2) and their carried add-ons so
                 // HOME Menu discovers them alongside native archives regardless of settings.
-                void(provider->AddEntriesFromContainer(file));
+                void(content_provider->AddEntriesFromContainer(file));
             } else if (Settings::values.ext_content_from_game_dirs.GetValue() &&
                        (file_type == Loader::FileType::XCI ||
                         file_type == Loader::FileType::XCZ ||
                         file_type == Loader::FileType::NSP ||
                         file_type == Loader::FileType::NSZ)) {
-                void(provider->AddEntriesFromContainer(file));
+                void(content_provider->AddEntriesFromContainer(file));
             }
         } else {
             std::vector<u64> program_ids;
@@ -712,12 +716,20 @@ void GameListWorker::run() {
     watch_list.clear();
     reused_entries = 0;
     parsed_entries = 0;
-    provider->ClearAllEntries();
+    FileSys::ManualContentProvider temp_provider;
 
     const auto DirEntryReady = [&](GameListDir* game_list_dir) {
         auto pending = std::make_shared<std::unique_ptr<GameListDir>>(game_list_dir);
         RecordEvent([=](GameListModel* model) { model->AddDirEntry(pending->release()); });
     };
+
+    struct PendingDirScan {
+        GameListDir* game_list_dir{};
+        GameListItemType parent_type{};
+        bool is_scan{};
+        std::vector<std::filesystem::path> files;
+    };
+    std::vector<PendingDirScan> pending_dirs;
 
     GameListDir* first_scanned_dir = nullptr;
     for (UISettings::GameDir& game_dir : game_dirs) {
@@ -747,7 +759,7 @@ void GameListWorker::run() {
         const auto parent_type = static_cast<GameListItemType>(game_list_dir->type());
         DirEntryReady(game_list_dir);
         if (scan) {
-            const auto discovery = GameListDiscovery::Discover(
+            auto discovery = GameListDiscovery::Discover(
                 std::filesystem::path(Common::FS::ToU8String(game_dir.path)), game_dir.deep_scan,
                 [](const auto& path) {
                     const auto name = Common::FS::PathToUTF8String(path);
@@ -761,13 +773,30 @@ void GameListWorker::run() {
                      "Discovery: candidates={} directories={} skipped_romfs={} errors={} cancelled={}",
                      discovery.files.size(), discovery.directories.size(), discovery.skipped_romfs,
                      discovery.errors, stop_requested.load());
-            ScanFileSystem(ScanTarget::FillManualContentProvider, discovery.files, game_list_dir);
-            ScanFileSystem(ScanTarget::PopulateGameList, discovery.files, game_list_dir);
+            ScanFileSystem(ScanTarget::FillManualContentProvider, discovery.files, game_list_dir,
+                           &temp_provider);
             if (first_scanned_dir == nullptr) {
                 first_scanned_dir = game_list_dir;
             }
+            pending_dirs.push_back(
+                {game_list_dir, parent_type, true, std::move(discovery.files)});
         } else {
-            AddTitlesToGameList(game_list_dir, parent_type);
+            pending_dirs.push_back({game_list_dir, parent_type, false, {}});
+        }
+    }
+
+    if (!stop_requested) {
+        provider->SwapEntries(temp_provider);
+        for (const auto& pending : pending_dirs) {
+            if (stop_requested) {
+                break;
+            }
+            if (pending.is_scan) {
+                ScanFileSystem(ScanTarget::PopulateGameList, pending.files, pending.game_list_dir,
+                               provider);
+            } else {
+                AddTitlesToGameList(pending.game_list_dir, pending.parent_type);
+            }
         }
     }
 

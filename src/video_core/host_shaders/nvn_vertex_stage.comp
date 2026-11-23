@@ -1,0 +1,37 @@
+// SPDX-FileCopyrightText: Copyright 2026 Vortex727 (FUKKO)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#version 450
+
+// NVN HLE (Vulkan::Nvn::VertexStageGpu, nvn_vertex_stage.h). Copies the vertex ranges a render pass
+// reads from an imported (host memory) pool into device-local memory. One workgroup per task: a run
+// of at most 4096 16-byte units (64 KiB), moved by the workgroup's 256 invocations in parallel.
+// Shader loads keep thousands of host reads in flight, where a transfer command waits on far fewer:
+// while other processes share the GPU and its PCIe link, vkCmdCopyBuffer from host memory slowed
+// 3-5x, shader reads of the same memory ~1.4x (F:/eg/results/vertex-stage2).
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Source {
+    uvec4 source[];
+};
+
+layout(std430, binding = 1) writeonly buffer Destination {
+    uvec4 destination[];
+};
+
+// x: first unit in `source`, y: first unit in `destination`, z: units, w: unused.
+layout(std430, binding = 2) readonly buffer Tasks {
+    uvec4 tasks[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint first_task;
+} pc;
+
+void main() {
+    const uvec4 task = tasks[pc.first_task + gl_WorkGroupID.x];
+    for (uint unit = gl_LocalInvocationID.x; unit < task.z; unit += 256u) {
+        destination[task.y + unit] = source[task.x + unit];
+    }
+}

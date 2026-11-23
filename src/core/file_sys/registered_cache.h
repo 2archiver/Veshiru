@@ -288,6 +288,7 @@ public:
     bool AddEntriesFromContainer(VirtualFile file, bool only_content = false,
                                  std::optional<u64> base_program_id = std::nullopt);
     void ClearAllEntries();
+    void SwapEntries(ManualContentProvider& other);
 
     void Refresh() override;
     bool HasEntry(u64 title_id, ContentRecordType type) const override;

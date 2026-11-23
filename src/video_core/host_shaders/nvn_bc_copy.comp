@@ -1,0 +1,31 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform texture2DArray source_image;
+layout(binding = 1) uniform texture2DArray destination_image;
+layout(binding = 2, rgba8) writeonly uniform image2DArray scratch_image;
+layout(push_constant) uniform Copy {
+    ivec2 source_origin;
+    ivec2 destination_origin;
+    ivec2 block_origin;
+    ivec2 copy_size;
+    ivec2 scratch_size;
+} p;
+
+void main() {
+    ivec3 local = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(local.xy, p.scratch_size))) {
+        return;
+    }
+    ivec2 pixel = p.block_origin + local.xy;
+    ivec2 relative = pixel - p.destination_origin;
+    bool copied = all(greaterThanEqual(relative, ivec2(0))) &&
+                  all(lessThan(relative, p.copy_size));
+    vec4 value = copied ? texelFetch(source_image, ivec3(p.source_origin + relative, local.z), 0)
+                        : texelFetch(destination_image, ivec3(pixel, local.z), 0);
+    imageStore(scratch_image, local, value);
+}

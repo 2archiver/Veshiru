@@ -18,6 +18,7 @@
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/physical_core.h"
 #include "core/hle/kernel/svc.h"
+#include "core/hle/nvn/bridge.h"
 
 namespace Kernel {
 
@@ -163,7 +164,14 @@ void PhysicalCore::RunThread(KernelCore& kernel, Kernel::KThread* thread) {
         // Handle system calls.
         if (supervisor_call) {
             // Perform call.
-            Svc::Call(system, interface->GetSvcNumber());
+            const u32 svc = interface->GetSvcNumber();
+            // NVN bridge thunk SVCs (0x8000+) are handled on the host; anything else is a kernel SVC.
+            if (svc >= Core::NvnHle::Thunk::SvcBase) {
+                if (Core::NvnHle::Bridge::Handle(system, thread, *interface, svc)) {
+                    return;
+                }
+            }
+            Svc::Call(system, svc);
             return;
         }
 

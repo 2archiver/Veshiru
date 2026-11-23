@@ -46,7 +46,7 @@ public:
 
     ResultStatus ReadRomFS(FileSys::VirtualFile& dir) override;
     ResultStatus ReadProgramId(u64& out_program_id) override;
-    ResultStatus ReadControlData(FileSys::NACP& out_control) override;
+    ResultStatus ReadControlData(FileSys::NACP& out_control) const override;
     ResultStatus ReadTitle(std::string& out_title) override;
 
     ResultStatus ReadBanner(std::vector<u8>& buffer) override;

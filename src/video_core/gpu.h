@@ -21,6 +21,7 @@ class System;
 
 namespace VideoCore {
 class RendererBase;
+class LoadProgressSink;
 class ShaderNotify;
 } // namespace VideoCore
 
@@ -217,6 +218,10 @@ public:
     /// Returns a const reference to the shader notifier.
     [[nodiscard]] const VideoCore::ShaderNotify& ShaderNotify() const;
 
+    /// Where a disk cache that loads after the frontend's load call (VTX-HLE's pipeline cache)
+    /// reports to the loading screen.
+    [[nodiscard]] VideoCore::LoadProgressSink& LoadProgress();
+
     [[nodiscard]] u64 GetTicks() const;
 
     /// The running application changed: re-decides the report timestamp units for it.
@@ -231,8 +236,10 @@ public:
 
     void RendererFrameEndNotify();
 
+    /// `on_composited` runs on the GPU thread once the renderer has composited these layers.
     void RequestComposite(std::vector<Tegra::FramebufferConfig>&& layers,
-                          std::vector<Service::Nvidia::NvFence>&& fences);
+                          std::vector<Service::Nvidia::NvFence>&& fences,
+                          std::function<void()> on_composited = {});
 
     void WaitForComposite();
 

@@ -44,6 +44,48 @@ struct HostTranslateInfo {
     bool support_conditional_barrier{}; ///< True when the device supports barriers in conditional
                                         ///< control flow
     bool single_lane_geometry_subgroups{};
+    /// VTX-HLE graphics stages: a bindless texture handle that no per-draw handle program can
+    /// compute is looked up in the replay's bindless table at run time (bindless_table.h).
+    bool nvn_bindless_table{};
+    /// VTX-HLE only: a global memory access whose address comes out of a memory load is never
+    /// tied to a storage buffer (the search stops at loads); such accesses stay raw global memory
+    /// (Profile::support_raw_global_memory).
+    bool nvn_raw_global_memory{};
+    /// With `nvn_raw_global_memory`: addresses that do not come out of a memory load are still
+    /// tracked without the driver bank bias (any constant buffer word is a storage buffer
+    /// descriptor); only what that fails to track is raw. The VTX-HLE driver bank has none, it
+    /// leaves this off and treats everything outside the biased window as raw.
+    bool nvn_raw_global_unbiased_tracking{};
+    /// With `nvn_raw_global_memory`: the guest -> device address table is a storage buffer of the
+    /// program (its last descriptor, cbuf_index == RAW_GLOBAL_TABLE_CBUF) that the host binds,
+    /// instead of living in the driver bank (c0).
+    bool nvn_raw_global_table_ssbo{};
+    /// With `nvn_raw_global_memory`: the raw coverage diagnostic (EDEN_NX2_RAW_COVERAGE=1): a
+    /// raw access the table does not hold appends a record to the miss ring named by the table
+    /// header (the table storage buffer, or c0 for the driver bank table; raw_coverage_layout.h).
+    /// Off: the module is the one without the diagnostic.
+    bool raw_coverage{};
+    /// With `nvn_raw_global_memory`: every invocation remembers the table entry of its last
+    /// translation and maps an address inside it without the binary search
+    /// (EDEN_NX2_TRY_RAWGLOBAL_FAST=1, VideoCommon::TranslateRawGlobalAddressLastHit is the
+    /// reference). Same results: the entries never overlap and do not change while the program
+    /// runs.
+    bool raw_global_last_hit{};
+    /// With `nvn_raw_global_memory` and the driver bank table: every raw store (32/64/128-bit
+    /// and the 8/16-bit field inserts) in an alias range writes to its mirror target too, and
+    /// every raw atomic repeats its operation there. Targets are read-only mirrors or imported
+    /// guest storage backing (EDEN_NX2_TRY_RO_MIRROR_EXACT /
+    /// EDEN_NX2_TRY_STORAGE_RAW_WRITE_THROUGH).
+    bool raw_global_store_alias{};
+    /// VTX-HLE: use the expanded native compute storage descriptor limit
+    /// (EDEN_NX2_TRY_COMPUTE_STORAGE64).
+    bool compute_storage64{};
+    /// Leave out the RescalingPass even while the resolution setting is scaled: a host whose
+    /// draws never scale a target (VTX-HLE: the game renders at the sizes it asks the driver
+    /// for and pushes all-zero scaling words) gets the same SPIR-V whatever the resolution
+    /// setting is, so the setting is no input of what it translates or caches. Off: the emulated
+    /// GPU, which rescales.
+    bool skip_rescaling_pass{};
     bool support_byte_addressed_r16{};
     /// True when a handle read from a table at a per-invocation index may become a descriptor
     /// array of the table's entries (not OpenGL: its pipelines bind at most 64 textures; Vulkan

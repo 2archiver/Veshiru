@@ -50,6 +50,8 @@
 
 namespace VideoCommon {
 
+inline constexpr u64 DkbProgramId = 0x040074A01BF12000ULL;
+
 /// EDEN_NATIVE_DRAW_DIAGNOSTICS is read once: getenv scans the whole environment block on Windows.
 [[nodiscard]] inline bool NativeDrawDiagnostics() {
     static const bool enabled = std::getenv("EDEN_NATIVE_DRAW_DIAGNOSTICS") != nullptr;
@@ -1397,6 +1399,9 @@ bool TextureCache<P>::RescaleRenderTargets() {
     bool rescaled = false;
     std::array<ImageId, NUM_RT> tmp_color_images{};
     ImageId tmp_depth_image{};
+    const auto& clip = maxwell3d->regs.surface_clip;
+    const bool clip_moved = UsePaddedTargetWidths() &&
+                            render_target_clip.Update(clip.x.Value() + clip.width.Value());
     do {
         flags[Dirty::RenderTargets] = false;
 
@@ -1427,13 +1432,13 @@ bool TextureCache<P>::RescaleRenderTargets() {
         };
         for (size_t index = 0; index < NUM_RT; ++index) {
             ImageViewId& color_buffer_id = render_targets.color_buffer_ids[index];
-            if (flags[Dirty::ColorBuffer0 + index] || force) {
+            if (flags[Dirty::ColorBuffer0 + index] || force || clip_moved) {
                 flags[Dirty::ColorBuffer0 + index] = false;
                 BindRenderTarget(&color_buffer_id, FindColorBuffer(index));
             }
             check_rescale(color_buffer_id, tmp_color_images[index]);
         }
-        if (flags[Dirty::ZetaBuffer] || force) {
+        if (flags[Dirty::ZetaBuffer] || force || clip_moved) {
             flags[Dirty::ZetaBuffer] = false;
             BindRenderTarget(&render_targets.depth_buffer_id, FindDepthBuffer());
         }
@@ -1606,7 +1611,8 @@ bool TextureCache<P>::ColorTargetWrittenBeforeThisFrame(u32 index) noexcept {
         !maxwell3d->dirty.flags[Dirty::ColorBuffer0 + index]) {
         image_id = rt_image_id[index];
     } else {
-        const ImageInfo info(rt, regs.anti_alias_samples_mode);
+        ImageInfo info(rt, regs.anti_alias_samples_mode);
+        ClipPaddedTarget(info);
         if (info.format == PixelFormat::Invalid || info.size.width == 0 || info.size.height == 0 ||
             info.size.depth == 0 || info.size.width > 65536 || info.size.height > 65536 ||
             info.size.depth > 2048 || info.resources.layers <= 0 ||
@@ -3619,7 +3625,7 @@ ImageId TextureCache<P>::InsertImage(const ImageInfo& info, GPUVAddr gpu_addr,
     }
     ASSERT_MSG(cpu_addr, "Tried to insert an image to an invalid gpu_addr={:#x}", gpu_addr);
     ImageInfo storage_info = info;
-    storage_info.native_tiling = gpu_memory->UsesNativeTiling();
+    storage_info.native_tiling = gpu_memory->UsesNativeTiling() && !info.maxwell_gob_layout;
     if (storage_info.native_tiling && info.type == ImageType::e3D) {
         // Switch 2 3D images (lighting/fog volumes) are rare: log each one's shape.
         LOG_DEBUG(HW_GPU, "3D image at {:#x}: {}x{}x{} levels {} format {} block {}x{}x{}",
@@ -4108,10 +4114,25 @@ std::optional<typename TextureCache<P>::BlitImages> TextureCache<P>::GetBlitImag
     if (can_be_depth_blit) {
         try_options |= RelaxedOptions::Format;
     }
+    const bool try_padded = src_addr != dst_addr && UsePaddedTargetWidths() &&
+                            copy.filter == Tegra::Engines::Fermi2D::Filter::Point;
+    const auto find_image = [&](const ImageInfo& info, GPUVAddr addr, s32 x0, s32 x1) {
+        const ImageId exact = FindImage(info, addr, try_options);
+        if (exact || !try_padded || GetFormatType(info.format) != SurfaceType::ColorTexture) {
+            return exact;
+        }
+        const u32 width = PaddedBlitWidth(info, x0, x1);
+        if (width == info.size.width) {
+            return ImageId{};
+        }
+        ImageInfo narrow = info;
+        narrow.size.width = width;
+        return FindImage(narrow, addr, RelaxedOptions::RequireBlockLayout);
+    };
     do {
         has_deleted_images = false;
-        src_id = FindImage(src_info, src_addr, try_options);
-        dst_id = FindImage(dst_info, dst_addr, try_options);
+        src_id = find_image(src_info, src_addr, copy.src_x0, copy.src_x1);
+        dst_id = find_image(dst_info, dst_addr, copy.dst_x0, copy.dst_x1);
         if (!copy.must_accelerate) {
             do {
                 if (!src_id && !dst_id) {
@@ -4272,8 +4293,24 @@ ImageViewId TextureCache<P>::FindColorBuffer(size_t index) {
     if (rt.format == Tegra::RenderTargetFormat::NONE) {
         return ImageViewId{};
     }
-    const ImageInfo info(regs.rt[index], regs.anti_alias_samples_mode);
+    ImageInfo info(regs.rt[index], regs.anti_alias_samples_mode);
+    ClipPaddedTarget(info);
     return FindRenderTargetView(info, gpu_addr);
+}
+
+template <class P>
+bool TextureCache<P>::UsePaddedTargetWidths() const {
+    return gpu_memory && gpu_memory->UsesNativeTiling() &&
+           Settings::GetCurrentProgramID() == DkbProgramId;
+}
+
+template <class P>
+void TextureCache<P>::ClipPaddedTarget(ImageInfo& info) const {
+    if (!UsePaddedTargetWidths()) {
+        return;
+    }
+    const auto& clip = maxwell3d->regs.surface_clip;
+    info.size.width = PaddedTargetWidth(info, clip.x.Value() + clip.width.Value());
 }
 
 template <class P>
@@ -4286,7 +4323,8 @@ ImageViewId TextureCache<P>::FindDepthBuffer() {
     if (gpu_addr == 0) {
         return ImageViewId{};
     }
-    const ImageInfo info(regs.zeta, regs.zeta_size, regs.anti_alias_samples_mode);
+    ImageInfo info(regs.zeta, regs.zeta_size, regs.anti_alias_samples_mode);
+    ClipPaddedTarget(info);
     return FindRenderTargetView(info, gpu_addr);
 }
 

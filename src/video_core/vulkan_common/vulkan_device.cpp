@@ -16,6 +16,7 @@
 #include <fstream>
 #include <optional>
 #include <thread>
+#include <tuple>
 #include "common/container/unordered_map.h"
 #include "common/container/unordered_set.h"
 #include <utility>
@@ -26,10 +27,12 @@
 #include "common/assert.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
+#include "common/logging.h"
 #include "common/memory_detect.h"
 #include <ranges>
 #include "common/settings.h"
 #include "common/settings_enums.h"
+#include "shader_recompiler/bindless_table.h"
 #include "video_core/nx2_stutter_trace.h"
 #include "video_core/texture_cache/memory_limits.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
@@ -936,8 +939,9 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         break;
     }
 
-    // VK_EXT_vertex_input_dynamic_state
-    if (!Settings::values.vertex_input_dynamic_state.GetValue()) {
+    // VK_EXT_vertex_input_dynamic_state. VTX-HLE's replay uses it whenever the device has it (its
+    // pipelines then carry no vertex layout), so the setting does not switch it off there.
+    if (!Settings::values.vertex_input_dynamic_state.GetValue() && !Settings::ResolveNvnHle().hle) {
         RemoveExtensionFeature(extensions.vertex_input_dynamic_state, features.vertex_input_dynamic_state, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
     }
 
@@ -951,12 +955,17 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         descriptor_indexing.shaderStorageBufferArrayNonUniformIndexing = false;
         descriptor_indexing.shaderInputAttachmentArrayNonUniformIndexing = false;
         descriptor_indexing.descriptorBindingUniformBufferUpdateAfterBind = false;
-        descriptor_indexing.descriptorBindingSampledImageUpdateAfterBind = false;
+        // VTX-HLE's bindless texture table is updated while earlier frames may still be in
+        // flight (bindless_table.h); nothing else uses the update-after-bind bits.
+        const bool bindless_table = Settings::ResolveNvnHle().hle;
+        descriptor_indexing.descriptorBindingSampledImageUpdateAfterBind =
+            bindless_table && descriptor_indexing.descriptorBindingSampledImageUpdateAfterBind;
         descriptor_indexing.descriptorBindingStorageImageUpdateAfterBind = false;
         descriptor_indexing.descriptorBindingStorageBufferUpdateAfterBind = false;
         descriptor_indexing.descriptorBindingUniformTexelBufferUpdateAfterBind = false;
         descriptor_indexing.descriptorBindingStorageTexelBufferUpdateAfterBind = false;
-        descriptor_indexing.descriptorBindingUpdateUnusedWhilePending = false;
+        descriptor_indexing.descriptorBindingUpdateUnusedWhilePending =
+            bindless_table && descriptor_indexing.descriptorBindingUpdateUnusedWhilePending;
         descriptor_indexing.descriptorBindingVariableDescriptorCount = false;
         // The fsr4-vk port's shaders declare runtime descriptor arrays.
         descriptor_indexing.runtimeDescriptorArray =
@@ -969,11 +978,21 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         RemoveExtensionFeature(extensions.descriptor_buffer, features.descriptor_buffer,
                                VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME);
     }
+    // VTX-HLE reads and writes guest memory through buffer device addresses (raw global memory).
+    // Core since Vulkan 1.2: the extension table only sets the flag for older instances. The flag
+    // also makes the allocator allocate with VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT.
+    const bool nvn_hle_device_address =
+        Settings::ResolveNvnHle().hle && features.buffer_device_address.bufferDeviceAddress;
 #ifdef EGLANTINE_STREAMLINE
     // NVIDIA's DLSS needs buffer device addresses: keep the feature enabled for
     // it, but leave Eglantine's own buffers as they are without descriptor buffers.
     const bool dlss_wants_device_address =
         streamline_extensions && features.buffer_device_address.bufferDeviceAddress;
+#endif
+    if (nvn_hle_device_address) {
+        extensions.buffer_device_address = true;
+    } else
+#ifdef EGLANTINE_STREAMLINE
     if (!extensions.descriptor_buffer && dlss_wants_device_address) {
         extensions.buffer_device_address = false;
     } else
@@ -1081,6 +1100,17 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     }
 #endif
 
+    allocator = CreateAllocator(true);
+    g_memory_free_worker.AddDevice();
+
+    owns_static_pipeline_cache = surface != VkSurfaceKHR{};
+    LoadStaticPipelineCache();
+
+    // Initialize GPU logging if enabled
+    InitializeGPULogging();
+}
+
+VmaAllocator Device::CreateAllocator(bool externally_synchronized) const {
     VmaVulkanFunctions functions{};
     functions.vkGetInstanceProcAddr = dld.vkGetInstanceProcAddr;
     functions.vkGetDeviceProcAddr = dld.vkGetDeviceProcAddr;
@@ -1089,7 +1119,8 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     functions.vkAllocateMemory = TimedAllocateMemory;
     functions.vkFreeMemory = TimedFreeMemory;
 
-    VmaAllocatorCreateFlags flags = VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT;
+    VmaAllocatorCreateFlags flags =
+        externally_synchronized ? VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT : 0;
     if (extensions.memory_budget) {
         flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
     }
@@ -1110,7 +1141,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     const VmaDeviceMemoryCallbacks memory_callbacks{
             .pfnAllocate = nullptr,
             .pfnFree = OnVmaFreeDeviceMemory,
-            .pUserData = this,
+            .pUserData = const_cast<Device*>(this),
     };
     const VmaAllocatorCreateInfo allocator_info{
             .flags = flags,
@@ -1133,14 +1164,13 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             .pTypeExternalMemoryHandleTypes = nullptr,
     };
 
-    vk::Check(vmaCreateAllocator(&allocator_info, &allocator));
-    g_memory_free_worker.AddDevice();
+    VmaAllocator result{};
+    vk::Check(vmaCreateAllocator(&allocator_info, &result));
+    return result;
+}
 
-    owns_static_pipeline_cache = surface != VkSurfaceKHR{};
-    LoadStaticPipelineCache();
-
-    // Initialize GPU logging if enabled
-    InitializeGPULogging();
+VmaAllocator Device::CreateThreadSafeAllocator() const {
+    return CreateAllocator(false);
 }
 
 Device::~Device() {
@@ -1194,7 +1224,11 @@ VideoCommon::Fsr4PortDevice Device::Fsr4PortDevice() const {
     };
 }
 
-VmaPool Device::GetSeparatePool(SeparatePool kind, u32 memory_type, bool create) const {
+VmaPool Device::GetSeparatePool(SeparatePool kind, u32 memory_type, VmaAllocator user,
+                                bool create) const {
+    if (user != allocator) {
+        return VK_NULL_HANDLE;
+    }
     std::scoped_lock lk{separate_pools_mutex};
     VmaPool& pool = separate_pools[static_cast<u32>(kind)][memory_type];
     if (pool == VK_NULL_HANDLE && create) {
@@ -1353,6 +1387,30 @@ VkFormat Device::GetSupportedFormat(VkFormat wanted_format, VkFormatFeatureFlags
               "doesn't support any of the alternatives",
               wanted_format, wanted_usage, format_type);
     return wanted_format;
+}
+
+namespace {
+// The first thread to report a lost or unresponsive device claims the report.
+bool ClaimDeviceReport() {
+    static std::atomic_flag reported;
+    return !reported.test_and_set();
+}
+} // Anonymous namespace
+
+void Device::ReportUnresponsive() const {
+    if (!ClaimDeviceReport()) {
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::hours{1});
+        }
+    }
+    LOG_CRITICAL(Render_Vulkan,
+                 "Closing Veshiru: the GPU stopped making progress (EDEN_NX2_GPU_WATCHDOG)");
+    Common::Log::Flush();
+#ifdef _WIN32
+    std::exit(EXIT_FAILURE);
+#else
+    std::_Exit(EXIT_FAILURE);
+#endif
 }
 
 void Device::ReportLoss() const {
@@ -1576,6 +1634,21 @@ bool Device::GetSuitability(bool requires_swapchain) {
     FOR_EACH_VK_FEATURE_EXT(FEATURE_EXTENSION);
     FOR_EACH_VK_EXTENSION(EXTENSION);
 
+    // VK_EXT_external_memory_host serves VTX-HLE only (it imports the game's memory pools): the
+    // emulated GPU creates exactly the device it always did. With a pre-1.1 instance its
+    // dependency VK_KHR_external_memory is not core and has to be enabled as well.
+    if (!Settings::ResolveNvnHle().hle) {
+        loaded_extensions.erase(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+        extensions.external_memory_host = false;
+    } else if (extensions.external_memory_host && instance_version < VK_API_VERSION_1_1) {
+        if (supported_extensions.contains(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME)) {
+            loaded_extensions.insert(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
+        } else {
+            loaded_extensions.erase(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+            extensions.external_memory_host = false;
+        }
+    }
+
     extensions.depth_stencil_resolve =
         extensions.depth_stencil_resolve &&
         (instance_version >= VK_API_VERSION_1_2 || extensions.create_renderpass2);
@@ -1785,6 +1858,11 @@ bool Device::GetSuitability(bool requires_swapchain) {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT;
         SetNext(next, properties.descriptor_buffer);
     }
+    if (extensions.descriptor_indexing || instance_version >= VK_API_VERSION_1_2) {
+        properties.descriptor_indexing.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+        SetNext(next, properties.descriptor_indexing);
+    }
     if (extensions.subgroup_size_control || features.subgroup_size_control.subgroupSizeControl) {
         properties.subgroup_size_control.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES;
@@ -1799,6 +1877,15 @@ bool Device::GetSuitability(bool requires_swapchain) {
         properties.maintenance5.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_PROPERTIES_KHR;
         SetNext(next, properties.maintenance5);
+    }
+    if (extensions.graphics_pipeline_library) {
+        properties.graphics_pipeline_library.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT;
+        SetNext(next, properties.graphics_pipeline_library);
+    }
+    if (extensions.mesh_shader) {
+        properties.mesh_shader.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT;
+        SetNext(next, properties.mesh_shader);
     }
     if (extensions.pipeline_binary) {
         properties.pipeline_binary.sType =
@@ -2106,6 +2193,37 @@ void Device::RemoveUnsuitableExtensions() {
     }
     RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
                                        VK_EXT_MESH_SHADER_EXTENSION_NAME);
+
+    // VK_EXT_graphics_pipeline_library, which needs VK_KHR_pipeline_library: only for VTX-HLE's
+    // fast-linked pipelines (the nvn_pipeline_library setting), and only when linking is fast
+    // (otherwise it saves nothing over a monolithic compile) and the vertex and fragment shaders
+    // may disagree on interpolation decorations (libraries are compiled separately).
+    {
+        const bool gpl_allowed =
+            Settings::values.nvn_pipeline_library.GetValue() && Settings::ResolveNvnHle().hle;
+        const auto& gpl_properties = properties.graphics_pipeline_library;
+        const bool gpl_usable =
+            features.graphics_pipeline_library.graphicsPipelineLibrary &&
+            extensions.pipeline_library &&
+            gpl_properties.graphicsPipelineLibraryFastLinking &&
+            gpl_properties.graphicsPipelineLibraryIndependentInterpolationDecoration;
+        if (gpl_allowed) {
+            LOG_INFO(Render_Vulkan,
+                     "VK_EXT_graphics_pipeline_library: fast linking {}, independent "
+                     "interpolation {}, {}",
+                     gpl_properties.graphicsPipelineLibraryFastLinking == VK_TRUE,
+                     gpl_properties.graphicsPipelineLibraryIndependentInterpolationDecoration ==
+                         VK_TRUE,
+                     gpl_usable ? "used" : "not used");
+        }
+        extensions.graphics_pipeline_library = gpl_allowed && gpl_usable;
+        RemoveExtensionFeatureIfUnsuitable(extensions.graphics_pipeline_library,
+                                           features.graphics_pipeline_library,
+                                           VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+        extensions.pipeline_library = extensions.graphics_pipeline_library;
+        RemoveExtensionIfUnsuitable(extensions.pipeline_library,
+                                    VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+    }
 
     // VK_KHR_shader_quad_control
     // Quad control depends on maximal reconvergence; advertise neither unless
@@ -2681,6 +2799,26 @@ void Device::ShutdownGPULogging() {
     if (GPU::Logging::GPULogger::GetInstance().IsInitialized()) {
         GPU::Logging::GPULogger::GetInstance().Shutdown();
     }
+}
+
+bool Device::IsBindlessTableSupported() const {
+    const auto& indexing = features.descriptor_indexing;
+    const auto& limits = properties.descriptor_indexing;
+    // One set holds a texture array per image type and class plus the sampler array: the update
+    // after bind limits count the whole set and each stage.
+    constexpr u32 images = Shader::BINDLESS_TEXTURE_CAPACITY * Shader::BINDLESS_CLASS_COUNT *
+                           Shader::BINDLESS_TYPE_COUNT;
+    return Settings::ResolveNvnHle().hle && indexing.shaderSampledImageArrayNonUniformIndexing &&
+           indexing.descriptorBindingPartiallyBound &&
+           indexing.descriptorBindingSampledImageUpdateAfterBind &&
+           indexing.descriptorBindingUpdateUnusedWhilePending &&
+           features.features.shaderSampledImageArrayDynamicIndexing &&
+           limits.maxPerStageDescriptorUpdateAfterBindSampledImages >= images &&
+           limits.maxDescriptorSetUpdateAfterBindSampledImages >= images &&
+           limits.maxPerStageDescriptorUpdateAfterBindSamplers >=
+               Shader::BINDLESS_SAMPLER_CAPACITY &&
+           limits.maxDescriptorSetUpdateAfterBindSamplers >= Shader::BINDLESS_SAMPLER_CAPACITY &&
+           limits.maxPerStageUpdateAfterBindResources >= images + Shader::BINDLESS_SAMPLER_CAPACITY;
 }
 
 } // namespace Vulkan

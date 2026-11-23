@@ -1,0 +1,41 @@
+// SPDX-FileCopyrightText: Copyright 2026 Vortex727 (FUKKO)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#version 450
+
+// NVN HLE (Vulkan::Nvn::QuadIndirectGpu). An indirect draw of QUADS keeps its arguments as
+// {count, instanceCount, first, baseInstance}; Vulkan has no quad topology, so the host draws
+// triangles from a fixed index buffer (0 1 2 0 2 3, 4 5 6 4 6 7, ...). One invocation rewrites one
+// record as VkDrawIndexedIndirectCommand {count / 4 * 6, instanceCount, 0, first, baseInstance}
+// (20 bytes per draw). Quads past the index buffer's capacity are not drawn.
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Source {
+    uint source[];
+};
+
+layout(std430, binding = 1) writeonly buffer Destination {
+    uint destination[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint first_word;   // word of the first record in `source`
+    uint stride_words; // words between records
+    uint draws;        // records to convert
+    uint max_quads;    // quads the index buffer holds
+} pc;
+
+void main() {
+    const uint draw = gl_GlobalInvocationID.x;
+    if (draw >= pc.draws) {
+        return;
+    }
+    const uint base = pc.first_word + draw * pc.stride_words;
+    const uint quads = min(source[base] / 4u, pc.max_quads);
+    destination[draw * 5u] = quads * 6u;
+    destination[draw * 5u + 1u] = source[base + 1u];
+    destination[draw * 5u + 2u] = 0u;
+    destination[draw * 5u + 3u] = source[base + 2u];
+    destination[draw * 5u + 4u] = source[base + 3u];
+}

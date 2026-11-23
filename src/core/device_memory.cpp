@@ -63,6 +63,8 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     // How long a game that keeps presenting holds a pass back once host commit is under pressure.
     const std::chrono::seconds trim_escape = ample_host_ram ? 120s : 20s;
     auto last_pass = std::chrono::steady_clock::now();
+    u64 last_seen_presents = Core::g_nx2_present_count.load(std::memory_order_relaxed);
+    auto last_present_time = std::chrono::steady_clock::time_point{};
     while (true) {
         {
             std::unique_lock lock{mutex};
@@ -74,6 +76,10 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         // Check whether bulk mapping/unmapping/protection (course loads, boots, spawns) is active.
         // Never force a 1-second zero-page scan in the middle of an active load on ample-RAM hosts.
         const u64 presents_before = Core::g_nx2_present_count.load(std::memory_order_relaxed);
+        if (presents_before != last_seen_presents) {
+            last_seen_presents = presents_before;
+            last_present_time = std::chrono::steady_clock::now();
+        }
         bool mapping_active = false;
         const int poll_checks = ample_host_ram ? 4 : 10;
         for (int wait = 0; wait < poll_checks; ++wait) {
@@ -96,12 +102,22 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             continue;
         }
         consecutive_busy_deferrals = 0;
+        const auto now = std::chrono::steady_clock::now();
         const Common::ProcessMemoryUsage usage = Common::GetProcessMemoryUsage();
-        const bool guest_presenting =
-            Core::g_nx2_present_count.load(std::memory_order_relaxed) != presents_before;
+        const u64 presents_after = Core::g_nx2_present_count.load(std::memory_order_relaxed);
+        if (presents_after != last_seen_presents) {
+            last_seen_presents = presents_after;
+            last_present_time = now;
+        }
         const bool memory_pressure = !ample_host_ram || usage.working_set >= (host_ram_bytes / 3);
-        const auto since_pass = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::steady_clock::now() - last_pass);
+        const bool recently_presented =
+            ample_host_ram && !memory_pressure &&
+            last_present_time != std::chrono::steady_clock::time_point{} &&
+            (now - last_present_time) < 15s;
+        const bool guest_presenting =
+            (presents_after != presents_before) || recently_presented;
+        const auto since_pass =
+            std::chrono::duration_cast<std::chrono::seconds>(now - last_pass);
         if (!ShouldTrimZeroPages(mapping_active, guest_presenting, since_pass, memory_pressure,
                                  trim_escape)) {
             // Silent after the first time: a session that plays for an hour would otherwise log a

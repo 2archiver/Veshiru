@@ -57,6 +57,7 @@ public:
         u32 meta_size{};
 
         std::vector<u8> npdm;
+        std::vector<u8> nacp;
         std::string title_name;
         std::string publisher;
         std::string source_dump;
@@ -73,6 +74,9 @@ public:
     /// parsing or hashing the rest of the table of contents). Useful when scanning a folder of
     /// containers for an update's companion base.
     static std::optional<u64> PeekBaseTitleId(const VirtualFile& file);
+
+    /// Add-on title IDs declared in package records without hashing or parsing the full TOC.
+    static std::vector<u64> PeekAddonTitleIds(const VirtualFile& file);
 
     /// Recursively merges overlay into a copy of base; overlay paths win.
     static VirtualDir MergeShadowDirs(const VirtualDir& base, const VirtualDir& overlay);

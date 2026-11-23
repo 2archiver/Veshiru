@@ -42,6 +42,10 @@ add_executable(tests
     core/nx2_present_pacer.cpp
     core/device_memory_trim.cpp
     core/nx2_frame_interval.cpp
+    core/nx2_present_queue.cpp
+    core/nx2_syncpoint_allocator.cpp
+    core/page_tracker.cpp
+    core/memory_span.cpp
     core/vfs_real.cpp
     core/ldn_lan_protocol.cpp
     core/perf_stats.cpp
@@ -278,6 +282,61 @@ add_executable(tests
     video_core/indirect_reset.cpp
     video_core/stale_pages.cpp
     input_common/calibration_configuration_job.cpp
+    common/vtx_hle_settings.cpp
+    nvn/ampere_exec.cpp
+    nvn/astc_bc.cpp
+    nvn/astc_gpu.cpp
+    nvn/backing_log.cpp
+    nvn/barrier_track.cpp
+    nvn/bridge.cpp
+    nvn/compute.cpp
+    nvn/compute_census.cpp
+    nvn/compute_legacy.cpp
+    nvn/compute_vulkan.cpp
+    nvn/condition_prefetch.cpp
+    nvn/costsplit.cpp
+    nvn/draw.cpp
+    nvn/draw_debug.cpp
+    nvn/gpu_profile.cpp
+    nvn/gpu_writes.cpp
+    nvn/hle_cmdbuf.cpp
+    nvn/hle_cmdbuf_bind.cpp
+    nvn/hle_core.cpp
+    nvn/hle_dlss.cpp
+    nvn/hle_native_image.cpp
+    nvn/hle_resources.cpp
+    nvn/hle_state.cpp
+    nvn/hle_texture.cpp
+    nvn/indirect.cpp
+    nvn/lifecycle.cpp
+    nvn/line_guard.cpp
+    nvn/memory.cpp
+    nvn/nvn_shader_containers.cpp
+    nvn/pass_state.cpp
+    nvn/pipeline_cache.cpp
+    nvn/pool_mirror.cpp
+    nvn/present_pacing.cpp
+    nvn/queue_sync.cpp
+    nvn/raw_global.cpp
+    nvn/recorder.cpp
+    nvn/rescale.cpp
+    nvn/screenshot.cpp
+    nvn/sdk_device_info.cpp
+    nvn/sdk_dlss_layout.cpp
+    nvn/sdk_impl_table.cpp
+    nvn/shaders.cpp
+    nvn/shaders_containers.cpp
+    nvn/shaders_coverage.cpp
+    nvn/shaders_position.cpp
+    nvn/sparse_layout.cpp
+    nvn/timestamps.cpp
+    nvn/types.cpp
+    nvn/uniform_snapshot.cpp
+    nvn/untile_gpu.cpp
+    nvn/vulkan.cpp
+    nvn/write_back.cpp
+    temp_path.cpp
+    temp_path.h
 )
 
 create_target_directory_groups(tests)

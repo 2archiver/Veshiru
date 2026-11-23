@@ -12,6 +12,20 @@ if(LIBVA_FOUND)
     list(APPEND FFmpeg_LIBRARIES ${LIBVA_LIBRARIES})
 endif()
 
+# Identity of the shader translation sources (see CMakeModules/GenerateTranslationEpoch.cmake):
+# VTX-HLE's pipeline disk cache is keyed by it instead of by the git revision. Recomputed at every
+# build; the generated file only changes when a translation input did.
+set(NVN_TRANSLATION_EPOCH_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/nvn_translation_epoch.cpp)
+add_custom_target(nvn_translation_epoch
+    BYPRODUCTS ${NVN_TRANSLATION_EPOCH_SOURCE}
+    COMMAND ${CMAKE_COMMAND}
+        -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DOUTPUT=${NVN_TRANSLATION_EPOCH_SOURCE}
+        -P ${PROJECT_SOURCE_DIR}/CMakeModules/GenerateTranslationEpoch.cmake
+    COMMENT "Hashing the shader translation sources"
+    VERBATIM
+)
+
 add_library(video_core STATIC
     buffer_cache/buffer_base.h
     buffer_cache/buffer_cache_base.h
@@ -106,6 +120,18 @@ add_library(video_core STATIC
     frame_presentation_stats.h
     gpu.cpp
     gpu.h
+    game_frame_size.h
+    upscaler.cpp
+    upscaler.h
+    pathdiff.cpp
+    pathdiff.h
+    shader_log.cpp
+    shader_log.h
+    shader_log_title.h
+    sampler_overrides.h
+    pipeline_cache_files.h
+    buffer_cache/raw_coverage.h
+    buffer_cache/raw_global_table.h
     gpu_timestamp.h
     gpu_split.cpp
     gpu_split.h
@@ -115,11 +141,43 @@ add_library(video_core STATIC
     invalidation_accumulator.h
     memory_manager.cpp
     memory_manager.h
+    nvn/guest_layouts.h
+    nvn/guest_memory.h
+    nvn/nvn_enums.inc
+    nvn/nvn_functions.inc
+    nvn/nvn_signatures.inc
+    nvn/nvn_types.h
+    nvn/queue_sync.cpp
+    nvn/queue_sync.h
+    nvn/record.h
+    nvn/recorder.cpp
+    nvn/recorder.h
+    nvn/recorder_commands.cpp
+    nvn/recorder_impl.h
+    nvn/sink.h
+    nvn/sink_gate.cpp
+    nvn/sink_gate.h
+    nvn/state_layouts.h
+    nvn/timestamp_mode.cpp
+    nvn/timestamp_mode.h
+    nvn/uniform_snapshot.cpp
+    nvn/uniform_snapshot.h
+    nvn/shader/nvn_compute_bank.cpp
+    nvn/shader/nvn_compute_bank.h
+    nvn/shader/nvn_descriptor_layout.cpp
+    nvn/shader/nvn_descriptor_layout.h
+    nvn/shader/nvn_driver_layout.h
+    nvn/shader/nvn_handle_program.h
+    nvn/shader/nvn_program_map.cpp
+    nvn/shader/nvn_program_map.h
     page_filter.h
     native_lowering.cpp
     native_lowering.h
     native_qmd.h
+    native_tensor_programs.h
     native_query_trace.h
+    nvn_draw_probe.cpp
+    nvn_draw_probe.h
     nx2.h
     nx2_back_idle_trace.cpp
     nx2_back_idle_trace.h
@@ -189,6 +247,110 @@ add_library(video_core STATIC
     renderer_vulkan/framebuffer_limits.h
     renderer_vulkan/maxwell_to_vk.cpp
     renderer_vulkan/maxwell_to_vk.h
+    renderer_vulkan/present/pass_recorder.h
+    renderer_vulkan/vk_pipeline_library.cpp
+    renderer_vulkan/vk_pipeline_library.h
+    renderer_vulkan/vk_raw_coverage.cpp
+    renderer_vulkan/vk_raw_coverage.h
+    renderer_vulkan/vk_viewport_scale.h
+    renderer_vulkan/nvn/nvn_alias_gpu.cpp
+    renderer_vulkan/nvn/nvn_alias_gpu.h
+    renderer_vulkan/nvn/nvn_astc_gpu.cpp
+    renderer_vulkan/nvn/nvn_astc_gpu.h
+    renderer_vulkan/nvn/nvn_backing_log.h
+    renderer_vulkan/nvn/nvn_barrier.h
+    renderer_vulkan/nvn/nvn_bc_encode.cpp
+    renderer_vulkan/nvn/nvn_bc_encode.h
+    renderer_vulkan/nvn/nvn_barrier_track.h
+    renderer_vulkan/nvn/nvn_compute.cpp
+    renderer_vulkan/nvn/nvn_condition_prefetch.h
+    renderer_vulkan/nvn/nvn_context.cpp
+    renderer_vulkan/nvn/nvn_context.h
+    renderer_vulkan/nvn/nvn_costsplit.cpp
+    renderer_vulkan/nvn/nvn_costsplit.h
+    renderer_vulkan/nvn/nvn_counters.cpp
+    renderer_vulkan/nvn/nvn_counters.h
+    renderer_vulkan/nvn/nvn_debug.cpp
+    renderer_vulkan/nvn/nvn_debug.h
+    renderer_vulkan/nvn/nvn_diag_textures.cpp
+    renderer_vulkan/nvn/nvn_diag_textures.h
+    renderer_vulkan/nvn/nvn_draw.cpp
+    renderer_vulkan/nvn/nvn_draw.h
+    renderer_vulkan/nvn/nvn_draw_clear.cpp
+    renderer_vulkan/nvn/nvn_draw_debug.cpp
+    renderer_vulkan/nvn/nvn_draw_probe.cpp
+    renderer_vulkan/nvn/nvn_bindless.cpp
+    renderer_vulkan/nvn/nvn_draw_descriptors.cpp
+    renderer_vulkan/nvn/nvn_draw_indirect.cpp
+    renderer_vulkan/nvn/nvn_draw_log.cpp
+    renderer_vulkan/nvn/nvn_draw_mesh.cpp
+    renderer_vulkan/nvn/nvn_draw_plan.h
+    renderer_vulkan/nvn/nvn_draw_resources.cpp
+    renderer_vulkan/nvn/nvn_draw_resources.h
+    renderer_vulkan/nvn/nvn_draw_shadow.cpp
+    renderer_vulkan/nvn/nvn_exec.cpp
+    renderer_vulkan/nvn/nvn_features.h
+    renderer_vulkan/nvn/nvn_format.cpp
+    renderer_vulkan/nvn/nvn_format.h
+    renderer_vulkan/nvn/nvn_frame_gen.cpp
+    renderer_vulkan/nvn/nvn_frame_gen.h
+    renderer_vulkan/nvn/nvn_gpu_profile.cpp
+    renderer_vulkan/nvn/nvn_gpu_profile.h
+    renderer_vulkan/nvn/nvn_gpu_writes.h
+    renderer_vulkan/nvn/nvn_host_import.cpp
+    renderer_vulkan/nvn/nvn_host_import.h
+    renderer_vulkan/nvn/nvn_impl.h
+    renderer_vulkan/nvn/nvn_line_guard.cpp
+    renderer_vulkan/nvn/nvn_line_guard.h
+    renderer_vulkan/nvn/nvn_mesh_indirect.cpp
+    renderer_vulkan/nvn/nvn_mesh_indirect.h
+    renderer_vulkan/nvn/nvn_quad_indirect.cpp
+    renderer_vulkan/nvn/nvn_quad_indirect.h
+    renderer_vulkan/nvn/nvn_pass_state.h
+    renderer_vulkan/nvn/nvn_pathdiff.cpp
+    renderer_vulkan/nvn/nvn_pipeline_cache.cpp
+    renderer_vulkan/nvn/nvn_pipeline_cache.h
+    renderer_vulkan/nvn/nvn_pipeline_cache_disk.cpp
+    renderer_vulkan/nvn/nvn_pipeline_disk.cpp
+    renderer_vulkan/nvn/nvn_pipeline_disk.h
+    renderer_vulkan/nvn/nvn_pipeline_gpl.cpp
+    renderer_vulkan/nvn/nvn_pipeline_impl.h
+    renderer_vulkan/nvn/nvn_pipeline_log.cpp
+    renderer_vulkan/nvn/nvn_pipeline_state.cpp
+    renderer_vulkan/nvn/nvn_pipeline_state.h
+    renderer_vulkan/nvn/nvn_pipeline_vk.cpp
+    ${NVN_TRANSLATION_EPOCH_SOURCE}
+    renderer_vulkan/nvn/nvn_pool_mirror.cpp
+    renderer_vulkan/nvn/nvn_pool_mirror.h
+    renderer_vulkan/nvn/nvn_rescale.cpp
+    renderer_vulkan/nvn/nvn_rescale.h
+    renderer_vulkan/nvn/nvn_resources.cpp
+    renderer_vulkan/nvn/nvn_sampler_aniso.h
+    renderer_vulkan/nvn/nvn_screenshot.cpp
+    renderer_vulkan/nvn/nvn_screenshot.h
+    renderer_vulkan/nvn/nvn_settings_notice.h
+    renderer_vulkan/nvn/nvn_sparse.cpp
+    renderer_vulkan/nvn/nvn_sparse.h
+    renderer_vulkan/nvn/nvn_sparse_layout.cpp
+    renderer_vulkan/nvn/nvn_sparse_layout.h
+    renderer_vulkan/nvn/nvn_storage.cpp
+    renderer_vulkan/nvn/nvn_texture_layout.cpp
+    renderer_vulkan/nvn/nvn_texture_layout.h
+    renderer_vulkan/nvn/nvn_uniform_snapshot.cpp
+    renderer_vulkan/nvn/nvn_uniform_snapshot.h
+    renderer_vulkan/nvn/nvn_untile_gpu.cpp
+    renderer_vulkan/nvn/nvn_untile_gpu.h
+    renderer_vulkan/nvn/nvn_upload.cpp
+    renderer_vulkan/nvn/nvn_upload.h
+    renderer_vulkan/nvn/nvn_upscale.cpp
+    renderer_vulkan/nvn/nvn_vertex_stage.h
+    renderer_vulkan/nvn/nvn_vertex_stage_gpu.cpp
+    renderer_vulkan/nvn/nvn_vertex_stage_gpu.h
+    renderer_vulkan/nvn/nvn_viewport.h
+    renderer_vulkan/nvn/nvn_vtxcov.cpp
+    renderer_vulkan/nvn/nvn_vtxcov.h
+    renderer_vulkan/nvn/nvn_write_back.cpp
+    renderer_vulkan/nvn/nvn_write_back.h
     renderer_vulkan/pipeline_build.h
     renderer_vulkan/pipeline_build_failure.cpp
     renderer_vulkan/pipeline_build_failure.h
@@ -303,6 +465,7 @@ add_library(video_core STATIC
     vulkan_common/nsight_aftermath_tracker.h
     vulkan_common/vma.h
     vulkan_common/vulkan.h
+    vulkan_common/cooperative_matrix.h
 
     shader_cache.cpp
     shader_cache.h
@@ -321,6 +484,7 @@ add_library(video_core STATIC
     shader_cache_v2/records.h
     shader_environment.cpp
     shader_environment.h
+    load_progress.h
     evicted_pointer_slots.h
     bounded_store.h
     shader_handle_program.h
@@ -609,7 +773,7 @@ target_include_directories(video_core PUBLIC ${FFmpeg_INCLUDE_DIR})
 target_link_libraries(video_core PRIVATE ${FFmpeg_LIBRARIES})
 target_link_options(video_core PRIVATE ${FFmpeg_LDFLAGS})
 
-add_dependencies(video_core host_shaders)
+add_dependencies(video_core host_shaders nvn_translation_epoch)
 target_include_directories(video_core PRIVATE ${HOST_SHADERS_INCLUDE})
 # AMD's FFX API headers (MIT), for calling AMD's FSR 4 runtime (vk_fsr4_upscaler.cpp).
 target_include_directories(video_core PRIVATE ${CMAKE_SOURCE_DIR}/externals/ffx-api)
@@ -692,6 +856,8 @@ if (ENABLE_NVIDIA_DLSS)
         set(STREAMLINE_INCLUDE_DIR "${streamline_SOURCE_DIR}/include")
     endif()
     target_sources(video_core PRIVATE
+        renderer_vulkan/nvn/nvn_game_dlss.cpp
+        renderer_vulkan/nvn/nvn_game_dlss.h
         renderer_vulkan/vk_streamline_dlss.cpp
         renderer_vulkan/vk_streamline_dlss.h
         vulkan_common/streamline.cpp

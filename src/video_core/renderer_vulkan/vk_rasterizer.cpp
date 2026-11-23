@@ -28,11 +28,13 @@
 
 #include "common/assert.h"
 #include "common/dkb_frame_trace.h"
+#include "core/hle/nvn/hle_running.h"
 #include "shader_recompiler/exception.h"
 #include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "video_core/buffer_cache/buffer_cache.h"
+#include "video_core/gpu.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/buffer_cache/indirect_buffer.h"
@@ -1227,6 +1229,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
             verify_kept ? buffer_cache.KeptGraphicsBindingsHash(false, false, true) : 0;
         if (fast_draw_on) {
             pipeline->CaptureNextDelta(verify_kept);
+            FastDraw::NoteHandlesRead();
         }
         if (Profile::Scope scope{Profile::Zone::Configure}; !pipeline->Configure(is_indexed)) {
             report_failure("configure failed");
@@ -3957,6 +3960,10 @@ std::optional<FramebufferTextureInfo> RasterizerVulkan::AccelerateDisplay(
 
 void RasterizerVulkan::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
                                          const VideoCore::DiskResourceLoadCallback& callback) {
+    // VTX-HLE opens its own cache once the guest supplies the title ID.
+    if (gpu.Renderer().NvnSink() && Core::NvnHle::HleRunning()) {
+        return;
+    }
     pipeline_cache.LoadDiskResources(title_id, stop_loading, callback);
 }
 

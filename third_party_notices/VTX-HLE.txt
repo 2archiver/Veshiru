@@ -1,0 +1,31 @@
+FUKKO
+Copyright (C) 2026 Vortex727 (https://github.com/Vortex727) and the FUKKO contributors.
+
+FUKKO is licensed under the GNU General Public License, version 3 or later
+(see LICENSE.txt). It is derived from Eden, Eglantine and other projects listed in
+README.md and docs/fukko/CREDITS.md, whose code keeps its original licenses and
+authors' credits.
+
+Additional term under GPL-3.0 section 7(b) (preservation of author attributions),
+applying to the code, fixes and tooling that originate in this repository:
+
+  If you copy, port, cherry-pick or adapt any part of FUKKO's own work into
+  another project, you must credit it as
+
+      FUKKO by Vortex727 (https://github.com/Vortex727/FUKKO)
+
+  in the commit messages that bring it in, and in the release notes or
+  documentation of any release that contains it, and you must keep this NOTICE
+  with any copy of that work.
+
+  VTX-HLE, FUKKO's high-level NVN graphics path (src/core/hle/nvn,
+  src/video_core/renderer_vulkan/nvn and the code they rely on that originates
+  here), is developed by Vortex727. Works that include or adapt it must also
+  credit it as
+
+      VTX-HLE by Vortex727 (https://github.com/Vortex727/FUKKO)
+
+  in the same places.
+
+This term does not restrict any other rights granted by the GPL-3.0, and it does
+not apply to code that FUKKO itself took from upstream projects.

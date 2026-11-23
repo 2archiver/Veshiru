@@ -76,6 +76,10 @@ layout(binding = BINDING_INPUT_BUFFER, std430) buffer InputBufferU128 { uvec4  u
 layout(binding = BINDING_OUTPUT_BUFFER, std430) writeonly buffer OutputBuffer {
     uint out_u32[];
 };
+#if HAS_EXTENDED_TYPES
+layout(binding = BINDING_OUTPUT_BUFFER, std430) writeonly buffer OutputBufferU8  { uint8_t  out_u8[];  };
+layout(binding = BINDING_OUTPUT_BUFFER, std430) writeonly buffer OutputBufferU16 { uint16_t out_u16[]; };
+#endif
 
 // --- Constants ---
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
@@ -159,6 +163,23 @@ void main() {
     uint block_index = block_coord.x +
                        (block_coord.y * pc.blocks_dim.x) +
                        (block_coord.z * pc.blocks_dim.x * pc.blocks_dim.y);
+
+    // Blocks of 1, 2 and 4 bytes (VTX-HLE untiles every texel size through this shader) store
+    // exactly their own bytes: a 32-bit pair would overwrite the neighbouring blocks.
+    switch (pc.bytes_per_block_log2) {
+#if HAS_EXTENDED_TYPES
+    case 0u:
+        out_u8[block_index] = uint8_t(texel.x);
+        return;
+    case 1u:
+        out_u16[block_index] = uint16_t(texel.x);
+        return;
+#endif
+    case 2u:
+        out_u32[block_index] = texel.x;
+        return;
+    }
+
     uint out_idx = block_index * (bytes_per_block >> 2u);
 
     out_u32[out_idx]     = texel.x;

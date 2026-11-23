@@ -130,6 +130,19 @@ static void GetFuncAddress(Common::DynamicLibrary& dll, const char* name, T& pfn
     }
 }
 
+/// Calls fn(offset, length) for the part of [offset, offset + length) in each backing view.
+template <typename F>
+static void ForEachBackingView(size_t offset, size_t length, F&& fn) {
+    const size_t end = offset + length;
+    while (offset < end) {
+        const size_t view_end =
+            (offset / HostMemory::BackingViewSize + 1) * HostMemory::BackingViewSize;
+        const size_t part_end = (std::min)(view_end, end);
+        fn(offset, part_end - offset);
+        offset = part_end;
+    }
+}
+
 class HostMemory::Impl {
 public:
     explicit Impl(size_t backing_size_, size_t virtual_size_)
@@ -197,11 +210,12 @@ public:
             LOG_CRITICAL(HW_Memory, "Failed to reserve {} MiB of virtual memory", backing_size >> 20);
             return false;
         }
-        // Map backing placeholder
-        void* const ret = pfn_MapViewOfFile3(backing_handle, process, backing_base, 0, backing_size, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, nullptr, 0);
-        if (ret != backing_base) {
+        // Map the backing as views of BackingViewSize back to back (one contiguous range): see
+        // HostMemory::BackingViewSize.
+        if (!MapBackingViews()) {
+            LOG_CRITICAL(HW_Memory, "Failed to map {} MiB of virtual memory, error {}",
+                         backing_size >> 20, GetLastError());
             Release();
-            LOG_CRITICAL(HW_Memory, "Failed to map {} MiB of virtual memory", backing_size >> 20);
             return false;
         }
         // Allocate virtual address placeholder
@@ -322,6 +336,36 @@ public:
     u8* virtual_base{};
 
 private:
+    /// Maps the backing placeholder as views of BackingViewSize. If Windows cannot split the
+    /// placeholder, the backing is one view as before.
+    bool MapBackingViews() {
+        backing_view_size = BackingViewSize;
+        for (size_t offset = 0; offset + BackingViewSize < backing_size; offset += BackingViewSize) {
+            if (!VirtualFreeEx(process, backing_base + offset, BackingViewSize,
+                               MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
+                LOG_WARNING(HW_Memory,
+                            "Failed to split the backing placeholder (error {}); "
+                            "mapping the backing as one view",
+                            GetLastError());
+                VirtualFreeEx(process, backing_base, backing_size,
+                              MEM_RELEASE | MEM_COALESCE_PLACEHOLDERS);
+                backing_view_size = backing_size;
+                break;
+            }
+        }
+        for (size_t offset = 0; offset < backing_size; offset += backing_view_size) {
+            const size_t length = (std::min)(backing_view_size, backing_size - offset);
+            void* const ret = pfn_MapViewOfFile3(backing_handle, process, backing_base + offset,
+                                                 offset, length, MEM_REPLACE_PLACEHOLDER,
+                                                 PAGE_READWRITE, nullptr, 0);
+            if (ret != backing_base + offset) {
+                return false;
+            }
+            backing_mapped_end = offset + length;
+        }
+        return true;
+    }
+
     /// Release all resources in the object
     void Release() {
         if (!placeholders.empty()) {
@@ -340,13 +384,21 @@ private:
             virtual_base = nullptr;
         }
         if (backing_base) {
-            if (!pfn_UnmapViewOfFile2(process, backing_base, MEM_PRESERVE_PLACEHOLDER)) {
-                LOG_CRITICAL(HW_Memory, "Failed to unmap backing memory placeholder");
+            u8* const address = std::exchange(backing_base, nullptr);
+            for (size_t offset = 0; offset < backing_mapped_end; offset += backing_view_size) {
+                if (!pfn_UnmapViewOfFile2(process, address + offset, MEM_PRESERVE_PLACEHOLDER)) {
+                    LOG_CRITICAL(HW_Memory, "Failed to unmap backing memory view");
+                }
             }
-            if (!VirtualFreeEx(process, backing_base, 0, MEM_RELEASE)) {
+            backing_mapped_end = 0;
+            // One placeholder again (fails harmlessly when it was never split).
+            if (backing_size > BackingViewSize) {
+                VirtualFreeEx(process, address, backing_size,
+                              MEM_RELEASE | MEM_COALESCE_PLACEHOLDERS);
+            }
+            if (!VirtualFreeEx(process, address, 0, MEM_RELEASE)) {
                 LOG_CRITICAL(HW_Memory, "Failed to free backing memory");
             }
-            backing_base = nullptr;
         }
         if (backing_handle && backing_handle != INVALID_HANDLE_VALUE) {
             if (!CloseHandle(backing_handle)) {
@@ -473,6 +525,8 @@ private:
 
     HANDLE process{};        ///< Current process handle
     HANDLE backing_handle{}; ///< File based backing memory
+    size_t backing_view_size{};  ///< BackingViewSize, or backing_size if it is one view
+    size_t backing_mapped_end{}; ///< The backing views are mapped over [0, backing_mapped_end)
 
     DynamicLibrary kernelbase_dll;
     PFN_CreateFileMapping2 pfn_CreateFileMapping2{};
@@ -1125,21 +1179,29 @@ void HostMemory::HintCold(size_t physical_offset, size_t length,
     if (length == 0 || backing_base == nullptr) {
         return;
     }
-    const auto hint = [length](u8* address) {
+    const auto hint = [](u8* address, size_t bytes) {
 #ifdef _WIN32
         // Unlocking pages that are not locked takes them out of the working set.
-        VirtualUnlock(address, length);
+        VirtualUnlock(address, bytes);
 #elif defined(__linux__) && defined(MADV_COLD)
         // MADV_COLD only deactivates the pages, like VirtualUnlock. MADV_PAGEOUT writes them to
         // swap right away while holding the mmap lock, which stalled every guest core for 3-15 s.
-        madvise(address, length, MADV_COLD);
+        madvise(address, bytes, MADV_COLD);
 #else
         static_cast<void>(address);
+        static_cast<void>(bytes);
 #endif
     };
-    hint(backing_base + physical_offset);
+#ifdef _WIN32
+    // VirtualUnlock works within one view of the backing.
+    ForEachBackingView(physical_offset, length, [&](size_t offset, size_t part) {
+        hint(backing_base + offset, part);
+    });
+#else
+    hint(backing_base + physical_offset, length);
+#endif
     if (virtual_offset && virtual_base != nullptr && *virtual_offset + length <= virtual_size) {
-        hint(virtual_base + *virtual_offset);
+        hint(virtual_base + *virtual_offset, length);
     }
 }
 

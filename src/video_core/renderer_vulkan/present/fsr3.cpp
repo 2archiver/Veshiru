@@ -39,17 +39,15 @@ FSR3::FSR3(const Device& device, MemoryAllocator& memory_allocator, size_t image
 FSR3::~FSR3() = default;
 
 void FSR3::CreateImages(const Device& device) {
-    m_dynamic_images.resize(m_image_count);
-    for (auto& images : m_dynamic_images) {
-        images.images[Easu] =
-            CreateWrappedImage(m_memory_allocator, m_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
-        images.images[Rcas] =
-            CreateWrappedImage(m_memory_allocator, m_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
-        images.image_views[Easu] =
-            CreateWrappedImageView(device, images.images[Easu], VK_FORMAT_R16G16B16A16_SFLOAT);
-        images.image_views[Rcas] =
-            CreateWrappedImageView(device, images.images[Rcas], VK_FORMAT_R16G16B16A16_SFLOAT);
-    }
+    m_frames.resize(m_image_count);
+    m_dynamic_images[Easu] =
+        CreateWrappedImage(m_memory_allocator, m_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
+    m_dynamic_images[Rcas] =
+        CreateWrappedImage(m_memory_allocator, m_extent, VK_FORMAT_R16G16B16A16_SFLOAT);
+    m_dynamic_image_views[Easu] =
+        CreateWrappedImageView(device, m_dynamic_images[Easu], VK_FORMAT_R16G16B16A16_SFLOAT);
+    m_dynamic_image_views[Rcas] =
+        CreateWrappedImageView(device, m_dynamic_images[Rcas], VK_FORMAT_R16G16B16A16_SFLOAT);
 
     // Allocate a history image for temporal accumulation feedback.
     m_prev_frame_image =
@@ -60,11 +58,11 @@ void FSR3::CreateImages(const Device& device) {
 
 void FSR3::CreateRenderPasses(const Device& device) {
     m_renderpass = CreateWrappedRenderPass(device, VK_FORMAT_R16G16B16A16_SFLOAT);
-    for (auto& images : m_dynamic_images) {
-        images.framebuffers[Easu] = CreateWrappedFramebuffer(device, m_renderpass,
-                                                             images.image_views[Easu], m_extent);
-        images.framebuffers[Rcas] = CreateWrappedFramebuffer(device, m_renderpass,
-                                                             images.image_views[Rcas], m_extent);
+    for (Frame& frame : m_frames) {
+        frame.framebuffers[Easu] = CreateWrappedFramebuffer(device, m_renderpass,
+                                                            m_dynamic_image_views[Easu], m_extent);
+        frame.framebuffers[Rcas] = CreateWrappedFramebuffer(device, m_renderpass,
+                                                            m_dynamic_image_views[Rcas], m_extent);
     }
 }
 
@@ -96,8 +94,8 @@ void FSR3::CreateDescriptorSetLayout(const Device& device) {
 
 void FSR3::CreateDescriptorSets(const Device& device) {
     std::vector<VkDescriptorSetLayout> layouts(MaxStage, *m_descriptor_set_layout);
-    for (auto& images : m_dynamic_images) {
-        images.descriptor_sets = CreateWrappedDescriptorSets(m_descriptor_pool, layouts);
+    for (Frame& frame : m_frames) {
+        frame.descriptor_sets = CreateWrappedDescriptorSets(m_descriptor_pool, layouts);
     }
 }
 
@@ -129,14 +127,14 @@ void FSR3::CreatePipelines(const Device& device) {
 
 void FSR3::UpdateDescriptorSets(const Device& device, VkImageView image_view,
                                 size_t image_index) {
-    Images& images = m_dynamic_images[image_index];
+    Frame& frame = m_frames[image_index];
     std::vector<VkDescriptorImageInfo> image_infos;
     image_infos.reserve(2);
     std::vector<VkWriteDescriptorSet> updates{
         CreateWriteDescriptorSet(image_infos, *m_sampler, image_view,
-                                 images.descriptor_sets[Easu], 0),
-        CreateWriteDescriptorSet(image_infos, *m_sampler, *images.image_views[Easu],
-                                 images.descriptor_sets[Rcas], 0),
+                                 frame.descriptor_sets[Easu], 0),
+        CreateWriteDescriptorSet(image_infos, *m_sampler, *m_dynamic_image_views[Easu],
+                                 frame.descriptor_sets[Rcas], 0),
     };
     device.GetLogical().UpdateDescriptorSets(updates, {});
 }
@@ -145,10 +143,8 @@ void FSR3::UploadImages(const Device& device, Scheduler& scheduler) {
     if (!m_images_ready) {
         m_images_ready = true;
         scheduler.Record([&](vk::CommandBuffer cmdbuf) {
-            for (auto& image : m_dynamic_images) {
-                ClearColorImage(cmdbuf, *image.images[Easu]);
-                ClearColorImage(cmdbuf, *image.images[Rcas]);
-            }
+            ClearColorImage(cmdbuf, *m_dynamic_images[Easu]);
+            ClearColorImage(cmdbuf, *m_dynamic_images[Rcas]);
             ClearColorImage(cmdbuf, *m_prev_frame_image);
         });
         scheduler.Finish();
@@ -159,14 +155,14 @@ VkImageView FSR3::Draw(const Device& device, Scheduler& scheduler, size_t image_
                        VkImage source_image, VkImageView source_image_view,
                        VkExtent2D input_image_extent,
                        const Common::Rectangle<f32>& crop_rect) {
-    Images& images = m_dynamic_images[image_index];
+    Frame& frame = m_frames[image_index];
 
-    VkImage easu_image = *images.images[Easu];
-    VkImage rcas_image = *images.images[Rcas];
-    VkDescriptorSet easu_descriptor_set = images.descriptor_sets[Easu];
-    VkDescriptorSet rcas_descriptor_set = images.descriptor_sets[Rcas];
-    VkFramebuffer easu_framebuffer = *images.framebuffers[Easu];
-    VkFramebuffer rcas_framebuffer = *images.framebuffers[Rcas];
+    VkImage easu_image = *m_dynamic_images[Easu];
+    VkImage rcas_image = *m_dynamic_images[Rcas];
+    VkDescriptorSet easu_descriptor_set = frame.descriptor_sets[Easu];
+    VkDescriptorSet rcas_descriptor_set = frame.descriptor_sets[Rcas];
+    VkFramebuffer easu_framebuffer = *frame.framebuffers[Easu];
+    VkFramebuffer rcas_framebuffer = *frame.framebuffers[Rcas];
     VkPipeline easu_pipeline = *m_easu_pipeline;
     VkPipeline rcas_pipeline = *m_rcas_pipeline;
     VkPipelineLayout pipeline_layout = *m_pipeline_layout;
@@ -226,7 +222,92 @@ VkImageView FSR3::Draw(const Device& device, Scheduler& scheduler, size_t image_
     });
 
     ++m_frame_counter;
-    return *images.image_views[Rcas];
+    return *m_dynamic_image_views[Rcas];
+}
+
+VkImageView FSR3::Record(const Device& device, vk::CommandBuffer cmdbuf, size_t image_index,
+                         VkImage source_image, VkImageView source_image_view,
+                         VkExtent2D input_image_extent, const Common::Rectangle<f32>& crop_rect) {
+    Frame& frame = m_frames[image_index];
+    m_record_descriptor_sets = std::make_shared<RecordDescriptorSets>();
+    auto& sets = *m_record_descriptor_sets;
+    sets.pool = CreateWrappedDescriptorPool(device, 2, 2);
+    const std::array<VkDescriptorSetLayout, 2> layouts{*m_descriptor_set_layout,
+                                                       *m_descriptor_set_layout};
+    sets.sets = CreateWrappedDescriptorSets(sets.pool, layouts);
+
+    VkImage easu_image = *m_dynamic_images[Easu];
+    VkImage rcas_image = *m_dynamic_images[Rcas];
+    VkDescriptorSet easu_descriptor_set = sets.sets[Easu];
+    VkDescriptorSet rcas_descriptor_set = sets.sets[Rcas];
+    VkFramebuffer easu_framebuffer = *frame.framebuffers[Easu];
+    VkFramebuffer rcas_framebuffer = *frame.framebuffers[Rcas];
+    VkPipeline easu_pipeline = *m_easu_pipeline;
+    VkPipeline rcas_pipeline = *m_rcas_pipeline;
+    VkPipelineLayout pipeline_layout = *m_pipeline_layout;
+    VkRenderPass renderpass = *m_renderpass;
+    VkExtent2D extent = m_extent;
+
+    const f32 input_image_width = static_cast<f32>(input_image_extent.width);
+    const f32 input_image_height = static_cast<f32>(input_image_extent.height);
+    const f32 output_image_width = static_cast<f32>(extent.width);
+    const f32 output_image_height = static_cast<f32>(extent.height);
+    const f32 viewport_width = (crop_rect.right - crop_rect.left) * input_image_width;
+    const f32 viewport_x = crop_rect.left * input_image_width;
+    const f32 viewport_height = (crop_rect.bottom - crop_rect.top) * input_image_height;
+    const f32 viewport_y = crop_rect.top * input_image_height;
+
+    PushConstants easu_con{};
+    PushConstants rcas_con{};
+    FsrEasuConOffset(easu_con.data() + 0, easu_con.data() + 4, easu_con.data() + 8,
+                     easu_con.data() + 12, viewport_width, viewport_height, input_image_width,
+                     input_image_height, output_image_width, output_image_height, viewport_x,
+                     viewport_y);
+
+    // FSR 3 uses a slightly reduced default sharpening compared to FSR 1
+    // to avoid over-sharpening on temporally accumulated detail.
+    const float sharpening =
+        static_cast<float>(Settings::values.fsr_sharpening_slider.GetValue()) / 100.0f * 0.8f;
+    FsrRcasCon(rcas_con.data(), sharpening);
+
+    std::vector<VkDescriptorImageInfo> infos;
+    infos.reserve(2);
+    const std::array writes{
+        CreateWriteDescriptorSet(infos, *m_sampler, source_image_view, sets.sets[Easu], 0),
+        CreateWriteDescriptorSet(infos, *m_sampler, *m_dynamic_image_views[Easu], sets.sets[Rcas],
+                                 0),
+    };
+    device.GetLogical().UpdateDescriptorSets(writes, {});
+    const VkImageLayout old_layout =
+        m_images_ready || m_record_images_ready ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    m_record_images_ready = true;
+
+    // Pass 1: EASU (edge-adaptive spatial upsampling)
+    TransitionImageLayout(cmdbuf, source_image, VK_IMAGE_LAYOUT_GENERAL);
+    TransitionImageLayout(cmdbuf, easu_image, VK_IMAGE_LAYOUT_GENERAL, old_layout);
+    BeginRenderPass(cmdbuf, renderpass, easu_framebuffer, extent);
+    cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, easu_pipeline);
+    cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0,
+                              easu_descriptor_set, {});
+    cmdbuf.PushConstants(pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, easu_con);
+    cmdbuf.Draw(3, 1, 0, 0);
+    cmdbuf.EndRenderPass();
+
+    // Pass 2: RCAS (robust contrast-adaptive sharpening)
+    TransitionImageLayout(cmdbuf, easu_image, VK_IMAGE_LAYOUT_GENERAL);
+    TransitionImageLayout(cmdbuf, rcas_image, VK_IMAGE_LAYOUT_GENERAL, old_layout);
+    BeginRenderPass(cmdbuf, renderpass, rcas_framebuffer, extent);
+    cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, rcas_pipeline);
+    cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0,
+                              rcas_descriptor_set, {});
+    cmdbuf.PushConstants(pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, rcas_con);
+    cmdbuf.Draw(3, 1, 0, 0);
+    cmdbuf.EndRenderPass();
+
+    TransitionImageLayout(cmdbuf, rcas_image, VK_IMAGE_LAYOUT_GENERAL);
+
+    ++m_frame_counter;
+    return *m_dynamic_image_views[Rcas];
 }
 
 } // namespace Vulkan

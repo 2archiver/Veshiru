@@ -13,6 +13,7 @@
 #include <map>
 
 #include "common/common_types.h"
+#include "shader_recompiler/frontend/ir/opcodes.h"
 #include "shader_recompiler/frontend/ir/type.h"
 #include "shader_recompiler/storage_write_extent.h"
 #include "shader_recompiler/varying_state.h"
@@ -178,11 +179,30 @@ struct StorageBufferDescriptor {
     /// When set, the buffer pointer is read from memory at this offset from the constant buffer
     /// pointer, which is bound as its own descriptor.
     u32 indirect_offset{~0U};
+    /// VTX-HLE: a global atomic reaches the buffer.
+    bool is_atomic_target{};
     /// How far the program's stores reach past the pointer (unbounded unless proven)
     StorageWriteExtent write_extent{};
 
     auto operator<=>(const StorageBufferDescriptor&) const = default;
 };
+
+/// `cbuf_index` of the storage buffer descriptor that carries the raw global memory address table
+/// (HostTranslateInfo::nvn_raw_global_table_ssbo): not a guest storage buffer, bound by the host.
+inline constexpr u32 RAW_GLOBAL_TABLE_CBUF{0xffffffffU};
+
+[[nodiscard]] constexpr bool IsRawGlobalTable(const StorageBufferDescriptor& desc) noexcept {
+    return desc.cbuf_index == RAW_GLOBAL_TABLE_CBUF;
+}
+
+/// The bit of `Info::global_atomics` of a GlobalAtomic* opcode: its position after
+/// GlobalAtomicIAdd32 in the opcode list.
+[[nodiscard]] constexpr u64 GlobalAtomicBit(IR::Opcode opcode) noexcept {
+    return u64{1} << (static_cast<u32>(opcode) - static_cast<u32>(IR::Opcode::GlobalAtomicIAdd32));
+}
+static_assert(static_cast<u32>(IR::Opcode::GlobalAtomicMaxF32x2) -
+                  static_cast<u32>(IR::Opcode::GlobalAtomicIAdd32) < 64,
+              "Info::global_atomics has one bit per GlobalAtomic opcode");
 
 struct TextureBufferDescriptor {
     bool has_secondary;
@@ -238,6 +258,9 @@ struct TextureDescriptor {
     /// program computes the handle of each element (HandleOp::Index): a handle the shader reads
     /// from a table at an index only each invocation knows, the shader indexing the array.
     u32 handle_program{~0U};
+    /// The shader reads the handle at run time (bindless_table.h): the descriptor names the
+    /// type's table of the replay's bindless set, not a texture of this draw.
+    bool bindless{};
     /// Whether the shader indexes the descriptor: an array, whose count the descriptor limits set
     /// (LimitSampledTextureArrays). It stays one when they cut it to a single element.
     bool is_descriptor_array{};
@@ -292,6 +315,7 @@ struct Info {
     /// Native (Switch 2) programs take their storage buffers from raw pointers, as many as they
     /// read: Ocarina of Time's foliage culling binds 37 for its lists and per-type instance tables.
     static constexpr size_t MAX_SSBOS{64};
+    static constexpr size_t MAX_GRAPHICS_SSBOS{32};
 
     bool is_task{}; ///< Switch 2 task program (Stage::Task)
     bool is_mesh{}; ///< Switch 2 mesh program (Stage::Mesh)
@@ -377,6 +401,32 @@ struct Info {
     /// Native global accesses whose pointer is chosen at run time: every storage buffer descriptor
     /// is a candidate and its bound length (not an NVN size word) limits the range.
     bool native_global_bounds{};
+    /// VTX-HLE: the program was translated with HostTranslateInfo::nvn_raw_global_memory.
+    bool nvn_raw_global_memory{};
+    /// VTX-HLE: untracked (raw) global memory instructions survive the storage buffer pass.
+    /// `stores_raw_global_memory`: at least one of them writes. Only collected when
+    /// `nvn_raw_global_memory` is set.
+    bool uses_raw_global_memory{};
+    bool stores_raw_global_memory{};
+    /// The GlobalAtomic* opcodes (GlobalAtomicBit) in the program: with raw global memory the
+    /// backend defines one address-to-memory atomic function for each.
+    u64 global_atomics{};
+    /// The raw global memory address table is the storage buffer `raw_global_table_index` (the last
+    /// descriptor), see HostTranslateInfo::nvn_raw_global_table_ssbo. Otherwise it is read from the
+    /// driver bank (c0).
+    bool raw_global_table_ssbo{};
+    u32 raw_global_table_index{};
+    /// Misses of the raw global memory table (either place) are recorded in the coverage ring
+    /// (HostTranslateInfo::raw_coverage), tagged with `raw_coverage_program` (the program hash the
+    /// pipeline cache sets before emission).
+    bool raw_coverage{};
+    u64 raw_coverage_program{};
+    /// The raw global memory translation reuses the invocation's last table entry
+    /// (HostTranslateInfo::raw_global_last_hit).
+    bool raw_global_last_hit{};
+    /// Raw stores also write through to mirror targets in the driver bank table
+    /// (HostTranslateInfo::raw_global_store_alias).
+    bool raw_global_store_alias{};
     bool uses_atomic_image_u32{};
     bool uses_shadow_lod{};
     bool uses_rescaling_uniform{};
@@ -389,8 +439,16 @@ struct Info {
 
     u32 constant_buffer_mask{};
     std::array<u32, MAX_CBUFS> constant_buffer_used_sizes{};
+    /// First byte of the driver bank (c0) buffer descriptor table and its entry count (16 for the
+    /// fixed per-stage tables). `nvn_buffer_used` has one bit per entry. `nvn_buffer_window` is set
+    /// for VTX-HLE's NVN2 compute programs, whose per-shader table is described by
+    /// Environment::NvnComputeBufferWindow(); entries are then found by cbuf_offset, not by index.
+    static constexpr u32 LEGACY_NVN_BUFFERS{16};
+    static constexpr size_t MAX_NVN_BUFFERS{64};
     u32 nvn_buffer_base{};
-    std::bitset<16> nvn_buffer_used{};
+    u32 nvn_buffer_count{LEGACY_NVN_BUFFERS};
+    bool nvn_buffer_window{};
+    std::bitset<MAX_NVN_BUFFERS> nvn_buffer_used{};
 
     bool requires_layer_emulation{};
     IR::Attribute emulated_layer{};
@@ -407,6 +465,13 @@ struct Info {
     /// and storage buffer words (see EvaluateHandleProgram), evaluated for each draw.
     std::vector<std::vector<u32>> handle_programs;
     ImageDescriptors image_descriptors;
+
+    /// True when the shader only runs correctly if a subgroup spans a whole guest warp.
+    [[nodiscard]] bool UsesWarpOps() const noexcept {
+        return removed_conditional_barrier || uses_subgroup_vote || uses_subgroup_invocation_id ||
+               uses_subgroup_shuffles || uses_subgroup_mask || uses_quad_shuffles ||
+               uses_fswzadd || uses_cooperative_matrix;
+    }
 
     bool operator==(const Info&) const = default;
 };

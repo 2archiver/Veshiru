@@ -178,7 +178,7 @@ ResultStatus AppLoader_XCI::ReadTitle(std::string& title) {
     return ResultStatus::Success;
 }
 
-ResultStatus AppLoader_XCI::ReadControlData(FileSys::NACP& control) {
+ResultStatus AppLoader_XCI::ReadControlData(FileSys::NACP& control) const {
     if (nacp_file == nullptr) {
         return ResultStatus::ErrorNoControl;
     }

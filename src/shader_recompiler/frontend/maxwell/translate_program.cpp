@@ -95,27 +95,12 @@ void AddNVNStorageBuffers(IR::Program& program, const HostTranslateInfo& host_in
     }
     const u32 driver_cbuf{0};
     const u32 descriptor_size{0x10};
-    const u32 num_buffers{16};
-    const u32 base{[&] {
-        switch (program.stage) {
-        case Stage::VertexA:
-        case Stage::VertexB:
-        case Stage::Task: // bound in the vertex slot
-            return 0x110u;
-        case Stage::TessellationControl:
-            return 0x210u;
-        case Stage::TessellationEval:
-        case Stage::Mesh: // bound in the tessellation slot
-            return 0x310u;
-        case Stage::Geometry:
-            return 0x410u;
-        case Stage::Fragment:
-            return 0x510u;
-        case Stage::Compute:
-            return 0x310u;
-        }
-        throw InvalidArgument("Invalid stage {}", program.stage);
-    }()};
+    // VTX-HLE's NVN2 compute programs describe their own driver bank table (CollectShaderInfoPass
+    // already validated the window); every other program uses the fixed per-stage table of 16
+    // entries whose base CollectShaderInfoPass set.
+    const bool window{program.info.nvn_buffer_window};
+    const u32 num_buffers{window ? program.info.nvn_buffer_count : Info::LEGACY_NVN_BUFFERS};
+    const u32 base{program.info.nvn_buffer_base};
     auto& descs{program.info.storage_buffers_descriptors};
     for (u32 index = 0; index < num_buffers; ++index) {
         if (!program.info.nvn_buffer_used[index]) {
@@ -463,11 +448,12 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
     Optimization::PositionPass(env, program);
     Optimization::BlitConstantsPass(env, program);
 
+    Optimization::ApplyNvnBufferWindow(env, program);
     Optimization::GlobalMemoryToStorageBufferPass(env, program, normalized_host_info);
     Optimization::GeometryCompactionPass(program, normalized_host_info);
     Optimization::TexturePass(env, program, normalized_host_info);
 
-    if (Settings::values.resolution_info.active) {
+    if (Settings::values.resolution_info.active && !host_info.skip_rescaling_pass) {
         Optimization::RescalingPass(program);
     }
     Optimization::DeadCodeEliminationPass(program);
@@ -493,6 +479,7 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
 
     CollectInterpolationInfo(env, program);
     AddNVNStorageBuffers(program, normalized_host_info);
+    Optimization::AddRawGlobalTableDescriptor(program.info);
     Optimization::LimitSampledTextureArrays(program, normalized_host_info);
     return program;
 }

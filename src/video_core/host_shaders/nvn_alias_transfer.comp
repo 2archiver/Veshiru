@@ -1,0 +1,90 @@
+// SPDX-FileCopyrightText: Copyright 2026 Vortex727 (FUKKO)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#version 450
+
+#extension GL_EXT_shader_8bit_storage : require
+
+// NVN HLE (Vulkan::Nvn::AliasTransferGpu). Moves the bytes two textures of different shapes share
+// in a memory pool from one image to the other, the way the memory would: every texel of a piece
+// (one level of one layer of a texture, as copied tightly into the scratch buffer) is placed at the
+// byte offset its texture's layout gives it in the pool (Switch 2 block-linear GOBs, the same
+// addressing as Tegra::Texture::UnswizzleTexture with native tiling, or linear rows), inside a
+// window of the pool's bytes.
+//   mode 0 (scatter): tightly copied texel bytes -> window.
+//   mode 1 (gather):  window -> tightly copied texel bytes (only texels inside the window).
+// One invocation per texel; all byte moves are exclusive to their texel, so no atomics.
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) buffer Memory {
+    uint8_t bytes[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint mode;
+    uint tight_offset;  // byte offset of the piece's tight texels in `bytes`
+    uint window_offset; // byte offset of the window in `bytes`
+    uint window_size;
+    int piece_base;     // byte offset of the piece's first byte relative to the window start
+    uint cols;
+    uint rows;
+    uint slices;
+    uint bpp;           // bytes per texel
+    uint tile_h;        // log2 of the block height in GOBs
+    uint tile_d;        // log2 of the block depth in GOBs
+    uint pitch;         // linear: bytes per row, 0 = block-linear
+} pc;
+
+// GOB offsets of Tegra::Texture (SWIZZLE_X_BITS = 0b100101111, SWIZZLE_Y_BITS = 0b011010000)
+// with the Switch 2 adjustment of bits 5 and 6 (NativeGobOffset).
+uint BlockLinearOffset(uint xb, uint y, uint z) {
+    const uint stride = pc.cols * pc.bpp;
+    const uint gobs_in_x = (stride + 63u) >> 6;
+    const uint x_shift = 9u + pc.tile_h + pc.tile_d;
+    const uint block_size = gobs_in_x << x_shift;
+    const uint block_rows = (pc.rows + (1u << (pc.tile_h + 3u)) - 1u) >> (pc.tile_h + 3u);
+    const uint slice_size = block_rows * block_size;
+    const uint offset_z = (z >> pc.tile_d) * slice_size +
+                          ((z & ((1u << pc.tile_d) - 1u)) << (9u + pc.tile_h));
+    const uint block_y = y >> 3;
+    const uint offset_y = (block_y >> pc.tile_h) * block_size +
+                          ((block_y & ((1u << pc.tile_h) - 1u)) << 9u);
+    const uint offset_x = (xb >> 6) << x_shift;
+    const uint swizzled_x = (xb & 15u) | ((xb & 16u) << 1) | ((xb & 32u) << 3);
+    const uint swizzled_y = ((y & 1u) << 4) | ((y & 2u) << 5) | ((y & 4u) << 5);
+    uint offset = offset_z + offset_y + offset_x + (swizzled_x | swizzled_y);
+    const uint difference = ((offset >> 5) ^ (offset >> 6)) & 1u;
+    return offset ^ (difference << 5) ^ (difference << 6);
+}
+
+void main() {
+    const uint group = gl_WorkGroupID.y * 65535u + gl_WorkGroupID.x;
+    const uint index = group * 256u + gl_LocalInvocationID.x;
+    if (index >= pc.cols * pc.rows * pc.slices) {
+        return;
+    }
+    const uint x = index % pc.cols;
+    const uint rest = index / pc.cols;
+    const uint y = rest % pc.rows;
+    const uint z = rest / pc.rows;
+    const uint tight = pc.tight_offset + index * pc.bpp;
+    for (uint b = 0u; b < pc.bpp; ++b) {
+        uint offset;
+        if (pc.pitch != 0u) {
+            offset = y * pc.pitch + x * pc.bpp + b;
+        } else {
+            offset = BlockLinearOffset(x * pc.bpp + b, y, z);
+        }
+        const int at = pc.piece_base + int(offset);
+        if (at < 0 || uint(at) >= pc.window_size) {
+            continue;
+        }
+        const uint window = pc.window_offset + uint(at);
+        if (pc.mode == 0u) {
+            bytes[window] = bytes[tight + b];
+        } else {
+            bytes[tight + b] = bytes[window];
+        }
+    }
+}

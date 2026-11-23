@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstdlib>
 #include <deque>
 #include <map>
 #include <optional>
@@ -477,7 +478,8 @@ std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias,
         }
         return operand;
     };
-    return BreadthFirstSearchPruned(value, pred, exhausted, stop_at_memory);
+    return BreadthFirstSearchPruned(
+        value, pred, exhausted, [](const IR::Inst*) { return true; }, stop_at_memory);
 }
 
 /// Finds the one constant buffer word added directly into the low address, which is the base
@@ -2217,10 +2219,456 @@ void Replace(IR::Block& block, IR::Inst& inst, const IR::U32& storage_index,
         throw InvalidArgument("Invalid global memory opcode {}", inst.GetOpcode());
     }
 }
+
+// VTX-HLE (FUKKO's NVN high-level emulation) collects storage buffers with these instead
+// (Environment::IsNvnHleProgram, or HostTranslateInfo::nvn_raw_global_memory, which only VTX-HLE
+// sets): with raw global memory an access that is not tied to a storage buffer stays raw global
+// memory, which the backend reaches through buffer device addresses. The emulated GPU never gets
+// here.
+
+/// The constant buffer pointers a native access's low address can come from
+/// (NativePointerCandidates).
+struct NativePointers {
+    small_vector<StorageBufferAddr, 4> candidates;
+    /// The address can also come from a constant buffer word read at a computed offset (a table
+    /// of pointers indexed at run time), which is no candidate: a single candidate is then not
+    /// the only buffer the access can reach.
+    bool indexed{};
+    /// The address can also be a pointer loaded from memory (Ocarina of Time's foliage placement
+    /// reads its records from c0[0x60] or from *c0[0x60]), which is no candidate either.
+    bool loaded{};
+
+    /// A pointer that is no candidate can also reach the access.
+    [[nodiscard]] bool HasOtherPointers() const noexcept {
+        return indexed || loaded;
+    }
+};
+
+struct NvnStorageInfo {
+    StorageBufferSet set;
+    StorageInstVector to_replace;
+    StorageWritesSet writes;
+    StorageWritesSet atomic_writes;
+    /// Track results by the instruction the search starts from, with and without the NVN bias:
+    /// accesses through the same address share them, and a search can walk thousands of
+    /// instructions (the IR does not change while storage buffers are collected).
+    std::unordered_map<const IR::Inst*, std::optional<StorageBufferAddr>> biased_tracks;
+    std::unordered_map<const IR::Inst*, std::optional<StorageBufferAddr>> unbiased_tracks;
+    /// Instructions from which a search with (or without) the bias cannot succeed. Each search
+    /// from a new address otherwise walked again what failed searches had walked: 725 failing
+    /// biased searches of ~5,600 instructions each in a 28,000 instruction compute shader.
+    std::unordered_set<const IR::Inst*> biased_exhausted;
+    std::unordered_set<const IR::Inst*> unbiased_exhausted;
+    /// Native programs: the mapped constant buffer pointers an address can come from, by the
+    /// instruction the search starts from (accesses through the same address share them).
+    std::unordered_map<const IR::Inst*, NativePointers> native_candidates;
+    /// A native access with several candidate pointers was left global (not raw).
+    bool native_runtime_bounds{};
+};
+
+/// Returns true when the instruction is a global atomic operation.
+bool IsGlobalMemoryAtomic(const IR::Inst& inst) {
+    return inst.GetOpcode() >= IR::Opcode::GlobalAtomicIAdd32 &&
+           inst.GetOpcode() <= IR::Opcode::GlobalAtomicMaxF32x2;
+}
+
+/// Returns true when the instruction reads memory: an address that is the result of such a load
+/// is data, never a c0 storage buffer descriptor (NVN raw global memory).
+bool IsMemoryLoad(const IR::Inst* inst) noexcept {
+    switch (inst->GetOpcode()) {
+    case IR::Opcode::LoadGlobalS8:
+    case IR::Opcode::LoadGlobalU8:
+    case IR::Opcode::LoadGlobalS16:
+    case IR::Opcode::LoadGlobalU16:
+    case IR::Opcode::LoadGlobal32:
+    case IR::Opcode::LoadGlobal64:
+    case IR::Opcode::LoadGlobal128:
+    case IR::Opcode::LoadStorageS8:
+    case IR::Opcode::LoadStorageU8:
+    case IR::Opcode::LoadStorageS16:
+    case IR::Opcode::LoadStorageU16:
+    case IR::Opcode::LoadStorage32:
+    case IR::Opcode::LoadStorage64:
+    case IR::Opcode::LoadStorage128:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// Tries to track the storage buffer address used by a global memory instruction. With
+/// `stop_at_loads` the search does not walk through memory loads.
+std::optional<StorageBufferAddr> NvnTrack(const IR::Value& value, const Bias* bias,
+                                          std::unordered_set<const IR::Inst*>& exhausted,
+                                          bool stop_at_loads) {
+    const auto pred{[bias](const IR::Inst* inst) -> std::optional<StorageBufferAddr> {
+        if (inst->GetOpcode() != IR::Opcode::GetCbufU32 &&
+            inst->GetOpcode() != IR::Opcode::GetCbufU32x2) {
+            return std::nullopt;
+        }
+        const IR::Value index{inst->Arg(0)};
+        const IR::Value offset{inst->Arg(1)};
+        if (!index.IsImmediate()) {
+            // Definitely not a storage buffer if it's read from a
+            // non-immediate index
+            return std::nullopt;
+        }
+        if (!offset.IsImmediate()) {
+            // TODO: Support SSBO arrays
+            return std::nullopt;
+        }
+        const StorageBufferAddr storage_buffer{
+            .index = index.U32(),
+            .offset = offset.U32(),
+        };
+        const u32 alignment{bias ? bias->alignment : 8U};
+        // Entries are aligned relative to the start of their table: 0x100 for the fixed per-stage
+        // tables (a multiple of the alignment, so the same as absolute), the window base for an
+        // NVN2 compute program whose table starts after its push constants.
+        const u32 alignment_origin{bias ? bias->offset_begin : 0U};
+        if (!Common::IsAligned(storage_buffer.offset - alignment_origin, alignment)) {
+            // The SSBO pointer has to be aligned
+            return std::nullopt;
+        }
+        if (bias && !MeetsBias(storage_buffer, *bias)) {
+            // We have to blacklist some addresses in case we wrongly
+            // point to them
+            return std::nullopt;
+        }
+        return storage_buffer;
+    }};
+    if (stop_at_loads) {
+        return BreadthFirstSearchPruned(value, pred, exhausted,
+                                        [](const IR::Inst* inst) { return !IsMemoryLoad(inst); });
+    }
+    return BreadthFirstSearchPruned(value, pred, exhausted);
+}
+
+/// Native programs: every constant buffer pointer the low address can come from, following only
+/// additions, selects, phis and subgroup broadcasts (never a memory load). A predicated address
+/// assignment becomes a phi whose other input can point into a different buffer, so the search
+/// does not stop at the first pointer. A constant buffer word read at a computed offset on the way
+/// is a pointer from a table indexed at run time (Ocarina of Time's culling computes reach their
+/// draw records through c4[i * 16 + 0xe0]), and a pointer-sized memory load is a pointer read
+/// from memory: neither is a candidate, and the result says it was met.
+NativePointers NvnNativePointerCandidates(const IR::U32& low_addr, Environment& env) {
+    NativePointers result;
+    auto& candidates{result.candidates};
+    small_vector<const IR::Inst*, 16> pending{low_addr.InstRecursive()};
+    std::unordered_set<const IR::Inst*> visited{pending.front()};
+    const auto enqueue = [&](const IR::Value& value) {
+        if (!value.IsImmediate() && visited.insert(value.InstRecursive()).second) {
+            pending.push_back(value.InstRecursive());
+        }
+    };
+    for (size_t next = 0; next < pending.size(); ++next) {
+        const IR::Inst* const inst{pending[next]};
+        switch (inst->GetOpcode()) {
+        case IR::Opcode::GetCbufU32:
+        case IR::Opcode::GetCbufU32x2: {
+            const IR::Value index{inst->Arg(0)};
+            const IR::Value offset{inst->Arg(1)};
+            if (!index.IsImmediate() || !offset.IsImmediate()) {
+                result.indexed = true;
+                break;
+            }
+            const StorageBufferAddr pointer{.index = index.U32(), .offset = offset.U32()};
+            if (Common::IsAligned(pointer.offset, 8) &&
+                std::ranges::find(candidates, pointer) == candidates.end() &&
+                env.IsCbufStorageBufferPointer(pointer.index, pointer.offset)) {
+                candidates.push_back(pointer);
+            }
+            break;
+        }
+        case IR::Opcode::IAdd32:
+        case IR::Opcode::Phi:
+            for (size_t arg = inst->NumArgs(); arg--;) {
+                enqueue(inst->Arg(arg));
+            }
+            break;
+        case IR::Opcode::SelectU32:
+            enqueue(inst->Arg(1));
+            enqueue(inst->Arg(2));
+            break;
+        case IR::Opcode::ShuffleIndex:
+            // A pointer made uniform by broadcasting one lane's value to the subgroup (Ocarina of
+            // Time's culling shaders).
+            enqueue(inst->Arg(0));
+            break;
+        case IR::Opcode::CompositeExtractU32x2:
+            if (inst->Arg(1).IsImmediate() && inst->Arg(1).U32() == 0) {
+                enqueue(inst->Arg(0));
+            }
+            break;
+        case IR::Opcode::LoadGlobal64:
+        case IR::Opcode::LoadStorage64:
+            result.loaded = true;
+            break;
+        default:
+            break;
+        }
+    }
+    return result;
+}
+
+/// Collects the storage buffer used by a global memory instruction and the instruction itself
+void NvnCollectStorageBuffers(IR::Block& block, IR::Inst& inst, NvnStorageInfo& info,
+                              Environment& env, const HostTranslateInfo& host_info,
+                              const Bias& nvn_bias) {
+    const bool raw_global_memory{host_info.nvn_raw_global_memory};
+    // NVN puts storage buffers in a specific range, we have to bias towards these addresses to
+    // avoid getting false positives
+    // Track the low address of the instruction
+    const std::optional<LowAddrInfo> low_addr_info{TrackLowAddress(&inst)};
+    if (!low_addr_info) {
+        // Failed to track the low address, use NVN fallbacks
+        return;
+    }
+    // First try to find storage buffers in the NVN address
+    const IR::U32 low_addr{low_addr_info->value};
+    if (env.IsNativeProgram() && !low_addr.IsImmediate()) {
+        const IR::Inst* const start{low_addr.InstRecursive()};
+        auto it{info.native_candidates.find(start)};
+        if (it == info.native_candidates.end()) {
+            it = info.native_candidates.emplace(start, NvnNativePointerCandidates(low_addr, env))
+                     .first;
+        }
+        const NativePointers& pointers{it->second};
+        const auto& candidates{pointers.candidates};
+        if (pointers.HasOtherPointers() && raw_global_memory) {
+            // A pointer read from a table at run time or loaded from memory can be any address:
+            // the access stays raw global memory. Rebasing it on the candidate a phi of the same
+            // register brings in sent the culling's record writes into that other buffer, and
+            // read the foliage placement records behind a loaded pointer out of the candidate's
+            // bounds, as zeros. The candidates are bound so that the address table covers them.
+            for (const StorageBufferAddr& candidate : candidates) {
+                info.set.insert(candidate);
+                if (IsGlobalMemoryWrite(inst)) {
+                    info.writes.insert(candidate);
+                }
+                if (IsGlobalMemoryAtomic(inst)) {
+                    info.atomic_writes.insert(candidate);
+                }
+            }
+            return;
+        }
+        if (candidates.size() > 1 || (pointers.HasOtherPointers() && !candidates.empty())) {
+            if (raw_global_memory) {
+                // The address can be any of several pointers: the access stays global and the raw
+                // address table reaches whichever one it is. Tying it to the first pointer found
+                // loses the accesses that land in another candidate's buffer.
+                return;
+            }
+            // Bind every candidate and keep the access global; the backend picks the buffer at
+            // run time. Rebasing on one of them drops the other path's accesses.
+            for (const StorageBufferAddr& candidate : candidates) {
+                info.set.insert(candidate);
+                if (IsGlobalMemoryWrite(inst)) {
+                    info.writes.insert(candidate);
+                }
+                if (IsGlobalMemoryAtomic(inst)) {
+                    info.atomic_writes.insert(candidate);
+                }
+            }
+            info.native_runtime_bounds = true;
+            return;
+        }
+        if (candidates.size() == 1) {
+            // The one pointer the address is built from. The NVN search below only takes 16-byte
+            // aligned slots, so for a pointer at an 8-byte slot it can return a dimension or stride
+            // the address arithmetic reads instead, and the access then lands in the wrong buffer.
+            const StorageBufferAddr storage_buffer{candidates.front()};
+            if (IsGlobalMemoryWrite(inst)) {
+                info.writes.insert(storage_buffer);
+            }
+            if (IsGlobalMemoryAtomic(inst)) {
+                info.atomic_writes.insert(storage_buffer);
+            }
+            info.set.insert(storage_buffer);
+            info.to_replace.push_back(StorageInst{
+                .storage_buffer{storage_buffer},
+                .inst = &inst,
+                .block = &block,
+            });
+            return;
+        }
+    }
+    const auto cached_track = [&](const Bias* bias, auto& cache, auto& exhausted) {
+        if (low_addr.IsImmediate()) {
+            return NvnTrack(low_addr, bias, exhausted, raw_global_memory);
+        }
+        const IR::Inst* const start{low_addr.InstRecursive()};
+        if (const auto it = cache.find(start); it != cache.end()) {
+            return it->second;
+        }
+        const std::optional<StorageBufferAddr> result{
+            NvnTrack(low_addr, bias, exhausted, raw_global_memory)};
+        cache.emplace(start, result);
+        return result;
+    };
+    std::optional<StorageBufferAddr> storage_buffer{
+        cached_track(&nvn_bias, info.biased_tracks, info.biased_exhausted)};
+    if (!storage_buffer && raw_global_memory && !host_info.nvn_raw_global_unbiased_tracking) {
+        // NVN: storage buffers only come from the driver bank window; everything else (a pointer
+        // read from a uniform buffer, ...) is raw global memory.
+        return;
+    }
+    if (!storage_buffer) {
+        // If it fails, track without a bias
+        storage_buffer = cached_track(nullptr, info.unbiased_tracks, info.unbiased_exhausted);
+        if (!storage_buffer) {
+            // If that also fails, use NVN fallbacks (raw global memory when it is on)
+            if (!raw_global_memory) {
+                LOG_WARNING(Shader, "Storage buffer failed to track, using global memory fallbacks");
+            }
+            return;
+        }
+        LOG_DEBUG(Shader, "Storage buffer tracked without bias, index {} offset {}",
+                  storage_buffer->index, storage_buffer->offset);
+    }
+    // Collect storage buffer and the instruction
+    if (IsGlobalMemoryWrite(inst)) {
+        info.writes.insert(*storage_buffer);
+    }
+    if (IsGlobalMemoryAtomic(inst)) {
+        info.atomic_writes.insert(*storage_buffer);
+    }
+    info.set.insert(*storage_buffer);
+    info.to_replace.push_back(StorageInst{
+        .storage_buffer{*storage_buffer},
+        .inst = &inst,
+        .block = &block,
+    });
+}
+
+/// When `value` is `low + y` with `low` the buffer's own low address word, returns `y`.
+std::optional<IR::U32> AddendOfBufferLowWord(const IR::U32& value, StorageBufferAddr buffer) {
+    if (value.IsImmediate()) {
+        return std::nullopt;
+    }
+    const IR::Inst* const add{value.InstRecursive()};
+    if (add->GetOpcode() != IR::Opcode::IAdd32) {
+        return std::nullopt;
+    }
+    for (size_t arg = 0; arg < 2; ++arg) {
+        const IR::Value candidate{add->Arg(arg)};
+        if (candidate.IsImmediate()) {
+            continue;
+        }
+        const IR::Inst* const low{candidate.InstRecursive()};
+        if (low->GetOpcode() == IR::Opcode::GetCbufU32 && low->Arg(0).IsImmediate() &&
+            low->Arg(1).IsImmediate() && low->Arg(0).U32() == buffer.index &&
+            low->Arg(1).U32() == buffer.offset) {
+            return IR::U32{add->Arg(1 - arg)};
+        }
+    }
+    return std::nullopt;
+}
+
+/// Returns the offset in indices (not bytes) for an equivalent storage instruction
+IR::U32 NvnStorageOffset(IR::Block& block, IR::Inst& inst, StorageBufferAddr buffer, u32 alignment) {
+    IR::IREmitter ir{block, IR::Block::InstructionList::s_iterator_to(inst)};
+    IR::U32 offset;
+    // Subtract the least significant 32 bits from the guest offset. The result is the storage
+    // buffer offset in bytes. The low word is aligned down to match the host alignment
+    // requirements: offset - (low & ~mask).
+    const IR::U32 mask{ir.Imm32(alignment - 1U)};
+    if (const std::optional<LowAddrInfo> low_addr{TrackLowAddress(&inst)}) {
+        offset = low_addr->value;
+        // A guest offset that is the low word plus y is y + (low & mask) once the aligned low
+        // word is subtracted (low = (low & ~mask) + (low & mask)): the guest low word and its
+        // aligned copy are never both materialized.
+        if (const std::optional<IR::U32> addend{AddendOfBufferLowWord(offset, buffer)}) {
+            const IR::U32 low_cbuf{ir.GetCbuf(ir.Imm32(buffer.index), ir.Imm32(buffer.offset))};
+            const IR::U32 low_bits{ir.BitwiseAnd(low_cbuf, mask)};
+            offset = addend->IsImmediate() ? ir.IAdd(low_bits, *addend)
+                                           : ir.IAdd(*addend, low_bits);
+            if (low_addr->imm_offset != 0) {
+                offset = ir.IAdd(offset, ir.Imm32(low_addr->imm_offset));
+            }
+            return offset;
+        }
+        if (low_addr->imm_offset != 0) {
+            offset = ir.IAdd(offset, ir.Imm32(low_addr->imm_offset));
+        }
+    } else {
+        offset = ir.UConvert(32, IR::U64{inst.Arg(0)});
+    }
+    IR::U32 low_cbuf{ir.GetCbuf(ir.Imm32(buffer.index), ir.Imm32(buffer.offset))};
+    low_cbuf = ir.BitwiseAnd(low_cbuf, ir.Imm32(~(alignment - 1U)));
+    return ir.ISub(offset, low_cbuf);
+}
+
+void NvnGlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
+                                        const HostTranslateInfo& host_info) {
+    NvnStorageInfo info;
+    program.info.nvn_raw_global_memory = host_info.nvn_raw_global_memory;
+    program.info.raw_global_table_ssbo = host_info.nvn_raw_global_table_ssbo;
+    program.info.raw_coverage = host_info.raw_coverage && host_info.nvn_raw_global_memory;
+    program.info.raw_global_last_hit =
+        host_info.raw_global_last_hit && host_info.nvn_raw_global_memory;
+    program.info.raw_global_store_alias = host_info.raw_global_store_alias &&
+                                          host_info.nvn_raw_global_memory &&
+                                          !host_info.nvn_raw_global_table_ssbo;
+    // The fixed per-stage range of the legacy path, or the driver bank window of an NVN2 compute
+    // program (uniform and storage entries start below 0x100 there).
+    const Bias nvn_bias{
+        .index = 0,
+        .offset_begin = program.info.nvn_buffer_window ? program.info.nvn_buffer_base : 0x100,
+        .offset_end = program.info.nvn_buffer_window
+                          ? program.info.nvn_buffer_base + program.info.nvn_buffer_count * 0x10
+                          : 0x700,
+        .alignment = 16,
+    };
+    const auto collect = [&] {
+        for (IR::Block* const block : program.post_order_blocks) {
+            for (IR::Inst& inst : block->Instructions()) {
+                if (!IsGlobalMemory(inst)) {
+                    continue;
+                }
+                NvnCollectStorageBuffers(*block, inst, info, env, host_info, nvn_bias);
+            }
+        }
+    };
+    collect();
+    // The descriptor limit is part of HostTranslateInfo and the shader-cache key.
+    const bool wide_compute = host_info.compute_storage64;
+    const size_t max_ssbos{env.ShaderStage() == Stage::Compute && wide_compute
+                               ? Info::MAX_SSBOS
+                               : Info::MAX_GRAPHICS_SSBOS};
+    if (info.set.size() > max_ssbos) {
+        throw NotImplementedException("{} storage buffers, the limit is {}", info.set.size(),
+                                      max_ssbos);
+    }
+    program.info.native_global_bounds |= info.native_runtime_bounds;
+    for (const StorageBufferAddr& storage_buffer : info.set) {
+        program.info.storage_buffers_descriptors.push_back({
+            .cbuf_index = storage_buffer.index,
+            .cbuf_offset = storage_buffer.offset,
+            .count = 1,
+            .is_written = info.writes.contains(storage_buffer),
+            .is_atomic_target = info.atomic_writes.contains(storage_buffer),
+        });
+    }
+    for (const StorageInst& storage_inst : info.to_replace) {
+        const StorageBufferAddr storage_buffer{storage_inst.storage_buffer};
+        const auto it{info.set.find(storage_inst.storage_buffer)};
+        const IR::U32 index{IR::Value{static_cast<u32>(info.set.index_of(it))}};
+        IR::Block* const block{storage_inst.block};
+        IR::Inst* const inst{storage_inst.inst};
+        const IR::U32 offset{
+            NvnStorageOffset(*block, *inst, storage_buffer, u32(host_info.min_ssbo_alignment))};
+        Replace(*block, *inst, index, offset);
+    }
+}
 } // Anonymous namespace
 
 void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
                                      const HostTranslateInfo& host_info) {
+    if (env.IsNvnHleProgram() || host_info.nvn_raw_global_memory) {
+        NvnGlobalMemoryToStorageBufferPass(env, program, host_info);
+        return;
+    }
     const bool has_global_memory =
         std::ranges::any_of(program.post_order_blocks, [](const auto* block) {
             return std::ranges::any_of(block->Instructions(), IsGlobalMemory);
@@ -2228,7 +2676,14 @@ void GlobalMemoryToStorageBufferPass(Environment& env, IR::Program& program,
     if (!has_global_memory) {
         return;
     }
-    const size_t max_ssbos{StorageBufferLimit(host_info)};
+    // EDEN_NX2_WIDE_COMPUTE_SSBOS=0 restores the 32-binding limit for A/B testing.
+    static const bool wide_ssbos = [] {
+        const char* const value = std::getenv("EDEN_NX2_WIDE_COMPUTE_SSBOS");
+        return !(value && value[0] == '0');
+    }();
+    const size_t max_ssbos{
+        wide_ssbos ? StorageBufferLimit(host_info)
+                   : (std::min)(StorageBufferLimit(host_info), size_t{Info::MAX_GRAPHICS_SSBOS})};
     TrackingConditions conditions{program};
     StorageInfo info;
     // Without 64-bit integers the backend cannot route global accesses among bound buffers.
@@ -2373,8 +2828,22 @@ std::vector<u32> JoinStorageInfo(Info& base, Info& source, size_t limit) {
     base.requires_coherent_global_memory |= source.requires_coherent_global_memory;
     base.native_global_bounds |= source.native_global_bounds;
     auto& descriptors = base.storage_buffers_descriptors;
+    // The raw global memory table (VTX-HLE) is always the last descriptor: take it out while
+    // joining.
+    const bool raw_table = std::ranges::any_of(descriptors, IsRawGlobalTable) ||
+                           std::ranges::any_of(source.storage_buffers_descriptors, IsRawGlobalTable);
+    if (raw_table) {
+        descriptors.erase(std::remove_if(descriptors.begin(), descriptors.end(), IsRawGlobalTable),
+                          descriptors.end());
+    }
     std::vector<u32> bindings;
+    std::optional<size_t> source_raw_table_pos;
     for (auto& desc : source.storage_buffers_descriptors) {
+        if (IsRawGlobalTable(desc)) {
+            source_raw_table_pos = bindings.size();
+            bindings.push_back(0U);
+            continue;
+        }
         auto it{std::ranges::find_if(descriptors, [&desc](const auto& existing) {
             return desc.cbuf_index == existing.cbuf_index &&
                    desc.cbuf_offset == existing.cbuf_offset && desc.count == existing.count &&
@@ -2389,6 +2858,7 @@ std::vector<u32> JoinStorageInfo(Info& base, Info& source, size_t limit) {
                 }
             }
             it->is_written |= desc.is_written;
+            it->is_atomic_target |= desc.is_atomic_target;
             bindings.push_back(static_cast<u32>(it - descriptors.begin()));
             continue;
         }
@@ -2399,7 +2869,38 @@ std::vector<u32> JoinStorageInfo(Info& base, Info& source, size_t limit) {
         bindings.push_back(static_cast<u32>(descriptors.size()));
         descriptors.push_back(desc);
     }
+    base.nvn_raw_global_memory |= source.nvn_raw_global_memory;
+    base.uses_raw_global_memory |= source.uses_raw_global_memory;
+    base.stores_raw_global_memory |= source.stores_raw_global_memory;
+    base.global_atomics |= source.global_atomics;
+    if (raw_table) {
+        AddRawGlobalTableDescriptor(base);
+        if (source_raw_table_pos) {
+            bindings[*source_raw_table_pos] = base.raw_global_table_index;
+        }
+    }
     return bindings;
+}
+
+void AddRawGlobalTableDescriptor(Info& info) {
+    if (!info.raw_global_table_ssbo || !info.uses_raw_global_memory) {
+        return;
+    }
+    auto& descriptors = info.storage_buffers_descriptors;
+    if (std::ranges::any_of(descriptors, IsRawGlobalTable)) {
+        return;
+    }
+    if (descriptors.size() >= Info::MAX_SSBOS) {
+        throw NotImplementedException("Raw global memory needs a free storage buffer slot ({} used)",
+                                      descriptors.size());
+    }
+    info.raw_global_table_index = static_cast<u32>(descriptors.size());
+    descriptors.push_back({
+        .cbuf_index = RAW_GLOBAL_TABLE_CBUF,
+        .cbuf_offset = 0,
+        .count = 1,
+        .is_written = false,
+    });
 }
 
 void RemapStorageBindings(IR::Program& program, std::span<const u32> bindings) {

@@ -1450,6 +1450,12 @@ void ManualContentProvider::ClearAllEntries() {
     app_info.clear();
 }
 
+void ManualContentProvider::SwapEntries(ManualContentProvider& other) {
+    std::swap(entries, other.entries);
+    std::swap(multi_version_entries, other.multi_version_entries);
+    std::swap(app_info, other.app_info);
+}
+
 void ManualContentProvider::Refresh() {}
 
 bool ManualContentProvider::HasEntry(u64 title_id, ContentRecordType type) const {

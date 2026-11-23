@@ -270,7 +270,7 @@ ResultStatus AppLoader_NCA::ReadProgramId(u64& out_program_id) {
     return ResultStatus::Success;
 }
 
-ResultStatus AppLoader_NCA::ReadControlData(FileSys::NACP& out_control) {
+ResultStatus AppLoader_NCA::ReadControlData(FileSys::NACP& out_control) const {
     if (nacp == nullptr) {
         return ResultStatus::ErrorNoControl;
     }

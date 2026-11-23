@@ -20,6 +20,7 @@
 #include "qt_common/qt_common.h"
 #include "nx2_switches.h"
 #include "startup_checks.h"
+#include "video_core/renderer_vulkan/nvn/nvn_debug.h"
 
 #if VESHIRU_ROOM
 #include "dedicated_room/veshiru_room.h"
@@ -316,6 +317,7 @@ int main(int argc, char* argv[]) try {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--room") == 0) {
             LoadNx2Switches(argv[0]);
+            Vulkan::Nvn::Debug::Reload();
             LaunchRoom(argc, argv, true);
             return EXIT_SUCCESS;
         }
@@ -390,6 +392,7 @@ int main(int argc, char* argv[]) try {
         }
 
         LoadNx2Switches(argv[0]);
+        Vulkan::Nvn::Debug::Reload();
         return RunFrontend(argc, argv);
     } catch (const std::exception& exception) {
         const auto message = Common::Log::SanitizeLogMessage(exception.what());

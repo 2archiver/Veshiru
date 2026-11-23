@@ -19,8 +19,9 @@
 
 namespace Shader::IR {
 
-template <typename Pred, typename Resolve = std::identity>
-auto BreadthFirstSearch(Value value, Pred&& pred, Resolve&& resolve = {})
+template <typename Pred, typename Resolve = std::identity, typename Expand = bool (*)(const Inst*)>
+auto BreadthFirstSearch(Value value, Pred&& pred, Resolve&& resolve = {},
+                        Expand&& expand = [](const Inst*) { return true; })
     -> std::invoke_result_t<Pred, const Inst*> {
     value = resolve(value);
     if (value.IsImmediate()) {
@@ -58,6 +59,9 @@ auto BreadthFirstSearch(Value value, Pred&& pred, Resolve&& resolve = {})
             // This is the instruction we were looking for
             return result;
         }
+        if (!expand(inst)) {
+            continue;
+        }
         // Visit the right most arguments first
         for (size_t arg = inst->NumArgs(); arg--;) {
             const Value arg_value{resolve(inst->Arg(arg))};
@@ -80,8 +84,11 @@ auto BreadthFirstSearch(Value value, Pred&& pred, Resolve&& resolve = {})
 /// search adds every instruction it visited, and later searches resolve those to an immediate
 /// and skip them. The result is BreadthFirstSearch's: what a skipped instruction reaches is
 /// exhausted too, so the instructions left are queued by the same ones in the same order.
-template <typename Pred, typename Resolve = std::identity>
+/// `expand(inst)` returns false for instructions whose arguments are not searched (the NVN raw
+/// global memory search does not walk through memory loads); the default searches everything.
+template <typename Pred, typename Expand = bool (*)(const Inst*), typename Resolve = std::identity>
 auto BreadthFirstSearchPruned(Value value, Pred&& pred, std::unordered_set<const Inst*>& exhausted,
+                              Expand&& expand = [](const Inst*) { return true; },
                               Resolve&& resolve = {})
     -> std::invoke_result_t<Pred, const Inst*> {
     std::vector<const Inst*> visited;
@@ -97,7 +104,8 @@ auto BreadthFirstSearchPruned(Value value, Pred&& pred, std::unordered_set<const
                 return Value{u32{0}};
             }
             return resolved;
-        })};
+        },
+        std::forward<Expand>(expand))};
     if (!result) {
         exhausted.insert(visited.begin(), visited.end());
     }

@@ -443,12 +443,15 @@ namespace Kernel {
             }
         }
 
-        // Acquire the scheduler lock.
-        KScopedSchedulerLock sl{kernel};
+        {
+            // Acquire the scheduler lock to signal waiters, then release it before the final
+            // Close() drops the last reference to `this`.
+            KScopedSchedulerLock sl{kernel};
 
-        // Signal.
-        m_signaled = true;
-        KSynchronizationObject::NotifyAvailable(kernel);
+            // Signal.
+            m_signaled = true;
+            KSynchronizationObject::NotifyAvailable(kernel);
+        }
 
         // Close the thread.
         this->Close(kernel);

@@ -388,7 +388,7 @@ ResultStatus AppLoader_NRO::ReadTitle(std::string& title) {
     return ResultStatus::Success;
 }
 
-ResultStatus AppLoader_NRO::ReadControlData(FileSys::NACP& control) {
+ResultStatus AppLoader_NRO::ReadControlData(FileSys::NACP& control) const {
     if (nacp == nullptr) {
         return ResultStatus::ErrorNoControl;
     }

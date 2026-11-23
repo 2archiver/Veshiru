@@ -3,7 +3,10 @@
 
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <mutex>
 #include <span>
+#include <thread>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -83,44 +86,34 @@ public:
      */
     SDLSinkStream(u32 device_channels_, u32 system_channels_, const std::string& output_device,
                   const std::string& input_device, StreamType type_, Core::System& system_)
-        : SinkStream{system_, type_} {
+        : SinkStream{system_, type_},
+          configured_device{type_ == StreamType::In ? input_device : output_device},
+          default_device{type_ == StreamType::In ? SDL_AUDIO_DEVICE_DEFAULT_RECORDING
+                                                 : SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK} {
         system_channels = system_channels_;
         device_channels = device_channels_;
-
-        SDL_AudioSpec spec{};
-        spec.freq = TargetSampleRate;
-        spec.channels = static_cast<u8>(device_channels);
-        spec.format = SDL_AUDIO_S16;
-
-        std::string device_name{output_device};
-        bool capture{false};
-        if (type == StreamType::In) {
-            device_name = input_device;
-            capture = true;
+        OpenBackend(DesiredDevice());
+        watching = SDL_AddEventWatch(&SDLSinkStream::OnDeviceEvent, this);
+        if (watching) {
+            recovery = std::jthread([this](std::stop_token stop) {
+                const std::stop_callback wake_on_stop{stop, [this] { RequestReopen(); }};
+                while (!stop.stop_requested()) {
+                    reopen.wait(false);
+                    if (stop.stop_requested()) {
+                        break;
+                    }
+                    reopen = false;
+                    std::scoped_lock lock{backend_mutex};
+                    if (!finalized) {
+                        const auto desired = DesiredDevice();
+                        if (force_reopen.exchange(false) || stream == nullptr ||
+                            desired != bound_device.load()) {
+                            OpenBackend(desired);
+                        }
+                    }
+                }
+            });
         }
-
-        const SDL_AudioDeviceID audio_device =
-            device_name.empty() ? (capture ? SDL_AUDIO_DEVICE_DEFAULT_RECORDING
-                                           : SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK)
-                                : FindAudioDeviceByName(device_name, capture);
-
-        stream = SDL_OpenAudioDeviceStream(audio_device, &spec, &SDLSinkStream::DataCallback,
-                                           this);
-
-        if (stream == nullptr) {
-            LOG_CRITICAL(Audio_Sink, "Error opening SDL audio device: {}", SDL_GetError());
-            return;
-        }
-
-        SDL_AudioSpec stream_in{};
-        SDL_AudioSpec stream_out{};
-        static_cast<void>(SDL_GetAudioStreamFormat(stream, &stream_in, &stream_out));
-
-        LOG_INFO(Service_Audio,
-                 "Opening SDL stream {} with: rate {} channels {} (system channels {}) "
-                 " format {}",
-                 static_cast<const void*>(stream), stream_out.freq, stream_out.channels,
-                 system_channels, static_cast<int>(stream_out.format));
     }
 
     /**
@@ -128,6 +121,11 @@ public:
      */
     ~SDLSinkStream() override {
         LOG_DEBUG(Service_Audio, "Destructing SDL stream {}", name);
+        if (watching) {
+            SDL_RemoveEventWatch(&SDLSinkStream::OnDeviceEvent, this);
+            recovery.request_stop();
+            recovery.join();
+        }
         Finalize();
     }
 
@@ -135,14 +133,10 @@ public:
      * Finalize the sink stream.
      */
     void Finalize() override {
-        if (stream == nullptr) {
-            return;
-        }
-
-        Stop();
-        SDL_ClearAudioStream(stream);
-        SDL_DestroyAudioStream(stream);
-        stream = nullptr;
+        std::scoped_lock lock{backend_mutex};
+        finalized = true;
+        SignalPause();
+        CloseBackend();
     }
 
     /**
@@ -152,37 +146,112 @@ public:
      *                 Default false.
      */
     void Start(bool resume = false) override {
-        if (!IsReady() || !paused) {
-            return;
-        }
-
-        if (!SDL_ResumeAudioStreamDevice(stream)) {
-            failed = true;
-            LOG_CRITICAL(Audio_Sink, "Error starting SDL audio stream: {}", SDL_GetError());
+        std::scoped_lock lock{backend_mutex};
+        if (finalized || !paused) {
             return;
         }
         paused = false;
+        if (stream != nullptr && !SDL_ResumeAudioStreamDevice(stream)) {
+            failed = true;
+            force_reopen = true;
+            RequestReopen();
+            LOG_WARNING(Audio_Sink, "Error resuming SDL audio stream: {}", SDL_GetError());
+        } else if (stream == nullptr) {
+            force_reopen = true;
+            RequestReopen();
+        }
     }
 
     bool IsReady() const override {
-        return stream != nullptr && !failed;
+        return !failed;
     }
 
     /**
      * Stop the sink stream.
      */
     void Stop() override {
-        if (stream == nullptr || paused) {
+        std::scoped_lock lock{backend_mutex};
+        if (paused) {
             return;
         }
         SignalPause();
-        if (!SDL_PauseAudioStreamDevice(stream)) {
+        if (stream != nullptr && !SDL_PauseAudioStreamDevice(stream)) {
             failed = true;
-            LOG_CRITICAL(Audio_Sink, "Error stopping SDL audio stream: {}", SDL_GetError());
+            force_reopen = true;
+            RequestReopen();
+            LOG_WARNING(Audio_Sink, "Error pausing SDL audio stream: {}", SDL_GetError());
         }
     }
 
 private:
+    void RequestReopen() {
+        reopen = true;
+        reopen.notify_one();
+    }
+
+    static bool SDLCALL OnDeviceEvent(void* user, SDL_Event* event) {
+        if (event->type != SDL_EVENT_AUDIO_DEVICE_ADDED &&
+            event->type != SDL_EVENT_AUDIO_DEVICE_REMOVED) {
+            return true;
+        }
+        auto& self = *static_cast<SDLSinkStream*>(user);
+        if (event->adevice.recording != (self.type == StreamType::In)) {
+            return true;
+        }
+        const auto bound = self.bound_device.load();
+        if (event->type == SDL_EVENT_AUDIO_DEVICE_REMOVED) {
+            if (bound != self.default_device && bound == event->adevice.which) {
+                self.force_reopen = true;
+                self.RequestReopen();
+            }
+        } else if (bound == 0 ||
+                   (bound == self.default_device && !self.configured_device.empty())) {
+            self.RequestReopen();
+        }
+        return true;
+    }
+
+    void CloseBackend() {
+        if (stream != nullptr) {
+            SDL_ClearAudioStream(stream);
+            SDL_DestroyAudioStream(stream);
+            stream = nullptr;
+        }
+    }
+
+    SDL_AudioDeviceID DesiredDevice() const {
+        return configured_device.empty()
+                   ? default_device
+                   : FindAudioDeviceByName(configured_device, type == StreamType::In);
+    }
+
+    void OpenBackend(SDL_AudioDeviceID requested) {
+        CloseBackend();
+        const SDL_AudioSpec spec{SDL_AUDIO_S16, static_cast<int>(device_channels),
+                                 TargetSampleRate};
+        for (const auto candidate : {requested, default_device}) {
+            bound_device = candidate;
+            stream = SDL_OpenAudioDeviceStream(candidate, &spec, &SDLSinkStream::DataCallback, this);
+            if (stream != nullptr && (paused || SDL_ResumeAudioStreamDevice(stream))) {
+                failed = false;
+                SDL_AudioSpec stream_out{};
+                static_cast<void>(SDL_GetAudioStreamFormat(stream, nullptr, &stream_out));
+                LOG_INFO(Service_Audio,
+                         "Opening SDL stream {} with: rate {} channels {} (system channels {}) "
+                         " format {}",
+                         static_cast<const void*>(stream), stream_out.freq, stream_out.channels,
+                         system_channels, static_cast<int>(stream_out.format));
+                return;
+            }
+            CloseBackend();
+            if (candidate == default_device) {
+                break;
+            }
+        }
+        bound_device = 0;
+        failed = true;
+        LOG_CRITICAL(Audio_Sink, "Error opening SDL audio device: {}", SDL_GetError());
+    }
     /**
      * Main callback from SDL. Either expects samples from us (audio render/audio out), or will
      * provide samples to be copied (audio in).
@@ -235,7 +304,16 @@ private:
     }
 
     /// SDL stream attached to an opened input/output device
+    const std::string configured_device;
+    const SDL_AudioDeviceID default_device;
     SDL_AudioStream* stream{};
+    std::atomic<SDL_AudioDeviceID> bound_device{};
+    std::atomic<bool> reopen{};
+    std::atomic<bool> force_reopen{};
+    bool watching{};
+    bool finalized{};
+    std::mutex backend_mutex;
+    std::jthread recovery;
 };
 
 /// Configure the selected device name for both playback and capture streams.

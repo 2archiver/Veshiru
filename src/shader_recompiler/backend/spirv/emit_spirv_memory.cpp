@@ -75,25 +75,56 @@ void WriteStorageByCasLoop(EmitContext& ctx, const IR::Value& binding, const IR:
     ctx.OpFunctionCall(ctx.TypeVoid(), ctx.write_storage_cas_loop_func, pointer, value, bit_offset,
                        bit_count);
 }
+
+/// A 8/16-bit load of VTX-HLE raw global memory: the aligned word that holds it, then the field.
+Id LoadRawSubword(EmitContext& ctx, Id address, u32 bits, bool is_signed) {
+    if (!ctx.raw_global_memory) {
+        throw NotImplementedException("SPIR-V Instruction");
+    }
+    const Id word_address{ctx.OpBitwiseAnd(ctx.U64, address, ctx.Constant(ctx.U64, ~u64{3}))};
+    const Id word{ctx.OpFunctionCall(ctx.U32[1], ctx.load_global_func_u32, word_address)};
+    const Id byte_offset{ctx.OpBitwiseAnd(ctx.U32[1], ctx.OpUConvert(ctx.U32[1], address),
+                                          ctx.Const(3u))};
+    const Id bit_offset{ctx.OpShiftLeftLogical(ctx.U32[1], byte_offset, ctx.Const(3u))};
+    return is_signed
+               ? ctx.OpBitFieldSExtract(ctx.U32[1], word, bit_offset, ctx.Const(bits))
+               : ctx.OpBitFieldUExtract(ctx.U32[1], word, bit_offset, ctx.Const(bits));
+}
+
+/// A 8/16-bit store to VTX-HLE raw global memory: the field of the aligned word that holds it.
+void WriteRawSubword(EmitContext& ctx, Id address, Id value, u32 bits) {
+    if (!ctx.raw_global_memory || !Sirit::ValidId(ctx.raw_global_subword_write_func)) {
+        throw NotImplementedException("SPIR-V Instruction");
+    }
+    const Id word_address{ctx.OpBitwiseAnd(ctx.U64, address, ctx.Constant(ctx.U64, ~u64{3}))};
+    const Id byte_offset{ctx.OpBitwiseAnd(ctx.U32[1], ctx.OpUConvert(ctx.U32[1], address),
+                                          ctx.Const(3u))};
+    const Id bit_offset{ctx.OpShiftLeftLogical(ctx.U32[1], byte_offset, ctx.Const(3u))};
+    ctx.OpFunctionCall(ctx.void_id, ctx.raw_global_subword_write_func, word_address, value,
+                       bit_offset, ctx.Const(bits));
+}
 } // Anonymous namespace
 
-void EmitLoadGlobalU8(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitLoadGlobalU8(EmitContext& ctx, Id address) {
+    return LoadRawSubword(ctx, address, 8, false);
 }
 
-void EmitLoadGlobalS8(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitLoadGlobalS8(EmitContext& ctx, Id address) {
+    return LoadRawSubword(ctx, address, 8, true);
 }
 
-void EmitLoadGlobalU16(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitLoadGlobalU16(EmitContext& ctx, Id address) {
+    return LoadRawSubword(ctx, address, 16, false);
 }
 
-void EmitLoadGlobalS16(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+Id EmitLoadGlobalS16(EmitContext& ctx, Id address) {
+    return LoadRawSubword(ctx, address, 16, true);
 }
 
 Id EmitLoadGlobal32(EmitContext& ctx, IR::Inst* inst, Id address) {
+    if (ctx.raw_global_memory) {
+        return ctx.OpFunctionCall(ctx.U32[1], ctx.load_global_func_u32, address);
+    }
     if (ctx.profile.support_int64) {
         return ctx.OpFunctionCall(ctx.U32[1], ctx.GlobalMemoryFunctionsOf(*inst).load_u32, address);
     }
@@ -102,6 +133,9 @@ Id EmitLoadGlobal32(EmitContext& ctx, IR::Inst* inst, Id address) {
 }
 
 Id EmitLoadGlobal64(EmitContext& ctx, IR::Inst* inst, Id address) {
+    if (ctx.raw_global_memory) {
+        return ctx.OpFunctionCall(ctx.U32[2], ctx.load_global_func_u32x2, address);
+    }
     if (ctx.profile.support_int64) {
         return ctx.OpFunctionCall(ctx.U32[2], ctx.GlobalMemoryFunctionsOf(*inst).load_u32x2,
                                   address);
@@ -111,6 +145,9 @@ Id EmitLoadGlobal64(EmitContext& ctx, IR::Inst* inst, Id address) {
 }
 
 Id EmitLoadGlobal128(EmitContext& ctx, IR::Inst* inst, Id address) {
+    if (ctx.raw_global_memory) {
+        return ctx.OpFunctionCall(ctx.U32[4], ctx.load_global_func_u32x4, address);
+    }
     if (ctx.profile.support_int64) {
         return ctx.OpFunctionCall(ctx.U32[4], ctx.GlobalMemoryFunctionsOf(*inst).load_u32x4,
                                   address);
@@ -119,23 +156,27 @@ Id EmitLoadGlobal128(EmitContext& ctx, IR::Inst* inst, Id address) {
     return ctx.Const(0u, 0u, 0u, 0u);
 }
 
-void EmitWriteGlobalU8(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+void EmitWriteGlobalU8(EmitContext& ctx, Id address, Id value) {
+    WriteRawSubword(ctx, address, value, 8);
 }
 
-void EmitWriteGlobalS8(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+void EmitWriteGlobalS8(EmitContext& ctx, Id address, Id value) {
+    WriteRawSubword(ctx, address, value, 8);
 }
 
-void EmitWriteGlobalU16(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+void EmitWriteGlobalU16(EmitContext& ctx, Id address, Id value) {
+    WriteRawSubword(ctx, address, value, 16);
 }
 
-void EmitWriteGlobalS16(EmitContext&) {
-    throw NotImplementedException("SPIR-V Instruction");
+void EmitWriteGlobalS16(EmitContext& ctx, Id address, Id value) {
+    WriteRawSubword(ctx, address, value, 16);
 }
 
 void EmitWriteGlobal32(EmitContext& ctx, IR::Inst* inst, Id address, Id value) {
+    if (ctx.raw_global_memory) {
+        ctx.OpFunctionCall(ctx.void_id, ctx.write_global_func_u32, address, value);
+        return;
+    }
     if (ctx.profile.support_int64) {
         ctx.OpFunctionCall(ctx.void_id, ctx.GlobalMemoryFunctionsOf(*inst).write_u32, address,
                            value);
@@ -145,6 +186,10 @@ void EmitWriteGlobal32(EmitContext& ctx, IR::Inst* inst, Id address, Id value) {
 }
 
 void EmitWriteGlobal64(EmitContext& ctx, IR::Inst* inst, Id address, Id value) {
+    if (ctx.raw_global_memory) {
+        ctx.OpFunctionCall(ctx.void_id, ctx.write_global_func_u32x2, address, value);
+        return;
+    }
     if (ctx.profile.support_int64) {
         ctx.OpFunctionCall(ctx.void_id, ctx.GlobalMemoryFunctionsOf(*inst).write_u32x2, address,
                            value);
@@ -154,6 +199,10 @@ void EmitWriteGlobal64(EmitContext& ctx, IR::Inst* inst, Id address, Id value) {
 }
 
 void EmitWriteGlobal128(EmitContext& ctx, IR::Inst* inst, Id address, Id value) {
+    if (ctx.raw_global_memory) {
+        ctx.OpFunctionCall(ctx.void_id, ctx.write_global_func_u32x4, address, value);
+        return;
+    }
     if (ctx.profile.support_int64) {
         ctx.OpFunctionCall(ctx.void_id, ctx.GlobalMemoryFunctionsOf(*inst).write_u32x4, address,
                            value);

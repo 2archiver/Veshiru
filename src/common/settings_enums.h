@@ -169,6 +169,9 @@ ENUM(GpuLogLevel, Off, Errors, Standard, Verbose, All)
 ENUM(GameListMode, TreeView, GridView, CarouselView, VersionListView);
 ENUM(SpeedMode, Standard, Turbo, Slow);
 ENUM(FrameGenType, Lsfg, Fsr3, NvidiaDlssG, OpenFrameGen);
+ENUM(GraphicsPath, Hle, Emulated);
+// VTX-HLE upscaler choices (video_core/upscaler.h); no setting selects one yet, the replay uses Auto.
+ENUM(Upscaler, Auto, Game, Fsr, Bilinear, Dlss, Dlaa);
 
 template <typename Type>
 inline std::string_view CanonicalizeEnum(Type id) {

@@ -28,6 +28,14 @@ DECLARE_ENUM_FLAG_OPERATORS(MemoryPermission)
  */
 class HostMemory {
 public:
+    /// Windows maps the backing as views of this size placed back to back (one contiguous
+    /// range). Anything that queries the host pages of a view (VirtualQuery,
+    /// vkGetMemoryHostPointerPropertiesEXT and every VK_EXT_external_memory_host import on the
+    /// NVIDIA driver) costs time proportional to the resident part of the whole view: with one
+    /// 12 GiB view holding 6 GiB of guest data each such call took ~35 ms, even for 64 KiB; with
+    /// 64 MiB views 0.2-0.5 ms (a 256 MiB import ~3 ms). Imports may span several views.
+    static constexpr size_t BackingViewSize = size_t{64} << 20;
+
     explicit HostMemory(size_t backing_size_, size_t virtual_size_);
     ~HostMemory();
 

@@ -419,4 +419,48 @@ TEST_CASE("HostMemory: Protect within a view, across views and over a gap", "[co
     base[0x22000] = 7;
     REQUIRE(mem.BackingBasePointer()[0x200000] == 7);
 }
+
+TEST_CASE("HostMemory: backing is views of BackingViewSize back to back; ranges across views work",
+          "[common][host_memory]") {
+    constexpr size_t View = HostMemory::BackingViewSize;
+    u8* address{};
+    {
+        HostMemory mem(2 * View + 1_MiB, VIRTUAL_SIZE);
+        u8* const backing = mem.BackingBasePointer();
+        REQUIRE(backing != nullptr);
+        REQUIRE(mem.VirtualBasePointer() != nullptr);
+        address = backing;
+
+        // Separate views (a driver query of one view no longer walks the whole backing).
+        MEMORY_BASIC_INFORMATION region{};
+        for (const size_t offset : {size_t{0}, View - 4_KiB, View, 2 * View, 2 * View + 4_KiB}) {
+            REQUIRE(VirtualQuery(backing + offset, &region, sizeof(region)) == sizeof(region));
+            REQUIRE(region.AllocationBase == backing + offset / View * View);
+            REQUIRE(region.State == MEM_COMMIT);
+        }
+
+        // The backing stays one contiguous range: bytes written across the boundary are the
+        // section's bytes, seen through a guest mapping across it too, also after a cold hint.
+        for (size_t i = 0; i < 64; ++i) {
+            backing[View - 32 + i] = static_cast<u8>(i + 1);
+        }
+        mem.Map(0x100000, View - 64_KiB, 128_KiB, PERMS, HEAP);
+        mem.HintCold(View - 64_KiB, 128_KiB, 0x100000);
+        volatile u8* const guest = mem.VirtualBasePointer() + 0x100000 + 64_KiB - 32;
+        for (size_t i = 0; i < 64; ++i) {
+            REQUIRE(guest[i] == static_cast<u8>(i + 1));
+        }
+        guest[40] = 0xaa;
+        REQUIRE(backing[View + 8] == 0xaa);
+
+        // The last (short) view.
+        backing[2 * View] = 5;
+        REQUIRE(backing[2 * View] == 5);
+        mem.Unmap(0x100000, 128_KiB, HEAP);
+    }
+    MEMORY_BASIC_INFORMATION region{};
+    REQUIRE(VirtualQuery(address, &region, sizeof(region)) == sizeof(region));
+    REQUIRE(region.State == MEM_FREE);
+    REQUIRE(region.RegionSize >= 2 * View + 1_MiB);
+}
 #endif

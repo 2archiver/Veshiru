@@ -14,7 +14,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "common/fs/file.h"
 #include "common/fs/path_util.h"
+#include "core/file_sys/errors.h"
 #include "core/file_sys/vfs/vfs_real.h"
 
 namespace {
@@ -199,3 +201,87 @@ TEST_CASE("RealVfsFilesystem mutations cleanly release cached read handles", "[c
     REQUIRE(vfs.DeleteDirectory(sub_dir));
     REQUIRE_FALSE(fs::exists(temp.root / "sub"));
 }
+
+TEST_CASE("Real VFS can replace a file while its old reference is live", "[core][vfs]") {
+    TempDir temp{"veshiru-vfs-replace-live"};
+    const auto path = Common::FS::PathToUTF8String(temp.root / "trial.ghost");
+    FileSys::RealVfsFilesystem vfs;
+    const auto ghost = vfs.CreateFile(path);
+    REQUIRE(ghost);
+    REQUIRE(ghost->WriteByte(0x42));
+    REQUIRE(ghost->ReadByte(0) == 0x42);
+
+    REQUIRE(vfs.DeleteFile(path));
+    REQUIRE_FALSE(vfs.OpenFile(path));
+    const auto replacement = vfs.CreateFile(path);
+    REQUIRE(replacement);
+    REQUIRE(replacement->WriteByte(0x24));
+    CHECK(replacement->ReadByte(0) == 0x24);
+#ifdef _WIN32
+    CHECK_FALSE(ghost->ReadByte(0));
+    CHECK_FALSE(ghost->WriteByte(0x55));
+#else
+    CHECK(ghost->ReadByte(0) == 0x42);
+    REQUIRE(ghost->WriteByte(0x55));
+#endif
+    CHECK(replacement->ReadByte(0) == 0x24);
+}
+
+TEST_CASE("Real VFS can rename a file while its reference is live", "[core][vfs]") {
+    TempDir temp{"veshiru-vfs-rename-live"};
+    const auto old_path = Common::FS::PathToUTF8String(temp.root / "old.ghost");
+    const auto new_path = Common::FS::PathToUTF8String(temp.root / "new.ghost");
+    FileSys::RealVfsFilesystem vfs;
+    const auto ghost = vfs.CreateFile(old_path);
+    REQUIRE(ghost);
+    REQUIRE(ghost->WriteByte(0x42));
+
+    {
+        const auto other = vfs.CreateFile(new_path);
+        REQUIRE(other);
+        REQUIRE(other->WriteByte(0x24));
+        CHECK_FALSE(ghost->Rename("new.ghost"));
+        CHECK(ghost->ReadByte(0) == 0x42);
+        CHECK(other->ReadByte(0) == 0x24);
+        REQUIRE(vfs.DeleteFile(new_path));
+    }
+    REQUIRE(ghost->Rename("new.ghost"));
+    REQUIRE_FALSE(vfs.OpenFile(old_path));
+    const auto renamed = vfs.OpenFile(new_path);
+    REQUIRE(renamed);
+    CHECK(renamed == ghost);
+    CHECK(renamed->GetSize() == 1);
+    CHECK(renamed->ReadAllBytes() == std::vector<u8>{0x42});
+    const auto replacement = vfs.CreateFile(old_path);
+    REQUIRE(replacement);
+    REQUIRE(replacement->Resize(2));
+    CHECK(renamed->GetSize() == 1);
+    CHECK(renamed->ReadByte(0) == 0x42);
+}
+
+#ifdef _WIN32
+TEST_CASE("Real VFS reports a genuinely locked delete", "[core][vfs]") {
+    TempDir temp{"veshiru-vfs-locked-delete"};
+    const auto path = temp.root / "trial.ghost";
+    FileSys::RealVfsFilesystem vfs;
+    const auto dir = vfs.OpenDirectory(Common::FS::PathToUTF8String(temp.root));
+    {
+        const auto seed = vfs.CreateFile(Common::FS::PathToUTF8String(path));
+        REQUIRE(seed);
+        REQUIRE(seed->WriteByte('a'));
+    }
+    const auto ghost = dir->GetFile("trial.ghost");
+    REQUIRE(ghost);
+    REQUIRE(ghost->ReadByte(0) == 'a');
+    Common::FS::IOFile external{path, Common::FS::FileAccessMode::Read};
+    REQUIRE(external.IsOpen());
+
+    CHECK(dir->DeleteFileWithResult("trial.ghost") == FileSys::ResultTargetLocked);
+    CHECK(std::filesystem::exists(path));
+    CHECK(dir->GetFile("trial.ghost") == ghost);
+    CHECK(ghost->ReadByte(0) == 'a');
+    external.Close();
+    CHECK(dir->DeleteFileWithResult("trial.ghost") == ResultSuccess);
+    CHECK_FALSE(std::filesystem::exists(path));
+}
+#endif

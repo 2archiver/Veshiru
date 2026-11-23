@@ -47,8 +47,10 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/settings_common.h"
+#include "common/vtx_hle_settings.h"
 #include "qt_common/config/shared_translation.h"
 #include "qt_common/qt_compat.h"
+#include "veshiru/configuration/vtx_hle_grey.h"
 
 namespace ConfigurationShared {
 
@@ -621,6 +623,7 @@ void Widget::SetupComponent(const QString& label, std::function<void()>& load_fu
         layout->addWidget(lhs, 1);
     } else if (type_id != "bool") {
         QLabel* qt_label = CreateLabel(label);
+        title_label = qt_label;
         layout->addWidget(qt_label, 1);
     }
 
@@ -824,10 +827,72 @@ Widget::Widget(Settings::BasicSetting* setting_, const TranslationMap& translati
     this->setToolTip(tooltip);
 }
 
+void Widget::SetUnavailable(const QString& reason, const QString& label_suffix) {
+    const bool make_unavailable = !reason.isEmpty();
+    if (make_unavailable == unavailable) {
+        return;
+    }
+    unavailable = make_unavailable;
+
+    // The controls are the layout's direct widgets; the restore-global button of a custom
+    // configuration is not greyed, it is how a custom value is dropped.
+    constexpr const char* was_enabled_property = "vtxHleWasEnabled";
+    QLayout* const row = layout();
+    for (int index = 0; row != nullptr && index < row->count(); ++index) {
+        QWidget* const control = row->itemAt(index)->widget();
+        if (control == nullptr || control == restore_button) {
+            continue;
+        }
+        if (unavailable) {
+            control->setProperty(was_enabled_property, control->isEnabledTo(this));
+            control->setEnabled(false);
+        } else {
+            const QVariant before = control->property(was_enabled_property);
+            control->setEnabled(!before.isValid() || before.toBool());
+        }
+    }
+
+    // The text that names the setting: the label, or the checkbox of a bool.
+    const auto retitle = [&](const QString& title, const auto& apply) {
+        if (unavailable) {
+            available_title = title;
+            // "GPU Mode:" reads "GPU Mode (Emulated GPU only):"
+            QString suffixed = title;
+            if (suffixed.endsWith(QLatin1Char(':'))) {
+                suffixed.chop(1);
+                suffixed += label_suffix;
+                suffixed += QLatin1Char(':');
+            } else {
+                suffixed += label_suffix;
+            }
+            apply(suffixed);
+        } else {
+            apply(available_title);
+        }
+    };
+    if (title_label != nullptr) {
+        retitle(title_label->text(), [this](const QString& text) { title_label->setText(text); });
+    } else if (checkbox != nullptr) {
+        retitle(checkbox->text(), [this](const QString& text) { checkbox->setText(text); });
+    }
+
+    if (unavailable) {
+        available_tooltip = toolTip();
+        QString tip = available_tooltip;
+        if (!tip.isEmpty()) {
+            tip += QStringLiteral("\n\n");
+        }
+        tip += reason;
+        setToolTip(tip);
+    } else {
+        setToolTip(available_tooltip);
+    }
+}
+
 Builder::Builder(QWidget* parent_, bool runtime_lock_)
     : translations{InitializeTranslations(parent_)},
       combobox_translations{ComboboxEnumeration(parent_)}, parent{parent_},
-      runtime_lock{runtime_lock_} {}
+      runtime_lock{runtime_lock_}, vtx_hle{new VtxHleGrey(!runtime_lock_, parent_)} {}
 
 Builder::~Builder() = default;
 
@@ -853,8 +918,15 @@ Widget* Builder::BuildWidget(Settings::BasicSetting* setting,
         return nullptr;
     }
 
-    return new Widget(setting, *translations, *combobox_translations, parent, runtime_lock,
-                      apply_funcs, request, managed, multiplier, other_setting, suffix);
+    Widget* const widget =
+        new Widget(setting, *translations, *combobox_translations, parent, runtime_lock,
+                   apply_funcs, request, managed, multiplier, other_setting, suffix);
+    if (widget->Valid()) {
+        if (const auto* const entry = Settings::VtxHle::Find(setting->GetLabel())) {
+            vtx_hle->Track(widget, *entry);
+        }
+    }
+    return widget;
 }
 
 Widget* Builder::BuildWidget(Settings::BasicSetting* setting,
@@ -866,6 +938,10 @@ Widget* Builder::BuildWidget(Settings::BasicSetting* setting,
 
 const ComboboxTranslationMap& Builder::ComboboxTranslations() const {
     return *combobox_translations;
+}
+
+VtxHleGrey& Builder::VtxHle() const {
+    return *vtx_hle;
 }
 
 } // namespace ConfigurationShared

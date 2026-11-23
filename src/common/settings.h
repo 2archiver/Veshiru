@@ -363,6 +363,55 @@ struct Values {
 #endif
         "backend", Category::Renderer};
     SwitchableSetting<u32> vulkan_device{linkage, 0, "vulkan_device", Category::Renderer, Specialization::RuntimeList};
+    // Which GPU path runs a Switch 2 game's NVN graphics: the emulated Maxwell GPU (the default)
+    // or VTX-HLE, the NVN high-level emulation. Read when the game boots (the NVN hooks and the
+    // Vulkan device features depend on it), so it is not runtime modifiable. See ResolveNvnHle().
+    SwitchableSetting<GraphicsPath> graphics_path{linkage,
+                                                  GraphicsPath::Emulated,
+                                                  "graphics_path",
+                                                  Category::Renderer,
+                                                  Specialization::Default,
+                                                  true,
+                                                  false};
+    // VTX-HLE: occlusion queries run inside render passes, so a result the game
+    // asks for no longer ends the pass (needs Vulkan's host query reset). Read when the NVN
+    // context starts. On: OoT's ~2000 reports a frame ended as many passes (VTX-HLE 7.7 -> 9.9 fps).
+    SwitchableSetting<bool> nvn_in_pass_queries{linkage,
+                                                true,
+                                                "nvn_in_pass_queries",
+                                                Category::Renderer,
+                                                Specialization::Default,
+                                                true,
+                                                false};
+    // VTX-HLE: graphics pipelines are built from VK_EXT_graphics_pipeline_library parts that are
+    // compiled once and fast-linked while the whole pipeline is compiled in the background. With
+    // use_asynchronous_shaders the parts and links of draws that may be skipped run on the async
+    // workers (the draw waits), else on the replay thread. Read when the Vulkan device and the
+    // NVN pipeline cache are created.
+    SwitchableSetting<bool> nvn_pipeline_library{linkage,
+                                                 false,
+                                                 "nvn_pipeline_library",
+                                                 Category::Renderer,
+                                                 Specialization::Default,
+                                                 true,
+                                                 false};
+    // VTX-HLE: a render pass carries no external subpass dependencies (each was a full
+    // ALL_COMMANDS sync before and after the pass); the replay's explicit barrier between a pass
+    // and the next op stays the one sync at the boundary. Read when the NVN pipeline cache is
+    // created (its render passes are made with it). See nvn/DESIGN.md "Pass boundary syncs".
+    SwitchableSetting<bool> nvn_sync_diet{linkage,
+                                          true,
+                                          "nvn_sync_diet",
+                                          Category::Renderer,
+                                          Specialization::Default,
+                                          true,
+                                          false};
+
+    // VTX-HLE diagnostic/workaround: start without disk caches and recompile shaders every minute.
+    // Read at game start; synchronous compilation keeps the refresh from losing one-time draws.
+    SwitchableSetting<bool> nvn_shader_refresh{
+        linkage, false, "nvn_shader_refresh", Category::Renderer, Specialization::Default,
+        true,    false};
 
     // Graphics Settings
     ResolutionScalingInfo resolution_info{};
@@ -682,6 +731,12 @@ struct Values {
                                                                   AstcRecompression::Bc3,
                                                                   "astc_recompression",
                                                                   Category::RendererAdvanced};
+
+    // VTX-HLE only: with the BC3 stand-in kind, hold each ASTC texture in the BC format its
+    // channels need (BC4 luminance, BC5 luminance+alpha, BC1 opaque colour, BC3 the rest) instead
+    // of BC3 everywhere. EDEN_NX2_NVN_SMART_BC overrides it; the parts have their own env switches.
+    SwitchableSetting<bool> nvn_smart_bc{linkage, true, "nvn_smart_bc",
+                                         Category::RendererAdvanced};
 
 
     SwitchableSetting<bool> sync_memory_operations{linkage,
@@ -1258,6 +1313,28 @@ u64 GetCurrentProgramID();
 void SetCurrentProgramIsSwitch2(bool is_switch2);
 bool CurrentProgramIsSwitch2();
 
+// Why the NVN high-level emulation is on or off for the program being started.
+enum class NvnHleReason {
+    EnvironmentOn,   // EDEN_NX2_NVN_HLE set to anything but "0": on for any program
+    EnvironmentOff,  // EDEN_NX2_NVN_HLE=0
+    SettingHle,      // graphics_path = HLE and the program is a Switch 2 one
+    SettingEmulated, // graphics_path = Emulated GPU
+    NotSwitch2,      // graphics_path = HLE, but the HLE only exists for the Switch 2 NVN SDK
+};
+struct NvnHleChoice {
+    bool hle{};
+    NvnHleReason reason{NvnHleReason::SettingEmulated};
+};
+// Pure form (tests): `environment` is the value of EDEN_NX2_NVN_HLE (nullptr when unset).
+[[nodiscard]] NvnHleChoice ChooseNvnHle(const char* environment, GraphicsPath setting,
+                                        bool switch2_program);
+// The choice for the program being started: EDEN_NX2_NVN_HLE (1/0) overrides the graphics_path
+// setting; Switch 1 programs always use the emulated GPU unless the variable forces the HLE.
+// Valid once SetCurrentProgramIsSwitch2 was called for the program (the core does it before the
+// GPU is created) and until it ends.
+[[nodiscard]] NvnHleChoice ResolveNvnHle();
+[[nodiscard]] const char* NvnHleReasonText(NvnHleReason reason);
+
 /// Whether GPU-written memory is flushed back when the CPU reads it: the setting, or a title
 /// that requires it.
 bool ReactiveFlushing();
@@ -1283,6 +1360,8 @@ float Volume();
 
 // speed limit ops
 u16 SpeedLimit();
+// The frame rate frame_pacing_mode caps the game at (0: none). VTX-HLE paces its presents with it.
+u32 FrameRateCap();
 void SetSpeedMode(const SpeedMode &mode);
 void ToggleStandardMode();
 void ToggleTurboMode();

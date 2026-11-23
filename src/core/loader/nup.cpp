@@ -60,12 +60,18 @@ std::unique_ptr<FileSys::NACP> BuildNacp(const NupContainer::PackageInfo& base,
                                          const std::string& version) {
     const std::string& effective_title =
         !base.title_name.empty() ? base.title_name : base.source_dump;
-    if (effective_title.empty() && base.localized_titles.empty() && base.publisher.empty() &&
-        version.empty()) {
+    const bool has_raw_nacp = base.nacp.size() == sizeof(FileSys::RawNACP);
+    if (!has_raw_nacp && effective_title.empty() && base.localized_titles.empty() &&
+        base.publisher.empty() && version.empty()) {
         return nullptr;
     }
     auto nacp = std::make_unique<FileSys::NACP>();
-    nacp->raw.supported_languages = static_cast<FileSys::SupportedLanguage>(0x3FFFF);
+    if (has_raw_nacp) {
+        std::memcpy(&nacp->raw, base.nacp.data(), sizeof(FileSys::RawNACP));
+    } else {
+        nacp->raw.supported_languages = static_cast<FileSys::SupportedLanguage>(0x3FFFF);
+        nacp->raw.save_data_owner_id = base.title_id;
+    }
 
     for (const auto& [lang, name] : base.localized_titles) {
         for (const auto& slot : LanguageSlots) {
@@ -78,10 +84,11 @@ std::unique_ptr<FileSys::NACP> BuildNacp(const NupContainer::PackageInfo& base,
     }
     // Slot 0 is en-us; an exact en-us localized title wins over the default title (SPEC 5.1).
     auto& english = nacp->raw.language_entries.language_entries[0];
-    if (!effective_title.empty() && english.application_name[0] == '\0') {
+    if (!effective_title.empty() && (!has_raw_nacp || english.application_name[0] == '\0')) {
         CopyNameToEntry(english, effective_title);
     }
-    if (!base.publisher.empty()) {
+    if (!base.publisher.empty() &&
+        (!has_raw_nacp || english.developer_name[0] == '\0')) {
         for (auto& entry : nacp->raw.language_entries.language_entries) {
             CopyDeveloperToEntry(entry, base.publisher);
         }
@@ -91,12 +98,24 @@ std::unique_ptr<FileSys::NACP> BuildNacp(const NupContainer::PackageInfo& base,
         std::memcpy(nacp->raw.version_string.data(), version.data(), length);
         nacp->raw.version_string[length] = '\0';
     }
-    nacp->raw.save_data_owner_id = base.title_id;
+    if (nacp->raw.save_data_owner_id == 0) {
+        nacp->raw.save_data_owner_id = base.title_id;
+    }
 
     nacp->language_entries.resize(16);
     std::memcpy(nacp->language_entries.data(), nacp->raw.language_entries.language_entries.data(),
                 sizeof(nacp->raw.language_entries.language_entries));
     return nacp;
+}
+
+bool HasUsableExeFS(NupContainer& container, std::size_t package_index) {
+    const auto exefs = container.GetExeFSDir(package_index);
+    return exefs != nullptr && exefs->GetFile("main") != nullptr &&
+           exefs->GetFile("main.npdm") != nullptr;
+}
+
+constexpr bool IsSwitch2Program(u64 title_id) noexcept {
+    return (title_id & 0xFFF0'0000'0000'0000ULL) == 0x0400'0000'0000'0000ULL;
 }
 
 std::string DecodeVersion(u32 version) {
@@ -169,7 +188,8 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
 
     const auto base_index = nup->FindBasePackage();
     auto update_index = nup->FindBestUpdatePackage();
-    if (base_index && update_index && nup->GetExeFSDir(*base_index) != nullptr &&
+    const bool base_has_exefs = base_index && HasUsableExeFS(*nup, *base_index);
+    if (base_index && update_index && base_has_exefs &&
         IsUpdateDisabled(nup->GetPackages()[*base_index].title_id,
                          nup->GetPackages()[*update_index].version)) {
         LOG_INFO(Loader, "NUP update is disabled in the game's add-ons; booting the base");
@@ -177,36 +197,86 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
     }
     selected_update_index = update_index;
 
-    // The program identity comes from the base. A complete standalone update can boot alone;
-    // a patch-only update needs its matching base, which may be a sibling .nup.
+    const auto addon_count = std::count_if(nup->GetPackages().begin(), nup->GetPackages().end(),
+                                           [](const auto& package) {
+                                               return package.kind ==
+                                                      NupContainer::PackageKind::Addon;
+                                           });
+
+    // The program identity comes from the base (or native Switch 2 Edition upgrade over a Switch 1
+    // base). A standalone or native-upgrade update can supply ExeFS for an executable-less base; a
+    // patch-only update needs its matching base, which may be a sibling .nup.
     std::optional<std::size_t> program_index;
     std::optional<std::size_t> exefs_index;
     bool program_from_base_nup = false;
-    if (base_index && nup->GetExeFSDir(*base_index) != nullptr) {
+    bool exefs_from_base_nup = false;
+    if (base_index && base_has_exefs) {
         program_index = base_index;
-        exefs_index = update_index && nup->GetExeFSDir(*update_index) != nullptr
-                          ? update_index
-                          : base_index;
-    } else if (update_index && nup->GetExeFSDir(*update_index) != nullptr) {
+        exefs_index = base_index;
+        if (update_index && HasUsableExeFS(*nup, *update_index)) {
+            const u64 base_tid = nup->GetPackages()[*base_index].title_id;
+            const u64 update_tid = nup->GetPackages()[*update_index].title_id;
+            const bool base_is_nx2 = IsSwitch2Program(base_tid);
+            const bool update_is_nx2 = IsSwitch2Program(update_tid);
+            if (base_is_nx2 && !update_is_nx2) {
+                // Switch 2 Edition base + legacy Switch 1 update: preserve Switch 2 native ExeFS
+                // while still merging update RomFS below.
+                exefs_index = base_index;
+            } else if (!base_is_nx2 && update_is_nx2) {
+                // Switch 1 base + Switch 2 Edition update: promote to native Switch 2 program.
+                program_index = update_index;
+                exefs_index = update_index;
+            } else {
+                exefs_index = update_index;
+            }
+        }
+    } else if (update_index && HasUsableExeFS(*nup, *update_index)) {
         const auto& update = nup->GetPackages()[*update_index];
-        base_nup = FindCompanionBase(file, update.title_id, base_nup_index);
-        if (base_nup && base_nup_index) {
-            LOG_INFO(Loader, "NUP update uses companion base {:016X}",
-                     base_nup->GetPackages()[*base_nup_index].title_id);
-            program_index = base_nup_index;
-            program_from_base_nup = true;
+        if (base_index) {
+            // Executable-less base inside the same container paired with an update carrying ExeFS.
+            const bool base_is_nx2 = IsSwitch2Program(nup->GetPackages()[*base_index].title_id);
+            const bool update_is_nx2 = IsSwitch2Program(update.title_id);
+            program_index = (!base_is_nx2 && update_is_nx2) ? update_index : base_index;
             exefs_index = update_index;
         } else {
-            LOG_WARNING(Loader,
-                        "NUP update {:016X} has no matching base in this folder; trying its own "
-                        "program tree. A patch-only update needs the base game's .nup beside it.",
-                        update.title_id);
-            program_index = update_index;
-            exefs_index = update_index;
+            base_nup = FindCompanionBase(file, update.title_id, base_nup_index);
+            if (base_nup && base_nup_index) {
+                const u64 comp_tid = base_nup->GetPackages()[*base_nup_index].title_id;
+                LOG_INFO(Loader, "NUP update uses companion base {:016X}", comp_tid);
+                const bool base_is_nx2 = IsSwitch2Program(comp_tid);
+                const bool update_is_nx2 = IsSwitch2Program(update.title_id);
+                if (!base_is_nx2 && update_is_nx2) {
+                    program_index = update_index;
+                    exefs_index = update_index;
+                } else if (base_is_nx2 && !update_is_nx2 &&
+                           HasUsableExeFS(*base_nup, *base_nup_index)) {
+                    program_index = base_nup_index;
+                    program_from_base_nup = true;
+                    exefs_index = base_nup_index;
+                    exefs_from_base_nup = true;
+                } else {
+                    program_index = base_nup_index;
+                    program_from_base_nup = true;
+                    exefs_index = update_index;
+                }
+            } else {
+                LOG_WARNING(
+                    Loader,
+                    "NUP update {:016X} has no matching base in this folder; trying its own "
+                    "program tree. A patch-only update needs the base game's .nup beside it.",
+                    update.title_id);
+                program_index = update_index;
+                exefs_index = update_index;
+            }
         }
     }
     if (!program_index || !exefs_index) {
-        LOG_ERROR(Loader, "NUP container has no package with a usable ExeFS");
+        if (addon_count > 0) {
+            LOG_DEBUG(Loader, "NUP container carries {} add-on content package(s) (no program)",
+                      addon_count);
+        } else {
+            LOG_ERROR(Loader, "NUP container has no package with a usable ExeFS");
+        }
         return;
     }
 
@@ -216,14 +286,38 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
 
     NupContainer::PackageInfo meta;
     meta.title_id = program.title_id;
+    meta.nacp = program.nacp;
     meta.title_name = program.title_name;
     meta.localized_titles = program.localized_titles;
     meta.source_dump = program.source_dump;
     meta.publisher = program.publisher;
     meta.icon = program.icon;
     meta.localized_icons = program.localized_icons;
-    if (base_index && *base_index != *program_index) {
+    if (update_index) {
+        const auto& update = nup->GetPackages()[*update_index];
+        if (!update.nacp.empty()) {
+            meta.nacp = update.nacp;
+        }
+        if (meta.title_name.empty() && !update.title_name.empty()) {
+            meta.title_name = update.title_name;
+        }
+        if (meta.localized_titles.empty() && !update.localized_titles.empty()) {
+            meta.localized_titles = update.localized_titles;
+        }
+        if (meta.publisher.empty() && !update.publisher.empty()) {
+            meta.publisher = update.publisher;
+        }
+        if (meta.icon.empty() && meta.localized_icons.empty() &&
+            (!update.icon.empty() || !update.localized_icons.empty())) {
+            meta.icon = update.icon;
+            meta.localized_icons = update.localized_icons;
+        }
+    }
+    if (base_index && (*base_index != *program_index || program_from_base_nup)) {
         const auto& base = nup->GetPackages()[*base_index];
+        if (meta.nacp.empty() && !base.nacp.empty()) {
+            meta.nacp = base.nacp;
+        }
         if (!base.title_name.empty()) {
             meta.title_name = base.title_name;
         }
@@ -249,10 +343,12 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
     }
     has_program = true;
 
-    const auto exefs = nup->GetExeFSDir(*exefs_index);
+    const auto exefs = exefs_from_base_nup ? base_nup->GetExeFSDir(*exefs_index)
+                                           : nup->GetExeFSDir(*exefs_index);
     if (exefs == nullptr || exefs->GetFile("main") == nullptr ||
         exefs->GetFile("main.npdm") == nullptr) {
         LOG_ERROR(Loader, "NUP package has no usable ExeFS");
+        has_program = false;
         return;
     }
     secondary_loader = std::make_unique<AppLoader_DeconstructedRomDirectory>(exefs, true, false);
@@ -269,10 +365,23 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
     }
     display_publisher = meta.publisher;
     nacp_file = BuildNacp(meta, display_version);
-    if (nacp_file) {
+    if (nacp_file && nacp_file->raw.dlc_base_title_id == 0) {
         std::vector<u64> carried;
-        ReadAddOnTitleIds(carried);
+        for (const auto& package : nup->GetPackages()) {
+            if (package.kind == NupContainer::PackageKind::Addon) {
+                carried.push_back(package.title_id);
+            }
+        }
         nacp_file->raw.dlc_base_title_id = FileSys::ResolveAOCBaseTitleID(base_title_id, 0, carried);
+    }
+    if (display_title.empty() && nacp_file != nullptr) {
+        display_title = nacp_file->GetApplicationName();
+    }
+    if (display_publisher.empty() && nacp_file != nullptr) {
+        display_publisher = nacp_file->GetDeveloperName();
+    }
+    if (display_version.empty() && nacp_file != nullptr) {
+        display_version = nacp_file->GetVersionString();
     }
     if (!meta.icon.empty()) {
         icon_file = std::make_shared<FileSys::VectorVfsFile>(meta.icon, "icon.dat");
@@ -288,13 +397,59 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
         }
     }
 
-    const auto addon_count = std::count_if(nup->GetPackages().begin(), nup->GetPackages().end(),
-                                           [](const auto& package) {
-                                               return package.kind ==
-                                                      NupContainer::PackageKind::Addon;
-                                           });
     if (addon_count > 0) {
         LOG_INFO(Loader, "NUP container carries {} add-on content package(s)", addon_count);
+    }
+}
+
+u64 AppLoader_NUP::AddonApplicationId() const {
+    if (nacp_file != nullptr && nacp_file->GetDLCBaseTitleId() != 0) {
+        return FileSys::GetBaseTitleID(nacp_file->GetDLCBaseTitleId());
+    }
+    return FileSys::GetBaseTitleID(base_title_id);
+}
+
+bool AppLoader_NUP::MatchesAddonTitle(u64 addon_title_id) const {
+    const u64 addon_base = FileSys::GetBaseTitleID(addon_title_id);
+    if (base_title_id == 0) {
+        return false;
+    }
+    return addon_base == FileSys::GetBaseTitleID(base_title_id) ||
+           addon_base == AddonApplicationId();
+}
+
+void AppLoader_NUP::EnsureCompanionAddons() const {
+    if (companion_addons_searched || !has_program || file == nullptr) {
+        return;
+    }
+    companion_addons_searched = true;
+    const auto directory = file->GetContainingDirectory();
+    if (directory == nullptr) {
+        return;
+    }
+    const u64 app_base = FileSys::GetBaseTitleID(base_title_id);
+    const u64 aoc_base = AddonApplicationId();
+    auto candidates = directory->GetFiles();
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return a->GetName() < b->GetName();
+    });
+    for (const auto& candidate : candidates) {
+        if (candidate == nullptr || candidate->GetName() == file->GetName() ||
+            Common::ToLower(candidate->GetExtension()) != "nup") {
+            continue;
+        }
+        const auto peeked = NupContainer::PeekAddonTitleIds(candidate);
+        const bool has_match = std::ranges::any_of(peeked, [app_base, aoc_base](u64 tid) {
+            const u64 tid_base = FileSys::GetBaseTitleID(tid);
+            return tid_base == app_base || tid_base == aoc_base;
+        });
+        if (!has_match) {
+            continue;
+        }
+        auto container = std::make_unique<NupContainer>(candidate);
+        if (container->GetStatus() == ResultStatus::Success) {
+            companion_addon_nups.push_back(std::move(container));
+        }
     }
 }
 
@@ -320,10 +475,25 @@ AppLoader::LoadResult AppLoader_NUP::Load(Kernel::KProcess& process, Core::Syste
         return result;
     }
 
-    system.GetFileSystemController().RegisterProcess(
-        process.GetProcessId(), base_title_id,
-        std::make_shared<FileSys::RomFSFactory>(*this, system.GetContentProvider(),
-                                                system.GetFileSystemController()));
+    auto romfs_factory = std::make_shared<FileSys::RomFSFactory>(
+        *this, system.GetContentProvider(), system.GetFileSystemController());
+    if (!IsAddonDisabled(base_title_id, "DLC")) {
+        std::vector<u64> addon_ids;
+        if (ReadAddOnTitleIds(addon_ids) == ResultStatus::Success) {
+            for (const u64 addon_tid : addon_ids) {
+                if (!MatchesAddonTitle(addon_tid)) {
+                    continue;
+                }
+                FileSys::VirtualFile addon_romfs;
+                if (ReadAddOnRomFS(addon_tid, addon_romfs) == ResultStatus::Success &&
+                    addon_romfs != nullptr) {
+                    romfs_factory->SetLooseAOC(addon_tid, std::move(addon_romfs));
+                }
+            }
+        }
+    }
+    system.GetFileSystemController().RegisterProcess(process.GetProcessId(), base_title_id,
+                                                     std::move(romfs_factory));
 
     is_loaded = true;
     return result;
@@ -346,11 +516,13 @@ bool AppLoader_NUP::RegisterContent(FileSys::ManualContentProvider& provider, bo
     bool added = false;
     const auto& packages = nup->GetPackages();
     std::map<u64, std::size_t> newest_addons;
+    const auto addon_base = AddonApplicationId();
     for (std::size_t i = 0; i < packages.size(); ++i) {
         const auto& package = packages[i];
+        const u64 pkg_base = FileSys::GetBaseTitleID(package.title_id);
         if (package.kind != NupContainer::PackageKind::Addon ||
-            (base_program_id &&
-             FileSys::GetBaseTitleID(package.title_id) != *base_program_id)) {
+            (base_program_id && pkg_base != FileSys::GetBaseTitleID(*base_program_id) &&
+             pkg_base != addon_base)) {
             continue;
         }
         const auto [it, inserted] = newest_addons.try_emplace(package.title_id, i);
@@ -466,11 +638,24 @@ std::vector<FileSys::Patch> AppLoader_NUP::GetCarriedPatches() const {
         });
     }
     std::vector<u64> addons;
-    for (const auto& package : nup->GetPackages()) {
-        if (package.kind == NupContainer::PackageKind::Addon &&
-            FileSys::GetBaseTitleID(package.title_id) == FileSys::GetBaseTitleID(base_title_id) &&
-            std::find(addons.begin(), addons.end(), package.title_id) == addons.end()) {
-            addons.push_back(package.title_id);
+    const auto collect_matching_addons = [&](const NupContainer& container) {
+        for (const auto& package : container.GetPackages()) {
+            if (package.kind == NupContainer::PackageKind::Addon &&
+                MatchesAddonTitle(package.title_id) &&
+                std::find(addons.begin(), addons.end(), package.title_id) == addons.end()) {
+                addons.push_back(package.title_id);
+            }
+        }
+    };
+    collect_matching_addons(*nup);
+    if (base_nup) {
+        collect_matching_addons(*base_nup);
+    }
+    {
+        std::scoped_lock lock{addon_romfs_mutex};
+        EnsureCompanionAddons();
+        for (const auto& companion : companion_addon_nups) {
+            collect_matching_addons(*companion);
         }
     }
     if (!addons.empty()) {
@@ -506,11 +691,25 @@ ResultStatus AppLoader_NUP::ReadAddOnTitleIds(std::vector<u64>& out_title_ids) {
     if (nup->GetStatus() != ResultStatus::Success) {
         return nup->GetStatus();
     }
-    for (const auto& package : nup->GetPackages()) {
-        if (package.kind == NupContainer::PackageKind::Addon &&
-            std::find(out_title_ids.begin(), out_title_ids.end(), package.title_id) ==
-                out_title_ids.end()) {
-            out_title_ids.push_back(package.title_id);
+    const auto append_all = [&](const NupContainer& container, bool filter_matching) {
+        for (const auto& package : container.GetPackages()) {
+            if (package.kind == NupContainer::PackageKind::Addon &&
+                (!filter_matching || MatchesAddonTitle(package.title_id)) &&
+                std::find(out_title_ids.begin(), out_title_ids.end(), package.title_id) ==
+                    out_title_ids.end()) {
+                out_title_ids.push_back(package.title_id);
+            }
+        }
+    };
+    append_all(*nup, false);
+    if (base_nup) {
+        append_all(*base_nup, true);
+    }
+    {
+        std::scoped_lock lock{addon_romfs_mutex};
+        EnsureCompanionAddons();
+        for (const auto& companion : companion_addon_nups) {
+            append_all(*companion, true);
         }
     }
     return ResultStatus::Success;
@@ -520,8 +719,7 @@ ResultStatus AppLoader_NUP::ReadAddOnRomFS(u64 title_id, FileSys::VirtualFile& o
     if (nup->GetStatus() != ResultStatus::Success) {
         return nup->GetStatus();
     }
-    if (FileSys::GetBaseTitleID(title_id) != FileSys::GetBaseTitleID(base_title_id) ||
-        IsAddonDisabled(base_title_id, "DLC")) {
+    if (!MatchesAddonTitle(title_id) || IsAddonDisabled(base_title_id, "DLC")) {
         return ResultStatus::ErrorNoRomFS;
     }
     std::scoped_lock lock{addon_romfs_mutex};
@@ -529,16 +727,33 @@ ResultStatus AppLoader_NUP::ReadAddOnRomFS(u64 title_id, FileSys::VirtualFile& o
         out_file = it->second;
         return ResultStatus::Success;
     }
-    std::optional<std::size_t> index;
-    const auto& packages = nup->GetPackages();
-    for (std::size_t i = 0; i < packages.size(); ++i) {
-        if (packages[i].kind == NupContainer::PackageKind::Addon &&
-            packages[i].title_id == title_id &&
-            (!index || packages[i].version > packages[*index].version)) {
-            index = i;
+    EnsureCompanionAddons();
+
+    NupContainer* best_container = nullptr;
+    std::optional<std::size_t> best_index;
+    u32 best_version = 0;
+    const auto check_container = [&](NupContainer& container) {
+        const auto& packages = container.GetPackages();
+        for (std::size_t i = 0; i < packages.size(); ++i) {
+            if (packages[i].kind == NupContainer::PackageKind::Addon &&
+                packages[i].title_id == title_id &&
+                (!best_index || packages[i].version > best_version)) {
+                best_container = &container;
+                best_index = i;
+                best_version = packages[i].version;
+            }
         }
+    };
+    check_container(*nup);
+    if (base_nup) {
+        check_container(*base_nup);
     }
-    const auto directory = index ? nup->GetRomFSDir(*index) : FileSys::VirtualDir{};
+    for (const auto& companion : companion_addon_nups) {
+        check_container(*companion);
+    }
+
+    const auto directory =
+        (best_container && best_index) ? best_container->GetRomFSDir(*best_index) : FileSys::VirtualDir{};
     if (directory == nullptr) {
         return ResultStatus::ErrorNoRomFS;
     }
@@ -637,7 +852,21 @@ ResultStatus AppLoader_NUP::ReadTitle(std::string& title) {
     return ResultStatus::ErrorNoControl;
 }
 
-ResultStatus AppLoader_NUP::ReadControlData(FileSys::NACP& control) {
+ResultStatus AppLoader_NUP::ReadDisplayVersion(std::string& version) {
+    if (!display_version.empty()) {
+        version = display_version;
+        return ResultStatus::Success;
+    }
+    if (nacp_file != nullptr) {
+        version = nacp_file->GetVersionString();
+        if (!version.empty()) {
+            return ResultStatus::Success;
+        }
+    }
+    return AppLoader::ReadDisplayVersion(version);
+}
+
+ResultStatus AppLoader_NUP::ReadControlData(FileSys::NACP& control) const {
     if (nacp_file == nullptr) {
         return ResultStatus::ErrorNoControl;
     }

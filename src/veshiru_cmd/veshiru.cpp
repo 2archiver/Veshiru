@@ -48,6 +48,7 @@
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/vfs/vfs_real.h"
 #include "core/hle/service/am/applet_manager.h"
+#include "video_core/renderer_vulkan/nvn/nvn_debug.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/loader/loader.h"
 #include "frontend_common/config.h"
@@ -513,6 +514,7 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     *appstate = state;
 
     LoadNx2Switches(argc > 0 ? argv[0] : nullptr);
+    Vulkan::Nvn::Debug::Reload();
 
     Common::Log::Initialize();
     Common::Log::SetColorConsoleBackendEnabled(true);

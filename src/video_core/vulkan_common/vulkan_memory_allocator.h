@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -29,6 +30,41 @@ namespace Vulkan {
         Download,    ///< Requires a host visible memory type optimized for GPU to CPU readbacks
         Stream,      ///< Requests device local host visible buffer, falling back host memory.
     };
+
+/// What an allocation is for, for the spill counters (MemoryAllocator::TrackSpills).
+    enum class AllocationKind : u8 {
+        Other,
+        StorageImage,
+        PoolBuffer,
+        Shadow,
+        Mirror,
+        Arena,
+        Staging,
+        Count,
+    };
+
+    [[nodiscard]] const char* AllocationKindName(AllocationKind kind);
+
+/// Allocations that asked for device-local memory (images, DeviceLocal and Stream buffers) and
+/// were placed in a memory type without DEVICE_LOCAL: VMA moves on to the next memory type once
+/// the device heap is at its budget, and the allocation stays in system memory for its lifetime.
+/// Cumulative. Only allocators that opted in (TrackSpills) count.
+    struct AllocationSpills {
+        static constexpr size_t KINDS = static_cast<size_t>(AllocationKind::Count);
+        std::array<std::atomic<u64>, KINDS> count{};
+        std::array<std::atomic<u64>, KINDS> bytes{};
+        /// Strict mode: device-local allocations made over the budget (the driver pages them) ...
+        std::atomic<u64> over_budget_count{};
+        std::atomic<u64> over_budget_bytes{};
+        /// ... and the ones no device-local memory type took, placed in host memory.
+        std::atomic<u64> host_fallback_count{};
+        std::atomic<u64> host_fallback_bytes{};
+    };
+
+/// Counts `size` bytes of `kind` in `spills` when the allocation wanted device-local memory and
+/// got a memory type of `flags` without DEVICE_LOCAL. Returns whether it counted.
+    bool CountSpill(AllocationSpills& spills, AllocationKind kind, bool wanted_device_local,
+                    VkMemoryPropertyFlags flags, u64 size);
 
     template<typename F>
     void ForEachDeviceLocalHostVisibleHeap(const Device &device, F &&f) {
@@ -100,18 +136,40 @@ namespace Vulkan {
          */
         explicit MemoryAllocator(const Device &device_);
 
+        /// Allocates from `allocator_` instead of the device's shared one (which is externally
+        /// synchronized). Used by VTX-HLE's replay, which must not race the render thread.
+        explicit MemoryAllocator(const Device &device_, VmaAllocator allocator_);
+
         ~MemoryAllocator();
 
         MemoryAllocator &operator=(const MemoryAllocator &) = delete;
 
         MemoryAllocator(const MemoryAllocator &) = delete;
 
+        /// Counts this allocator's spills into `spills_` (null: none). `device_strict_`: images
+        /// and DeviceLocal buffers require a DEVICE_LOCAL memory type, over the budget too (the
+        /// driver pages), and take host memory only when no device-local type can hold them.
+        /// Set before the allocator is used.
+        void TrackSpills(AllocationSpills* spills_, bool device_strict_) noexcept {
+            spills = spills_;
+            device_strict = device_strict_;
+        }
+
         /// `dedicated`: own device memory, returned to the driver on destruction (short-lived
         /// images would otherwise leave holes in the shared blocks).
-        vk::Image CreateImage(const VkImageCreateInfo &ci, bool dedicated = false) const;
+        vk::Image CreateImage(const VkImageCreateInfo &ci, bool dedicated = false,
+                              bool transient = false,
+                              AllocationKind kind = AllocationKind::Other) const;
+
+        vk::Image CreateImage(const VkImageCreateInfo &ci, bool dedicated,
+                              AllocationKind kind, bool transient = false) const {
+            return CreateImage(ci, dedicated, transient, kind);
+        }
 
         /// CreateImage, but a null image instead of an exception when there is no memory for it.
-        vk::Image TryCreateImage(const VkImageCreateInfo &ci, bool dedicated = false) const;
+        vk::Image TryCreateImage(const VkImageCreateInfo &ci, bool dedicated = false,
+                                 bool transient = false,
+                                 AllocationKind kind = AllocationKind::Other) const;
 
         /// A sparse resident image with nothing bound (reads return zero, writes are dropped), or
         /// a null image when the device can't make one.
@@ -149,6 +207,9 @@ namespace Vulkan {
 
         vk::Buffer CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage) const;
 
+        vk::Buffer CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage,
+                                AllocationKind kind) const;
+
         /// CreateBuffer, but a null buffer instead of an exception when there is no memory for it.
         vk::Buffer TryCreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage) const;
 
@@ -182,12 +243,12 @@ namespace Vulkan {
 
         /// CreateImage's fallbacks; the image is left null when the result is an error.
         /// may_fail: the caller handles VK_ERROR_OUT_OF_DEVICE_MEMORY (see UsesUnbackedFallback).
-        VkResult AllocateImage(const VkImageCreateInfo &ci, bool dedicated, bool may_fail,
-                               vk::Image &image) const;
+        VkResult AllocateImage(const VkImageCreateInfo &ci, bool dedicated, bool transient,
+                               bool may_fail, AllocationKind kind, vk::Image &image) const;
 
         /// CreateBuffer's fallbacks; the buffer is left null when the result is an error.
         VkResult AllocateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage,
-                                vk::Buffer &buffer) const;
+                                AllocationKind kind, vk::Buffer &buffer) const;
 
         const Device &device;                              ///< Device handle.
         VmaAllocator allocator;                           ///< VMA allocator.
@@ -195,6 +256,8 @@ namespace Vulkan {
         VkDeviceSize buffer_image_granularity;            ///< Adjacent buffer/image granularity
         u32 valid_memory_types{~0u};
         mutable std::atomic<u32> failed_images{0};
+        AllocationSpills* spills{};
+        bool device_strict{};
         /// Sparse tiles that device-local memory had no room for (AllocateSparseMemory).
         mutable std::mutex sparse_spill_mutex;
         mutable SparseSpillReport sparse_spill_report;

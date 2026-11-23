@@ -8,6 +8,39 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-11-23
+
+### Added
+
+- **VTX-HLE (NVN) high-level graphics path for Switch 2 titles.** Ported from
+  [Eglantine](https://github.com/Djihads80/Eglantine) (`810f44f5` + PR `#948` through `93b06ee7`),
+  bringing VTX-HLE by Vortex727 (`https://github.com/Vortex727/FUKKO`) and FUKKO by Vortex727
+  (`https://github.com/Vortex727/FUKKO`), with bridge design informed by `nxnative` by seedds
+  (MIT), ShiftX2 fixes by Duck912, and DirectXTex BC7 encoding (MIT):
+  - **NVN HLE bridge & command recording** (`src/core/hle/nvn/`, `src/video_core/nvn/`,
+    `src/core/memory/page_tracker_state.*`): intercepts Switch 2 NVN2 calls (`functions_*`,
+    `hle_runtime`, pools, buffers, textures, samplers, programs, command buffers, queues, syncs,
+    events, windows, native image, and DLSS thunks), records command buffers into compact record
+    streams, and tracks guest CPU writes / lazy GPU write-back pages only while VTX-HLE is active.
+  - **Vulkan NVN replay & shader cache** (`src/video_core/renderer_vulkan/nvn/`,
+    `src/video_core/host_shaders/nvn_*.comp`, `src/video_core/shader_log.*`): replays recorded
+    NVN command lists on Vulkan with Ampere shader lowering, raw global memory access via buffer
+    device addresses, smart BC stand-ins for ASTC textures (`bc_encoder.comp`, `bc7_encoder.comp`,
+    `nvn_bc_copy.comp`), disk pipeline cache v18 (`nvn_pipelines.*.bin` and `nvn_pipelines.vkcache`)
+    with automatic transition cleanup (`ClearShaderCachesForNvn`), and periodic shader refresh mode.
+  - **Per-game & global Graphics Path settings** (`src/common/settings*`,
+    `src/common/vtx_hle_settings.*`, `src/veshiru/configuration/vtx_hle_grey.*`,
+    `configure_graphics.*`, `configure_per_game.cpp`): adds **Graphics → Graphics path**
+    (`Emulated GPU` default, `VTX-HLE (NVN)` opt-in, plus `EDEN_NX2_NVN_HLE=1/0`), VTX-HLE toggles
+    (`nvn_in_pass_queries`, `nvn_pipeline_library`, `nvn_sync_diet`, `nvn_shader_refresh`,
+    `nvn_smart_bc`), and greys out Emulated-GPU-only controls while VTX-HLE is selected.
+  - **NVN unit tests & notices** (`src/tests/nvn/`, `vtx-hle/NOTICE`,
+    `third_party_notices/VTX-HLE.txt`).
+- **Pre-NVN stability & Veshiru parity fixes.** Preserved Veshiru's existing features alongside the
+  port (`EGLANTINE_STREAMLINE` / NVIDIA DLSS, FSR3/FSR4, `mesh_as_compute`, `Nx2FastDraw`,
+  `DownloadLanding`, `Nx2Spikes`, `VulkanPipelineCacheVersion = 54`, Ocarina of Time stability
+  profile, zero-page trim deferral, atomic game-list refresh, `union Result`, and `IsBlockLinearSizeCompatible`).
+
 ## [2.7.0] - 2026-11-22
 
 ### Added

@@ -209,4 +209,77 @@ VkImageView FSR::Draw(const Device& device, Scheduler& scheduler, size_t image_i
     return *images.image_views[Rcas];
 }
 
+VkImageView FSR::Record(const Device& device, vk::CommandBuffer cmdbuf, size_t image_index,
+                        VkImage source_image, VkImageView source_image_view,
+                        VkExtent2D input_image_extent, const Common::Rectangle<f32>& crop_rect) {
+    Images& images = m_dynamic_images[image_index];
+    const VkImage easu_image = *images.images[Easu];
+    const VkImage rcas_image = *images.images[Rcas];
+    // Fresh descriptor sets per recording: earlier command buffers may still be using the last
+    // ones. The caller retains them (TakeRecordResources) until this recording has completed.
+    m_record_descriptor_sets = std::make_shared<RecordDescriptorSets>();
+    RecordDescriptorSets& record_sets = *m_record_descriptor_sets;
+    record_sets.pool = CreateWrappedDescriptorPool(device, 2, 2);
+    const std::array layouts{*m_descriptor_set_layout, *m_descriptor_set_layout};
+    record_sets.sets = CreateWrappedDescriptorSets(record_sets.pool, layouts);
+    const VkDescriptorSet easu_descriptor_set = record_sets.sets[Easu];
+    const VkDescriptorSet rcas_descriptor_set = record_sets.sets[Rcas];
+    const VkFramebuffer easu_framebuffer = *images.framebuffers[Easu];
+    const VkFramebuffer rcas_framebuffer = *images.framebuffers[Rcas];
+    const VkPipelineLayout pipeline_layout = *m_pipeline_layout;
+    const VkExtent2D extent = m_extent;
+
+    const f32 input_width = static_cast<f32>(input_image_extent.width);
+    const f32 input_height = static_cast<f32>(input_image_extent.height);
+    const f32 output_width = static_cast<f32>(extent.width);
+    const f32 output_height = static_cast<f32>(extent.height);
+    PushConstants easu_con{};
+    PushConstants rcas_con{};
+    FsrEasuConOffset(easu_con.data(), easu_con.data() + 4, easu_con.data() + 8,
+                     easu_con.data() + 12, (crop_rect.right - crop_rect.left) * input_width,
+                     (crop_rect.bottom - crop_rect.top) * input_height, input_width, input_height,
+                     output_width, output_height, crop_rect.left * input_width,
+                     crop_rect.top * input_height);
+    FsrRcasCon(rcas_con.data(),
+               static_cast<float>(Settings::values.fsr_sharpening_slider.GetValue()) / 100.0f);
+
+    std::vector<VkDescriptorImageInfo> image_infos;
+    image_infos.reserve(2);
+    const std::vector<VkWriteDescriptorSet> updates{
+        CreateWriteDescriptorSet(image_infos, *m_sampler, source_image_view, easu_descriptor_set, 0),
+        CreateWriteDescriptorSet(image_infos, *m_sampler, *images.image_views[Easu],
+                                 rcas_descriptor_set, 0),
+    };
+    device.GetLogical().UpdateDescriptorSets(updates, {});
+
+    const VkImageLayout image_source_layout = m_images_ready || m_record_images_ready
+                                                  ? VK_IMAGE_LAYOUT_GENERAL
+                                                  : VK_IMAGE_LAYOUT_UNDEFINED;
+    m_record_images_ready = true;
+    TransitionImageLayout(cmdbuf, source_image, VK_IMAGE_LAYOUT_GENERAL);
+    TransitionImageLayout(cmdbuf, easu_image, VK_IMAGE_LAYOUT_GENERAL, image_source_layout);
+    BeginRenderPass(cmdbuf, *m_renderpass, easu_framebuffer, extent);
+    cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *m_easu_pipeline);
+    cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0,
+                              easu_descriptor_set, {});
+    cmdbuf.PushConstants(pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, easu_con);
+    cmdbuf.Draw(3, 1, 0, 0);
+    cmdbuf.EndRenderPass();
+    TransitionImageLayout(cmdbuf, easu_image, VK_IMAGE_LAYOUT_GENERAL);
+    TransitionImageLayout(cmdbuf, rcas_image, VK_IMAGE_LAYOUT_GENERAL, image_source_layout);
+    BeginRenderPass(cmdbuf, *m_renderpass, rcas_framebuffer, extent);
+    cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *m_rcas_pipeline);
+    cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0,
+                              rcas_descriptor_set, {});
+    cmdbuf.PushConstants(pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, rcas_con);
+    cmdbuf.Draw(3, 1, 0, 0);
+    cmdbuf.EndRenderPass();
+    TransitionImageLayout(cmdbuf, rcas_image, VK_IMAGE_LAYOUT_GENERAL);
+    return *images.image_views[Rcas];
+}
+
+VkImage FSR::ResultImage(size_t image_index) const {
+    return *m_dynamic_images.at(image_index).images[Rcas];
+}
+
 } // namespace Vulkan

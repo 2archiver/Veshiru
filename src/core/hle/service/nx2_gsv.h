@@ -20,6 +20,7 @@
 #include <limits>
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <map>
 #include <optional>
 #include <memory>
@@ -67,6 +68,7 @@
 #include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/k_transfer_memory.h"
 #include "core/hle/kernel/svc_results.h"
+#include "core/hle/nvn/hle_runtime.h"
 #include "core/memory.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/host1x/nx2_video_decoder.h"
@@ -81,12 +83,14 @@
 #include "core/hle/service/nvdrv/nvdrv.h"
 #include "core/hle/service/nvdrv/nvdrv_interface.h"
 #include "core/hle/service/nx2_stub_interface.h"
+#include "core/hle/service/nx2_native_image_directory.h"
 #include "core/hle/service/nx2_fence_action.h"
 #include "core/hle/service/nx2_frame_interval.h"
 #include "core/hle/service/nx2_image_layout.h"
 #include "core/hle/service/nx2_movie_clock.h"
 #include "core/hle/service/nx2_video_input_queue.h"
 #include "core/hle/service/nx2_present_pacer.h"
+#include "core/hle/service/nx2_present_queue.h"
 #include "core/hle/service/nx2_video_ready.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/server_manager.h"
@@ -192,13 +196,12 @@ public:
         : ServiceFramework{system_, "nx2:syncpt"}, m_context{system_, "nx2:syncpt"} {
         RegisterHandlersTipc({
             {0, &INx2SyncptSession::Handshake, "Handshake"},
-            {1, &INx2SyncptSession::GetCount, "GetCount (guessed)"},
-            {22, &INx2SyncptSession::GetSlotEvent, "GetSlotEvent (guessed)"},
+            {1, &INx2SyncptSession::GetCount, "GetEventSlotCount"},
+            {22, &INx2SyncptSession::GetSlotEvent, "GetSyncPointEvent"},
             {103, &INx2SyncptSession::QueryCounter, "QueryCounter"},
-            {201, &INx2SyncptSession::RequestSlotEvent, "RequestSlotEvent (guessed)"},
-            {202, &INx2SyncptSession::CancelSlotEvent, "CancelSlotEvent (guessed)"},
-            // Firmware commands without a known meaning: zeroed replies.
-            {21, &INx2SyncptSession::StubReplyZeroed, "Unknown21"},
+            {201, &INx2SyncptSession::RequestSlotEvent, "RequestSyncPointEvent"},
+            {202, &INx2SyncptSession::CancelSlotEvent, "CancelSyncPointEvent"},
+            {21, &INx2SyncptSession::ReplySuccess, "ReserveEventSlots"},
         });
     }
 
@@ -221,6 +224,10 @@ private:
     // Newer SDKs (title 1) open with TIPC 0(u64 token) and abort unless the reply echoes it.
     void Handshake(HLERequestContext& ctx) {
         TipcHandshake(ctx, "nx2:syncpt");
+    }
+
+    void ReplySuccess(HLERequestContext& ctx) {
+        TipcReplyWords(ctx, {});
     }
 
     void GetCount(HLERequestContext& ctx) {
@@ -1782,6 +1789,53 @@ struct Nx2NativeObjects {
     }
 };
 
+// What nn::gpu::sdk::QueryNativeImage (gsv 428) would be told about image `handle`, for VTX-HLE
+// (Nx2NativeImageDirectory): the descriptor QueryNativeImage builds. nullopt for a handle that
+// names no image, a decoder output image, or an image whose memory is not bound or does not hold it.
+inline std::optional<Nx2NativeImageInfo> Nx2DescribeNativeImage(Nx2NativeObjects& objects,
+                                                                u32 handle) {
+    std::scoped_lock lk{objects.mutex};
+    auto it = objects.images.upper_bound(handle);
+    if (it == objects.images.begin()) {
+        LOG_WARNING(Service, "nx2:gsv native image {} is not in the table", handle);
+        return std::nullopt;
+    }
+    --it;
+    const auto& image = it->second;
+    const u64 index = handle - it->first;
+    if (index >= image.count || image.size == 0 || image.decoder ||
+        index > (std::numeric_limits<u64>::max() - image.offset) / image.size) {
+        LOG_WARNING(Service, "nx2:gsv native image {} is not a user image of pool {} (count {})",
+                    handle, it->first, image.count);
+        return std::nullopt;
+    }
+    const u64 image_offset = image.offset + index * image.size;
+    const auto layout = Nx2CalculateImageLayout(image.preference.data());
+    const auto memory_it = objects.memories.find(image.memory);
+    if (memory_it == objects.memories.end() || memory_it->second.address == 0) {
+        LOG_WARNING(Service, "nx2:gsv native image {}: memory {} is not bound", handle, image.memory);
+        return std::nullopt;
+    }
+    if (layout.size != image.size || image_offset > memory_it->second.size ||
+        layout.size > memory_it->second.size - image_offset) {
+        LOG_WARNING(Service, "nx2:gsv native image {} ({:#x}+{:#x}) does not fit memory {} ({:#x})",
+                    handle, image_offset, layout.size, image.memory, memory_it->second.size);
+        return std::nullopt;
+    }
+    Nx2NativeImageInfo info;
+    info.address = memory_it->second.address + image_offset;
+    info.size = layout.size;
+    info.descriptor[0] = 1;
+    info.descriptor[1] = image.preference[1];
+    info.descriptor[2] = image.preference[2];
+    info.descriptor[4] = layout.block_height_log2;
+    info.descriptor[5] = static_cast<u32>(layout.pitch / 64);
+    info.descriptor[8] = 1;
+    info.descriptor[9] = 1;
+    info.descriptor[11] = static_cast<u32>(layout.size);
+    return info;
+}
+
 // GameChat's graphics side (nn::chat::gsv), handed out by gsv 1202. Read from the SDK's
 // nn::chat::gsv::Initialize: TIPC 1() returns a u32 id at word 3 (it aborts with 2162-0001 if
 // the id is over 0x3ff), then TIPC 11(u32 id) returns an event (copy handle at word 3, result at
@@ -2014,24 +2068,24 @@ public:
             {229, &INx2Vi2Session::PresentClientBuffer, "PresentClientBuffer"},
             // Firmware commands without a known meaning: zeroed replies.
             {13, &INx2Vi2Session::StubReplyZeroed, "Unknown13"},
-            {51, &INx2Vi2Session::StubReplyZeroed, "Unknown51"},
+            {51, &INx2Vi2Session::ReplySuccess, "ReserveTimestampRecorders"},
             {101, &INx2Vi2Session::StubReplyZeroed, "Unknown101"},
             {102, &INx2Vi2Session::StubReplyZeroed, "Unknown102"},
             {107, &INx2Vi2Session::StubReplyZeroed, "Unknown107"},
             {108, &INx2Vi2Session::StubReplyZeroed, "Unknown108"},
-            {111, &INx2Vi2Session::StubReplyZeroed, "Unknown111"},
-            {112, &INx2Vi2Session::StubReplyZeroed, "Unknown112"},
+            {111, &INx2Vi2Session::ReplySuccess, "SetEndpointLayer"},
+            {112, &INx2Vi2Session::ReplySuccess, "ClearEndpointLayer"},
             {113, &INx2Vi2Session::StubReplyZeroed, "Unknown113"},
             {201, &INx2Vi2Session::StubReplyZeroed, "Unknown201"},
             {202, &INx2Vi2Session::StubReplyZeroed, "Unknown202"},
             {230, &INx2Vi2Session::StubReplyZeroed, "Unknown230"},
             {231, &INx2Vi2Session::StubReplyZeroed, "Unknown231"},
             {232, &INx2Vi2Session::StubReplyZeroed, "Unknown232"},
-            {251, &INx2Vi2Session::StubReplyZeroed, "Unknown251"},
-            {252, &INx2Vi2Session::StubReplyZeroed, "Unknown252"},
-            {301, &INx2Vi2Session::StubReplyZeroed, "Unknown301"},
+            {251, &INx2Vi2Session::ReplySuccess, "AttachLayerToEndpoint"},
+            {252, &INx2Vi2Session::ReplySuccess, "DetachLayerFromEndpoint"},
+            {301, &INx2Vi2Session::ReplySuccess, "SetDisplayRefreshRateCapability"},
             {302, &INx2Vi2Session::StubReplyZeroed, "Unknown302"},
-            {351, &INx2Vi2Session::StubReplyZeroed, "Unknown351"},
+            {351, &INx2Vi2Session::ReplySuccess, "ApplyLayerPendingState"},
             {352, &INx2Vi2Session::StubReplyZeroed, "Unknown352"},
             {353, &INx2Vi2Session::StubReplyZeroed, "Unknown353"},
             {354, &INx2Vi2Session::StubReplyZeroed, "Unknown354"},
@@ -2043,6 +2097,8 @@ public:
     }
 
     ~INx2Vi2Session() override {
+        // Wake waits on outstanding releases before their syncpoint returns to nvdrv.
+        m_releases.reset();
         // A service fiber can be discarded during shutdown without unwinding its stack.
         // Remove or join its callback before closing the session-owned event.
         m_frame_wait_action.reset();
@@ -2059,7 +2115,7 @@ public:
         for (auto* event : m_events) {
             m_context.CloseEvent(event);
         }
-        // The interval belonged to this session's presents (PaceToVblank).
+        // The interval belonged to this session's presents (PresentInterval).
         Tegra::g_nx2_guest_frame_interval_ns.store(0, std::memory_order_relaxed);
     }
 
@@ -2068,9 +2124,13 @@ private:
         TipcHandshake(ctx, "nx2:vi2");
     }
 
+    void ReplySuccess(HLERequestContext& ctx) {
+        TipcReplyWords(ctx, {});
+    }
+
     // 229(u64 client token, u32 slot, u32 image, ...fences): result, u64 mask of buffer slots the
-    // client may acquire next, four zero words. Nothing is shown yet; every slot is handed back
-    // at once (changes.patch's default mask is 0x7fff).
+    // client may acquire next (changes.patch's default mask is 0x7fff), then the presented
+    // buffer's release fence (~syncpoint, 0, value, 0), or four zero words when it is free now.
     void PresentClientBuffer(HLERequestContext& ctx) {
         const auto* w = ctx.CommandBuffer();
         ++m_presents;
@@ -2164,9 +2224,31 @@ private:
         m_previous_fence_id = current_fence_id;
         m_previous_fence_value = current_fence_value;
         const auto waited = std::chrono::steady_clock::now();
-        Composite(w[5], ~w[22], w[24], w[7]);
+        const auto pacing = PresentInterval(w[12], ctx.GetThread().GetOwnerProcess());
+        // With this frame's fence reached, return before its deadline and release the buffer
+        // through a fence instead. Not on a wait that can return with the frame unfinished, and
+        // not with timestamp recorders, which record after the pacing as before. Single-core
+        // keeps the blocking path and its tick-based speed limiter.
+        const bool queueable =
+            system.IsMulticore() && frames_ahead == 0 && (w[18] & 0xf) == 0 &&
+            (current_fence_id >= 192 || syncpoints.IsReadyGuest(current_fence_id, current_fence_value));
+        std::optional<Nx2PresentReleases::Release> release;
+        std::chrono::steady_clock::time_point hold_until{};
+        if (queueable) {
+            release = QueueRelease(pacing, hold_until);
+        }
+        if (!Composite(w[5], current_fence_id, current_fence_value, w[7],
+                       release ? release->on_composited : std::function<void()>{}) &&
+            release) {
+            // Nothing will read the image.
+            release->on_composited();
+        }
         const auto composited = std::chrono::steady_clock::now();
-        PaceToVblank(w[12], ctx.GetThread().GetOwnerProcess());
+        if (!release) {
+            PaceToVblank(pacing);
+        } else if (composited < hold_until) {
+            SleepFor(std::chrono::duration_cast<std::chrono::nanoseconds>(hold_until - composited));
+        }
         const auto paced = std::chrono::steady_clock::now();
         if (const u32 recorder = w[18] & 0xf; recorder != 0) {
             m_recorded_ticks[recorder - 1] = system.CoreTiming().GetClockTicks();
@@ -2247,14 +2329,69 @@ private:
         }
         constexpr u64 AvailableSlots = 0x7fff;
         TipcReplyWords(ctx, {static_cast<u32>(AvailableSlots),
-                             static_cast<u32>(AvailableSlots >> 32), 0, 0, 0, 0});
+                             static_cast<u32>(AvailableSlots >> 32),
+                             release ? ~release->id : 0U, 0, release ? release->value : 0U, 0});
     }
 
+    /**
+     * Queues this present's release fence in place of holding it until its deadline: the buffer is
+     * released once the deadline has passed and the renderer composited it. A present still holds
+     * until the previous release's deadline (`hold_until`), so a game cycling any number of buffer
+     * slots stays at most one frame ahead of the pacing. Returns nothing when no release can be
+     * queued.
+     */
+    std::optional<Nx2PresentReleases::Release> QueueRelease(
+        const std::optional<std::chrono::nanoseconds>& pacing,
+        std::chrono::steady_clock::time_point& hold_until) {
+        if (!m_releases) {
+            m_releases.emplace(
+                system.CoreTiming(), system.Host1x().GetSyncpointManager(),
+                [this]() -> std::optional<u32> {
+                    const auto service =
+                        system.ServiceManager().GetService<Nvidia::NVDRV>("nvdrv", false);
+                    if (!service) {
+                        return std::nullopt;
+                    }
+                    m_release_module = service->GetModule();
+                    return m_release_module->GetContainer().GetSyncpointManager()
+                        .TryAllocateSyncpoint(true);
+                },
+                [this](u32 id) {
+                    m_release_module->GetContainer().GetSyncpointManager().FreeSyncpoint(id);
+                });
+        }
+        hold_until = std::chrono::steady_clock::now() + m_releases->RunAhead();
+        // Deadlines keep the pacer's interval and catch-up; CoreTiming has another epoch, so the
+        // queue gets the time left.
+        Nx2PresentPacer pacer{m_present_pacer};
+        std::chrono::nanoseconds wait{};
+        bool reset = false;
+        if (pacing) {
+            const auto now = std::chrono::steady_clock::now();
+            const auto step = pacer.Advance(now, *pacing);
+            wait = std::chrono::duration_cast<std::chrono::nanoseconds>(step.deadline - now);
+            reset = step.reset;
+        }
+        auto release = m_releases->Queue(wait);
+        if (release) {
+            m_present_pacer = pacer;
+            if (Common::DkbFrameTrace::Enabled()) {
+                m_frame_trace.deadline_reset = reset;
+            }
+        }
+        return release;
+    }
+
+    // Release fences of queued presents; m_release_module holds the nvdrv allocator of their
+    // syncpoint.
+    std::shared_ptr<Nvidia::Module> m_release_module;
+    std::optional<Nx2PresentReleases> m_releases;
+
     // The console's compositor frees a buffer only once its frame's GPU fence has passed, which
-    // is what keeps a game from running ahead of the GPU. This reply always reports every buffer
-    // free, so pace the game here instead: wait (bounded, in case the GPU waits on the CPU) until
-    // Eden's GPU thread has processed the frame. Otherwise the game laps the GPU thread and
-    // rewrites command memory it hasn't read yet.
+    // is what keeps a game from running ahead of the GPU. This reply reports every buffer free or
+    // releases it once composited, so pace the game here instead: wait (bounded, in case the GPU
+    // waits on the CPU) until Eden's GPU thread has processed the frame. Otherwise the game laps
+    // the GPU thread and rewrites command memory it hasn't read yet.
     u32 m_wait_timeouts{};
     struct PresentStats {
         long long frame_us{}, fence_us{}, composite_us{}, pace_us{}, max_fence_us{};
@@ -2474,8 +2611,9 @@ private:
     }
 
     /**
-     * Holds this present until the next vblank its word asks for, or for longer when an FPS limit
-     * (the setting, or EDEN_NX2_FPS_LIMIT) is below that rate.
+     * Returns the interval to hold presents to: the vblank the present word asks for, or longer
+     * when an FPS limit (the setting, or EDEN_NX2_FPS_LIMIT) is below that rate. Nothing when
+     * presents are not paced.
      *
      * Fire Emblem: Fortune's Weave sends 0x1003c during its boot logos and 0x2003c (two vblanks
      * per frame, 30 fps) after; paced at every vblank it ran at double speed.
@@ -2484,7 +2622,8 @@ private:
      * @param timing  Present word 12: (swap interval << 16) | refresh rate.
      * @param process Owning process, for the Mario Kart World dynamic FPS case; may be null.
      */
-    void PaceToVblank(u32 timing, const Kernel::KProcess* process) {
+    std::optional<std::chrono::nanoseconds> PresentInterval(u32 timing,
+                                                            const Kernel::KProcess* process) {
         const bool trace = Common::DkbFrameTrace::Enabled();
         if (trace) {
             if (m_frame_trace.previous_word && *m_frame_trace.previous_word != timing) {
@@ -2532,7 +2671,7 @@ private:
                                    Settings::SpeedLimit() != 0;
         if (!speed_limited && fps_limit == 0) {
             Tegra::g_nx2_guest_frame_interval_ns.store(0, std::memory_order_relaxed);
-            return;
+            return std::nullopt;
         }
         const auto previous_word = std::exchange(m_swap_word, timing);
         if (!previous_word) {
@@ -2558,27 +2697,38 @@ private:
         if (trace) {
             m_frame_trace.target_ms = std::chrono::duration<double, std::milli>(interval).count();
         }
-        const auto now = std::chrono::steady_clock::now();
-        const auto pacing = m_present_pacer.Advance(now, interval);
-        if (trace) {
-            m_frame_trace.deadline_reset = pacing.reset;
+        return interval;
+    }
+
+    /// Holds this present until its deadline from the pacer.
+    void PaceToVblank(const std::optional<std::chrono::nanoseconds>& pacing) {
+        if (!pacing) {
+            return;
         }
-        if (now < pacing.deadline) {
-            // Sleep this service thread in the guest kernel. It runs on guest core 3, and a host
-            // sleep held that core for the whole wait: game threads scheduled there ran only
-            // between presents (Fortune's Weave's loader read one RomFS block per frame).
-            const auto wait =
-                std::chrono::duration_cast<std::chrono::nanoseconds>(pacing.deadline - now);
-            const auto sleep_start = trace ? std::chrono::steady_clock::now()
-                                           : std::chrono::steady_clock::time_point{};
-            static_cast<void>(Kernel::GetCurrentThread(kernel).Sleep(
-                kernel, kernel.HardwareTimer().GetTick() + wait.count() + 2));
-            if (trace) {
-                m_frame_trace.sleep_requested_ms =
-                    std::chrono::duration<double, std::milli>(wait).count();
-                m_frame_trace.sleep_actual_ms = std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - sleep_start).count();
-            }
+        const auto now = std::chrono::steady_clock::now();
+        const auto step = m_present_pacer.Advance(now, *pacing);
+        if (Common::DkbFrameTrace::Enabled()) {
+            m_frame_trace.deadline_reset = step.reset;
+        }
+        if (now < step.deadline) {
+            SleepFor(std::chrono::duration_cast<std::chrono::nanoseconds>(step.deadline - now));
+        }
+    }
+
+    // Sleeps this service thread in the guest kernel. It runs on guest core 3, and a host sleep
+    // held that core for the whole wait: game threads scheduled there ran only between presents
+    // (Fortune's Weave's loader read one RomFS block per frame).
+    void SleepFor(std::chrono::nanoseconds wait) {
+        const bool trace = Common::DkbFrameTrace::Enabled();
+        const auto sleep_start = trace ? std::chrono::steady_clock::now()
+                                       : std::chrono::steady_clock::time_point{};
+        static_cast<void>(Kernel::GetCurrentThread(kernel).Sleep(
+            kernel, kernel.HardwareTimer().GetTick() + wait.count() + 2));
+        if (trace) {
+            m_frame_trace.sleep_requested_ms =
+                std::chrono::duration<double, std::milli>(wait).count();
+            m_frame_trace.sleep_actual_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - sleep_start).count();
         }
     }
 
@@ -2722,7 +2872,10 @@ private:
     // surface in the console's native GOB layout at GPU address == CPU address.
     // shown_size: the present's word 7, ((height - 1) << 16) | (width - 1) of the area the game drew
     // into from the image's top-left corner (0 when it gives none).
-    void Composite(u32 image_id, u32 fence_id, u32 fence_value, u32 shown_size) {
+    // on_composited runs once the renderer has composited the image. Returns whether a composite
+    // was requested.
+    bool Composite(u32 image_id, u32 fence_id, u32 fence_value, u32 shown_size,
+                   std::function<void()> on_composited) {
         NotifyHdrChange();
         u64 address{};
         u32 parent{};
@@ -2735,11 +2888,11 @@ private:
             std::scoped_lock lk{m_objects->mutex};
             const auto image = m_objects->images.find(image_id);
             if (image == m_objects->images.end()) {
-                return;
+                return false;
             }
             const auto memory = m_objects->memories.find(image->second.memory);
             if (memory == m_objects->memories.end() || memory->second.address == 0) {
-                return;
+                return false;
             }
             address = memory->second.address + image->second.offset;
             parent = memory->second.parent;
@@ -2776,7 +2929,7 @@ private:
         if (!device) {
             LOG_WARNING(Service, "nx2:vi2 present: image {} at {:#x} has no device mapping",
                         image_id, address);
-            return;
+            return false;
         }
         u32 crop_width = layout.width;
         u32 crop_height = layout.height;
@@ -2850,12 +3003,14 @@ private:
         if (fence_id < 192) {
             fences.push_back({static_cast<s32>(fence_id), fence_value});
         }
-        system.GPU().RequestComposite(std::move(layers), std::move(fences));
+        system.GPU().RequestComposite(std::move(layers), std::move(fences),
+                                      std::move(on_composited));
         CaptureFrame();
         DumpRanges();
         system.SpeedLimiter().DoSpeedLimiting(system.CoreTiming().GetGlobalTimeUs());
         system.GetPerfStats().EndSystemFrame();
         system.GetPerfStats().BeginSystemFrame();
+        return true;
     }
 
     // EDEN_NX2_FRAME_CAPTURE=<dir>: every 120th present, save what the renderer shows as
@@ -4058,6 +4213,7 @@ private:
                     Nvidia::Devices::Nx2GpuMemoryRegistry::Get().DeviceAddressOf(address)) {
                 system.GPU().InvalidateRegion(*device, m_tiled.size());
             }
+            Core::NvnHle::Hle::Runtime::Instance().NotifyHostWrite(address, m_tiled.size());
             trace_write();
             return {width, height};
         }
@@ -4073,6 +4229,8 @@ private:
         if (const auto device = Nvidia::Devices::Nx2GpuMemoryRegistry::Get().DeviceAddressOf(address)) {
             system.GPU().InvalidateRegion(*device, layout.size);
         }
+        // VTX-HLE's copies of that memory (GPU-only pool buffers, texture images) follow too.
+        Core::NvnHle::Hle::Runtime::Instance().NotifyHostWrite(address, layout.size);
         trace_write();
         // A 428/426 that came in while this frame was written didn't see it: relayout it here.
         bool relayout = false;
@@ -4164,9 +4322,9 @@ public:
             {4, &INx2GraphicsSystemSession::Stub, "Boot (Switch 2, guessed)"},
             {5, &INx2GraphicsSystemSession::Stub, "Unknown5"},
             {101, &INx2GraphicsSystemSession::Stub, "Unknown101"},
-            {202, &INx2GraphicsSystemSession::OpenSyncptSession, "OpenSyncptSession (guessed)"},
-            {204, &INx2GraphicsSystemSession::AttachSyncptMemory, "AttachSyncptMemory (guessed)"},
-            {305, &INx2GraphicsSystemSession::OpenViSession, "OpenViSession (guessed)"},
+            {202, &INx2GraphicsSystemSession::OpenSyncptSession, "OpenSyncptSession"},
+            {204, &INx2GraphicsSystemSession::AttachSyncptMemory, "AttachSyncptMemory"},
+            {305, &INx2GraphicsSystemSession::OpenViSession, "OpenViSession"},
             {497, &INx2GraphicsSystemSession::OpenGpuSession, "OpenGpuSession (guessed)"},
             {111, &INx2GraphicsSystemSession::CreateNativeMemory, "CreateNativeMemory"},
             {112, &INx2GraphicsSystemSession::DestroyNativeMemory, "DestroyNativeMemory"},
@@ -4193,8 +4351,8 @@ public:
             {906, &INx2GraphicsSystemSession::OpenVideoSession, "OpenVideoDecoderSessionWithVersion"},
             {1001, &INx2GraphicsSystemSession::Stub, "VideoInitialize2 (guessed)"},
             {1002, &INx2GraphicsSystemSession::OpenVideoSession, "OpenVideoDecoderSession2 (guessed)"},
-            {601, &INx2GraphicsSystemSession::Stub, "CameraInitialize (guessed)"},
-            {602, &INx2GraphicsSystemSession::OpenCameraSession, "OpenCameraContext (guessed)"},
+            {601, &INx2GraphicsSystemSession::Stub, "CameraInitialize"},
+            {602, &INx2GraphicsSystemSession::OpenCameraSession, "OpenCameraContext"},
             {1201, &INx2GraphicsSystemSession::Stub, "ChatInitialize (guessed)"},
             {1202, &INx2GraphicsSystemSession::OpenChatSession, "OpenChatSession (guessed)"},
             // Same request as 429: nn::chat::gsv::CreateImagePool (GameChat camera images).
@@ -4251,7 +4409,7 @@ public:
             {468, &INx2GraphicsSystemSession::StubReplyZeroed, "Unknown468"},
             {493, &INx2GraphicsSystemSession::StubReplyZeroed, "Unknown493"},
             {494, &INx2GraphicsSystemSession::CheckPermission, "CheckPermission494"},
-            {603, &INx2GraphicsSystemSession::StubReplyZeroed, "Unknown603"},
+            {603, &INx2GraphicsSystemSession::ReplySuccess, "CameraFinalize"},
             {612, &INx2GraphicsSystemSession::DestroyNativeImage, "DestroyFeatureImagePool612"},
             {613, &INx2GraphicsSystemSession::StubReplyZeroed, "Unknown613"},
             {614, &INx2GraphicsSystemSession::StubReplyZeroed, "Unknown614"},
@@ -4266,7 +4424,7 @@ public:
             {814, &INx2GraphicsSystemSession::StubReplyZeroed, "Unknown814"},
             {861, &INx2GraphicsSystemSession::GetCpuImageDescriptor, "GetFeatureCpuImageDescriptor861"},
             {891, &INx2GraphicsSystemSession::CalculateChatImagePoolSize, "CalculateFeatureImagePoolSize891"},
-            {1003, &INx2GraphicsSystemSession::StubReplyZeroed, "Unknown1003"},
+            {1003, &INx2GraphicsSystemSession::ReplySuccess, "VideoFinalize2"},
             {1011, &INx2GraphicsSystemSession::StubReplyZeroed, "Unknown1011"},
             {1012, &INx2GraphicsSystemSession::StubReplyZeroed, "Unknown1012"},
             {1091, &INx2GraphicsSystemSession::StubReplyZeroed, "Unknown1091"},
@@ -4288,9 +4446,16 @@ public:
             {1612, &INx2GraphicsSystemSession::DestroyNativeImage, "DestroyFeatureImagePool1612"},
             {1691, &INx2GraphicsSystemSession::CalculateChatImagePoolSize, "CalculateFeatureImagePoolSize1691"},
         });
+        // VTX-HLE makes its native image pools out of this session's images.
+        Nx2NativeImageDirectory::Get().Add(
+            this, [objects = std::weak_ptr<Nx2NativeObjects>{m_objects}](u32 handle) {
+                const auto locked = objects.lock();
+                return locked ? Nx2DescribeNativeImage(*locked, handle) : std::nullopt;
+            });
     }
 
     ~INx2GraphicsSystemSession() override {
+        Nx2NativeImageDirectory::Get().Remove(this);
         if (m_syncpt_memory != nullptr) {
             system.Host1x().GetSyncpointManager().SetGuestMirror({});
         }
@@ -4310,6 +4475,10 @@ private:
     // features they are granted.
     void CheckPermission(HLERequestContext& ctx) {
         LOG_DEBUG(Service, "nx2:gsv TIPC {} permission check", ctx.GetCommand());
+        TipcReplyWords(ctx, {});
+    }
+
+    void ReplySuccess(HLERequestContext& ctx) {
         TipcReplyWords(ctx, {});
     }
 

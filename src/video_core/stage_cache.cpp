@@ -312,6 +312,7 @@ std::vector<u8> StageCache::RuntimeKey(const Shader::RuntimeInfo& info,
         writer.Put(word);
     }
     writer.Put(static_cast<u32>(info.per_primitive_generics.to_ulong()));
+    writer.Put(info.mesh_as_compute);
     writer.Put(static_cast<u32>(info.noperspective_outputs.to_ulong()));
     writer.Put(info.scaled_noperspective_inputs);
     writer.Put(static_cast<u32>(info.previous_stage_legacy_stores_mapping.size()));
@@ -343,6 +344,7 @@ std::vector<u8> StageCache::RuntimeKey(const Shader::RuntimeInfo& info,
     }
     writer.Put(info.color_output_types);
     writer.Put(info.dual_source_blend);
+    writer.Put(info.quantize_frag_depth_d24);
     writer.Put(info.mesh_as_compute);
     writer.Put(info.mesh_output_binding);
     writer.Put(info.mesh_task_payload_binding);

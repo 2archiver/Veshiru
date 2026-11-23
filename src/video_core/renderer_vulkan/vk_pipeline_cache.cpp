@@ -231,6 +231,9 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
         info.previous_stage_stores.mask.set();
     }
     if (previous_program && previous_program->stage == Shader::Stage::Mesh) {
+        if (!device.IsExtMeshShaderSupported()) {
+            info.mesh_as_compute = true;
+        }
         for (const u32 line : previous_program->mesh.primitive_lines) {
             const auto attribute{static_cast<Shader::IR::Attribute>(line)};
             if (Shader::IR::IsGeneric(attribute)) {
@@ -326,6 +329,14 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
         info.alpha_test_reference = std::bit_cast<float>(key.state.alpha_test_ref);
 
         info.dual_source_blend = key.state.attachment0_dual_source_blend != 0;
+
+        const auto zeta_format{static_cast<Tegra::DepthFormat>(key.state.depth_format.Value())};
+        info.quantize_frag_depth_d24 = key.state.depth_enabled != 0 &&
+                                       !device.SupportsD24DepthBuffer() &&
+                                       (zeta_format == Tegra::DepthFormat::Z24_UNORM_S8_UINT ||
+                                        zeta_format == Tegra::DepthFormat::X8Z24_UNORM ||
+                                        zeta_format == Tegra::DepthFormat::S8Z24_UNORM ||
+                                        zeta_format == Tegra::DepthFormat::V8Z24_UNORM);
 
         if (device.IsMoltenVK()) {
             for (size_t i = 0; i < 8; ++i) {
@@ -1760,8 +1771,13 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
                 }
                 bool incomplete{};
                 try {
-                    return TranslateCachedGraphics(record.payload, record.key, nullptr,
-                                                   incomplete);
+                    auto pipeline = TranslateCachedGraphics(record.payload, record.key, nullptr,
+                                                            incomplete);
+                    if (incomplete) {
+                        std::scoped_lock lock{incomplete_prebuilds_mutex};
+                        incomplete_prebuilds.insert(record.key.Hash());
+                    }
+                    return pipeline;
                 } catch (const std::ios_base::failure&) {
                     return std::unique_ptr<GraphicsPipeline>{};
                 }
@@ -3494,7 +3510,11 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     if (!pipeline || pipeline_cache_filename.empty()) {
         return pipeline;
     }
-    if (disk_pipelines.contains(graphics_key.Hash())) {
+    const bool incomplete_record = [&] {
+        std::scoped_lock lock{incomplete_prebuilds_mutex};
+        return incomplete_prebuilds.erase(graphics_key.Hash()) != 0;
+    }();
+    if (disk_pipelines.contains(graphics_key.Hash()) && !incomplete_record) {
         // In the disk cache already, only not built at boot.
         QueueVulkanPipelineCacheFlush();
         return pipeline;

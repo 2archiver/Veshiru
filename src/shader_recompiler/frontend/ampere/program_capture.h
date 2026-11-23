@@ -35,6 +35,7 @@ public:
                     target >= MaximumInstructions * 16)
                     return Result::InvalidTarget;
                 last_forward_target = std::max(last_forward_target, target / 16);
+                exit_handler_end = target / 16 + 2;
             }
         }
         if (opcode == 0x944 || opcode == 0x947 || opcode == 0x945) {
@@ -59,6 +60,8 @@ public:
                 target == s64{index} * 16)
                 return Result::Complete;
         }
+        if (opcode == 0x94d && instruction.Bits(12, 4) == 7 && index == exit_handler_end)
+            return Result::Complete;
         if (opcode == 0x949 || opcode == 0x958) computed_branch = true;
         if (computed_branch) return Result::Continue;
         if (opcode == 0x94d && instruction.Bits(12, 4) == 7 && index >= last_forward_target) {
@@ -73,6 +76,7 @@ public:
 
 private:
     std::array<Instruction, 5> exit_setup{};
+    u32 exit_handler_end{};
     u32 last_call_target{};
     u32 last_forward_target{};
     bool main_exited{};

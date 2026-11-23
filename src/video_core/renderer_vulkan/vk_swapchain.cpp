@@ -221,6 +221,20 @@ Swapchain::Swapchain(
     , device{device_}
     , scheduler{scheduler_}
 {
+    // VTX-HLE presents frames the renderer's scheduler did not render (PresentTimeline).
+    if (Settings::ResolveNvnHle().hle && device.HasTimelineSemaphore()) {
+        static constexpr VkSemaphoreTypeCreateInfo timeline_ci{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+            .pNext = nullptr,
+            .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+            .initialValue = 0,
+        };
+        present_timeline = device.GetLogical().CreateSemaphore({
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = &timeline_ci,
+            .flags = 0,
+        });
+    }
     if (!Create(surface, width_, height_, requested.format, requested.colorSpace)) {
         LOG_ERROR(Render_Vulkan, "Initial swapchain creation failed: surface has zero extent");
         throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
@@ -274,7 +288,15 @@ bool Swapchain::Create(
     return true;
 }
 
-bool Swapchain::AcquireNextImage(bool may_flush, u32 game_frame_presents) {
+bool Swapchain::AcquireNextImage(bool may_flush, u32 game_frame_presents, bool renderer_paced) {
+    // The acquire semaphore must have no wait pending: the submission that last waited on it must
+    // have run. Only submissions of frames that are not renderer paced record one (for the others
+    // the renderer tick below keeps the frames apart).
+    if (const u64 tick = present_semaphore_ticks.Pending(frame_index);
+        tick != 0 && present_timeline.GetCounter() < tick) {
+        while (!present_timeline.Wait(tick)) {
+        }
+    }
     const VkResult result = device.GetLogical().AcquireNextImageKHR(
         *swapchain, (std::numeric_limits<u64>::max)(), *present_semaphores[frame_index],
         VK_NULL_HANDLE, &image_index);
@@ -297,6 +319,10 @@ bool Swapchain::AcquireNextImage(bool may_flush, u32 game_frame_presents) {
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         // No image was acquired, so image_index is stale: the caller recreates and tries again.
         return true;
+    }
+
+    if (!WaitsForRendererTick(renderer_paced, static_cast<bool>(present_timeline))) {
+        return false;
     }
 
     const auto wait_with_frame_pacing = [this, may_flush, game_frame_presents] {
@@ -523,6 +549,8 @@ void Swapchain::CreateSemaphores() {
     render_semaphores.resize(image_count);
     std::ranges::generate(render_semaphores,
                           [this] { return device.GetLogical().CreateSemaphore(); });
+    // New semaphores: nothing waits on them yet.
+    present_semaphore_ticks.Reset(image_count);
 }
 
 void Swapchain::Destroy() {

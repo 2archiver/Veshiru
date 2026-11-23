@@ -15,6 +15,7 @@
 
 #include <ranges>
 #include "common/display_hdr.h"
+#include "common/game_presets.h"
 #include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -31,7 +32,9 @@
 #include "video_core/post_processing/fx_chain.h"
 #endif
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
+#include "video_core/renderer_vulkan/nvn/nvn_settings_notice.h"
 #include "video_core/renderer_vulkan/vk_blit_screen.h"
+#include "video_core/shader_log.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_state_tracker.h"
@@ -231,6 +234,56 @@ try
     VideoCore::FxChain::Instance().LoadFromSettings();
 #endif
 
+    if (const Settings::NvnHleChoice choice = Settings::ResolveNvnHle(); choice.hle) {
+        // The replay needs buffer device addresses and 64-bit shader integers (raw global
+        // memory). A device without them runs the game on the emulated GPU instead.
+        const bool device_ok =
+            device.IsBufferDeviceAddressSupported() && device.IsShaderInt64Supported();
+        if (!device_ok) {
+            LOG_WARNING(Render_Vulkan,
+                        "[nvn] graphics path: emulated GPU (the Vulkan device lacks buffer device "
+                        "addresses or 64-bit shader integers, which the HLE needs)");
+        } else {
+            try {
+                // Force maximum clocks: the replay submits to the queue itself, so it feeds
+                // TurboMode (the scheduler's submit hook never fires for its work).
+                nvn_context.emplace(
+                    device, scheduler, present_manager, render_window, gpu.ShaderNotify(),
+                    gpu.LoadProgress(),
+                    turbo_mode ? std::function<void()>{[this] { turbo_mode->QueueSubmitted(); }}
+                               : std::function<void()>{});
+                nvn_context->SetScreenshotRequests(renderer_settings);
+                LOG_INFO(Render_Vulkan, "[nvn] Vulkan replay context created");
+                // Shader logging mode of the replay (EDEN_NX2_SHADER_LOG=1, video_core/shader_log.h).
+                VideoCommon::ShaderLog::Start();
+                // The replay decodes ASTC itself into RGBA8 stand-ins and re-encodes them to BC
+                // per storage (Nvn::ToBcStandin, reading the saved setting directly), but
+                // MaxwellToVK::SurfaceFormat (shared with the emulated path) picks its host
+                // format from this setting: a saved Bc1/Bc3 would give every decoded stand-in a
+                // BC image. Its saved value stays untouched.
+                Settings::SetAstcRecompressionOverride(Settings::AstcRecompression::Uncompressed);
+                if (const auto gaps = Nvn::SettingsNotApplied(Nvn::CurrentPresentSettings());
+                    !gaps.empty()) {
+                    LOG_WARNING(Render_Vulkan,
+                                "[nvn] settings the HLE graphics path does not apply: {} (set "
+                                "Graphics path to Emulated GPU to use them)",
+                                fmt::join(gaps, "; "));
+                }
+                if (Settings::GetCurrentProgramID() == Settings::MarioKartWorldProgramId &&
+                    !present_manager.UsesPresentThread()) {
+                    present_manager.EnablePresentThread();
+                    LOG_INFO(Render_Vulkan,
+                             "[nvn] Mario Kart World: using the Vulkan presentation worker");
+                }
+            } catch (const std::exception& exception) {
+                nvn_context.reset();
+                LOG_ERROR(Render_Vulkan,
+                          "[nvn] graphics path: emulated GPU (the Vulkan replay context failed: {})",
+                          exception.what());
+            }
+        }
+    }
+
     device_info = {
         .model = std::string{device.GetModelName()},
         .driver = device.GetDriverVersion() != 0
@@ -245,6 +298,9 @@ try
 }
 
 RendererVulkan::~RendererVulkan() {
+    // The VTX-HLE replay threads submit to the same queue: stop them before anything they use goes.
+    nvn_context.reset();
+    VideoCommon::ShaderLog::Stop();
     scheduler.RegisterOnSubmit([] {});
     void(device.GetLogical().WaitIdle());
 }
@@ -514,7 +570,7 @@ vk::Buffer RendererVulkan::RenderToBuffer(std::span<const Tegra::FramebufferConf
 }
 
 void RendererVulkan::RenderScreenshot(std::span<const Tegra::FramebufferConfig> framebuffers) {
-    if (!renderer_settings.screenshot_requested) {
+    if (!renderer_settings.ClaimScreenshot()) {
         return;
     }
 
@@ -528,7 +584,7 @@ void RendererVulkan::RenderScreenshot(std::span<const Tegra::FramebufferConfig> 
     std::memcpy(renderer_settings.screenshot_bits, dst_buffer.Mapped().data(),
                 dst_buffer.Mapped().size());
     renderer_settings.screenshot_complete_callback(false);
-    renderer_settings.screenshot_requested = false;
+    renderer_settings.FinishScreenshot();
 }
 
 std::vector<u8> RendererVulkan::GetAppletCaptureBuffer() {

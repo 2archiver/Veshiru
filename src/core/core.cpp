@@ -51,6 +51,8 @@
 #include "core/hle/kernel/k_system_control.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/physical_core.h"
+#include "core/hle/nvn/bridge.h"
+#include "core/hle/nvn/hle_runtime.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/frontend/applets.h"
@@ -646,6 +648,8 @@ struct System::Impl {
     void ShutdownMainProcess() {
         debug_service.reset();
         SetShuttingDown(true);
+        Core::NvnHle::Bridge::Shutdown();
+        Core::NvnHle::Hle::Runtime::Instance().Shutdown();
         Common::ADPF::Shutdown();
 
         // Reset per-game flags
@@ -691,6 +695,9 @@ struct System::Impl {
         host1x_core.reset();
         perf_stats.reset();
         cpu_manager.Shutdown();
+        // No guest thread can be inside an NVN call any more, and the renderer is gone: the
+        // Recorder (disconnected from the sink by Shutdown) and the guest memory can be freed.
+        Core::NvnHle::Hle::Runtime::Instance().Release();
         debugger.reset();
         kernel.Shutdown();
         stop_event = {};
@@ -784,7 +791,8 @@ struct System::Impl {
     /// Service manager
     std::shared_ptr<Service::SM::ServiceManager> service_manager;
     /// ContentProviderUnion instance
-    std::unique_ptr<FileSys::ContentProviderUnion> content_provider;
+    std::unique_ptr<FileSys::ContentProviderUnion> content_provider =
+        std::make_unique<FileSys::ContentProviderUnion>();
     /// AppLoader used to load the current executing application
     std::unique_ptr<Loader::AppLoader> app_loader;
     std::stop_source stop_event;
@@ -1042,9 +1050,13 @@ u64 System::ResolveCallerProgramId(u64 process_id) const {
     }
 
     const auto fallback = this->GetApplicationProcessProgramID();
-    LOG_WARNING(Core,
-                "Could not resolve caller process_id={}, falling back to application {:016X}",
-                process_id, fallback);
+    if (process_id == 0 && fallback != 0) {
+        LOG_DEBUG(Core, "Caller process_id=0 resolved to application {:016X}", fallback);
+    } else {
+        LOG_WARNING(Core,
+                    "Could not resolve caller process_id={}, falling back to application {:016X}",
+                    process_id, fallback);
+    }
     return fallback;
 }
 

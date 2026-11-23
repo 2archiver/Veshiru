@@ -7,6 +7,7 @@
 #include "emu_thread.h"
 #include "qt_common/qt_common.h"
 #include "video_core/gpu.h"
+#include "video_core/load_progress.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_base.h"
 
@@ -25,6 +26,14 @@ void EmuThread::run() {
     // Main process has been loaded. Make the context current to this thread and begin GPU and CPU
     // execution.
     gpu.ObtainContext();
+
+    // The VTX-HLE pipeline cache opens when the guest names its title, after the rasterizer's
+    // load above: it reports its preload through the same stages to the loading screen, which
+    // stays up until the first frame.
+    gpu.LoadProgress().Set(
+        [this](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {
+            emit LoadProgress(stage, value, total);
+        });
 
     emit LoadProgress(VideoCore::LoadCallbackStage::Prepare, 0, 0);
     if (Settings::values.use_disk_shader_cache.GetValue()) {
@@ -79,6 +88,7 @@ void EmuThread::run() {
     }
 
     // Shutdown the main emulated process
+    gpu.LoadProgress().Clear();
     QtCommon::system->DetachDebugger();
     QtCommon::system->ShutdownMainProcess();
 }

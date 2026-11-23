@@ -308,6 +308,41 @@ bool CurrentProgramIsSwitch2() {
     return current_program_is_switch2;
 }
 
+NvnHleChoice ChooseNvnHle(const char* environment, GraphicsPath setting, bool switch2_program) {
+    if (environment != nullptr) {
+        const bool off = std::string_view{environment} == "0";
+        return {!off, off ? NvnHleReason::EnvironmentOff : NvnHleReason::EnvironmentOn};
+    }
+    if (setting != GraphicsPath::Hle) {
+        return {false, NvnHleReason::SettingEmulated};
+    }
+    if (!switch2_program) {
+        return {false, NvnHleReason::NotSwitch2};
+    }
+    return {true, NvnHleReason::SettingHle};
+}
+
+NvnHleChoice ResolveNvnHle() {
+    return ChooseNvnHle(std::getenv("EDEN_NX2_NVN_HLE"), values.graphics_path.GetValue(),
+                        current_program_is_switch2);
+}
+
+const char* NvnHleReasonText(NvnHleReason reason) {
+    switch (reason) {
+    case NvnHleReason::EnvironmentOn:
+        return "EDEN_NX2_NVN_HLE is set";
+    case NvnHleReason::EnvironmentOff:
+        return "EDEN_NX2_NVN_HLE=0";
+    case NvnHleReason::SettingHle:
+        return "Graphics path setting: VTX-HLE (NVN)";
+    case NvnHleReason::SettingEmulated:
+        return "Graphics path setting: Emulated GPU";
+    case NvnHleReason::NotSwitch2:
+        return "the program is not a Switch 2 one (the HLE targets the Switch 2 NVN SDK)";
+    }
+    return "";
+}
+
 static std::optional<AstcRecompression> astc_recompression_override;
 
 AstcRecompression GetAstcRecompression() {
@@ -536,6 +571,22 @@ u16 SpeedLimit() {
     }
 
     return 100;
+}
+
+u32 FrameRateCap() {
+    switch (values.frame_pacing_mode.GetValue()) {
+    case FramePacingMode::Target_Auto:
+        return 0;
+    case FramePacingMode::Target_30:
+        return 30;
+    case FramePacingMode::Target_60:
+        return 60;
+    case FramePacingMode::Target_90:
+        return 90;
+    case FramePacingMode::Target_120:
+        return 120;
+    }
+    return 0;
 }
 
 void SetSpeedMode(const SpeedMode& mode) {

@@ -515,6 +515,14 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
               storage_id, unknown, title_id);
 
     auto data = romfs_controller->OpenRomFS(title_id, storage_id, FileSys::ContentRecordType::Data);
+    auto actual_storage_id = storage_id;
+    if (!data && storage_id != FileSys::StorageId::None) {
+        data = romfs_controller->OpenRomFS(title_id, FileSys::StorageId::None,
+                                           FileSys::ContentRecordType::Data);
+        if (data) {
+            actual_storage_id = FileSys::StorageId::None;
+        }
+    }
 
     // Installed content wins; otherwise serve an add-on carried by the opened NUP. The loader
     // checks the title relationship and the existing DLC disable key before opening its RomFS.
@@ -523,8 +531,8 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
         if (loader.GetFileType() == Loader::FileType::NUP) {
             std::vector<u64> ids;
             const auto status = loader.ReadAddOnTitleIds(ids);
-            LOG_WARNING(Service_FS, "requested={:016X}, NUP carried=[{:016X}], list_status={}",
-                        title_id, fmt::join(ids, ", "), static_cast<u16>(status));
+            LOG_DEBUG(Service_FS, "requested={:016X}, NUP carried=[{:016X}], list_status={}",
+                      title_id, fmt::join(ids, ", "), static_cast<u16>(status));
         }
         FileSys::VirtualFile carried;
         if (loader.ReadAddOnRomFS(title_id, carried) == Loader::ResultStatus::Success && carried) {
@@ -549,8 +557,8 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
 
     const FileSys::PatchManager pm{title_id, fsc, content_provider};
 
-    auto base =
-        romfs_controller->OpenBaseNca(title_id, storage_id, FileSys::ContentRecordType::Data);
+    auto base = romfs_controller->OpenBaseNca(title_id, actual_storage_id,
+                                              FileSys::ContentRecordType::Data);
     auto storage = std::make_shared<IStorage>(
         system, pm.PatchRomFS(base.get(), std::move(data), FileSys::ContentRecordType::Data));
 

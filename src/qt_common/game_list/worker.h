@@ -89,7 +89,8 @@ private:
     };
 
     void ScanFileSystem(ScanTarget target, const std::vector<std::filesystem::path>& files,
-                        GameListDir* parent_dir);
+                        GameListDir* parent_dir,
+                        FileSys::ManualContentProvider* target_provider = nullptr);
 
     /// Lists a row for every game the previous scan listed whose file is now gone, and forgets it.
     /// Without this a title that is moved or deleted simply stops appearing, which looks like the

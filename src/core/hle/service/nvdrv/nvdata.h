@@ -21,6 +21,9 @@ struct NvFence {
 };
 static_assert(sizeof(NvFence) == 8, "NvFence has wrong size");
 
+#undef Success
+#undef BadValue
+
 enum class NvResult : u32 {
     Success = 0x0,
     NotImplemented = 0x1,

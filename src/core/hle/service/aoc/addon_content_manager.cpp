@@ -29,12 +29,29 @@
 
 namespace Service::AOC {
 
-static bool CheckAOCTitleIDMatchesBase(u64 title_id, u64 base) {
-    return FileSys::GetBaseTitleID(title_id) == base;
+static bool CheckAOCTitleIDMatchesProgram(u64 title_id, u64 program_base, u64 aoc_base) {
+    const u64 base = FileSys::GetBaseTitleID(title_id);
+    return base == program_base || base == aoc_base;
 }
 
-static u64 GetCallerBaseTitleID(Core::System& system, const ClientProcessId& process_id) {
-    return FileSys::GetBaseTitleID(system.ResolveCallerProgramId(*process_id));
+static u64 ResolveProgramAOCBaseTitleID(Core::System& system, u64 program_id) {
+    const FileSys::PatchManager pm{program_id, system.GetFileSystemController(),
+                                   system.GetContentProvider()};
+    const auto res = pm.GetControlMetadata();
+    u64 metadata_base = res.first ? res.first->GetDLCBaseTitleId() : 0;
+    if (metadata_base == 0) {
+        FileSys::NACP loader_nacp;
+        if (system.GetAppLoader().ReadControlData(loader_nacp) == Loader::ResultStatus::Success) {
+            metadata_base = loader_nacp.GetDLCBaseTitleId();
+        }
+    }
+    std::vector<u64> carried;
+    if (metadata_base == 0 &&
+        system.GetAppLoader().ReadAddOnTitleIds(carried) != Loader::ResultStatus::Success) {
+        carried.clear();
+    }
+    return FileSys::GetBaseTitleID(
+        FileSys::ResolveAOCBaseTitleID(program_id, metadata_base, carried));
 }
 
 static std::vector<u64> AccumulateAOCTitleIDs(Core::System& system) {
@@ -56,21 +73,21 @@ static std::vector<u64> AccumulateAOCTitleIDs(Core::System& system) {
 }
 
 // Include add-ons carried by the opened container without duplicating installed titles.
-static std::vector<u64> AllAOCTitleIDs(Core::System& system,
-                                      const std::vector<u64>& installed, bool log_carried = false) {
-    std::vector<u64> all = installed;
+static std::vector<u64> AllAOCTitleIDs(Core::System& system, std::vector<u64>& cached_installed,
+                                       bool log_carried = false) {
+    cached_installed = AccumulateAOCTitleIDs(system);
+    std::vector<u64> all = cached_installed;
     std::vector<u64> carried;
     const auto status = system.GetAppLoader().ReadAddOnTitleIds(carried);
     if (log_carried) {
-        LOG_WARNING(Service_AOC, "ListAddOnContent: ReadAddOnTitleIds status={}, carried=[{:016X}]",
-                    static_cast<u16>(status), fmt::join(carried, ", "));
+        LOG_DEBUG(Service_AOC, "ListAddOnContent: ReadAddOnTitleIds status={}, carried=[{:016X}]",
+                  static_cast<u16>(status), fmt::join(carried, ", "));
     }
-    if (status != Loader::ResultStatus::Success) {
-        return all;
-    }
-    for (const u64 title_id : carried) {
-        if (std::find(all.begin(), all.end(), title_id) == all.end()) {
-            all.push_back(title_id);
+    if (status == Loader::ResultStatus::Success) {
+        for (const u64 title_id : carried) {
+            if (std::find(all.begin(), all.end(), title_id) == all.end()) {
+                all.push_back(title_id);
+            }
         }
     }
     return all;
@@ -81,13 +98,13 @@ IAddOnContentManager::IAddOnContentManager(Core::System& system_)
       service_context{system_, "aoc:u"} {
     // clang-format off
     static const FunctionInfo functions[] = {
-        {0, nullptr, "CountAddOnContentByApplicationId"},
-        {1, nullptr, "ListAddOnContentByApplicationId"},
+        {0, D<&IAddOnContentManager::CountAddOnContentByApplicationId>, "CountAddOnContentByApplicationId"},
+        {1, D<&IAddOnContentManager::ListAddOnContentByApplicationId>, "ListAddOnContentByApplicationId"},
         {2, D<&IAddOnContentManager::CountAddOnContent>, "CountAddOnContent"},
         {3, D<&IAddOnContentManager::ListAddOnContent>, "ListAddOnContent"},
-        {4, nullptr, "GetAddOnContentBaseIdByApplicationId"},
+        {4, D<&IAddOnContentManager::GetAddOnContentBaseIdByApplicationId>, "GetAddOnContentBaseIdByApplicationId"},
         {5, D<&IAddOnContentManager::GetAddOnContentBaseId>, "GetAddOnContentBaseId"},
-        {6, nullptr, "PrepareAddOnContentByApplicationId"},
+        {6, D<&IAddOnContentManager::PrepareAddOnContentByApplicationId>, "PrepareAddOnContentByApplicationId"},
         {7, D<&IAddOnContentManager::PrepareAddOnContent>, "PrepareAddOnContent"},
         {8, D<&IAddOnContentManager::GetAddOnContentListChangedEvent>, "GetAddOnContentListChangedEvent"},
         {9, &IAddOnContentManager::StubReplyZeroed, "GetAddOnContentLostErrorCode"},
@@ -115,10 +132,61 @@ IAddOnContentManager::~IAddOnContentManager() {
     service_context.CloseEvent(aoc_change_event);
 }
 
+Result IAddOnContentManager::CountAddOnContentByApplicationId(Out<u32> out_count,
+                                                              u64 application_id) {
+    LOG_DEBUG(Service_AOC, "called. application_id={:016X}", application_id);
+
+    const auto current = FileSys::GetBaseTitleID(application_id);
+    const auto aoc_base = ResolveProgramAOCBaseTitleID(system, current);
+    const auto& disabled = Settings::values.disabled_addons[current];
+    if (std::find(disabled.begin(), disabled.end(), "DLC") != disabled.end()) {
+        *out_count = 0;
+        R_SUCCEED();
+    }
+
+    const auto all = AllAOCTitleIDs(system, add_on_content);
+    *out_count = static_cast<u32>(std::count_if(all.begin(), all.end(), [current, aoc_base](u64 tid) {
+        return CheckAOCTitleIDMatchesProgram(tid, current, aoc_base);
+    }));
+
+    R_SUCCEED();
+}
+
+Result IAddOnContentManager::ListAddOnContentByApplicationId(
+    Out<u32> out_count, OutBuffer<BufferAttr_HipcMapAlias> out_addons, u32 offset, u32 count,
+    u64 application_id) {
+    LOG_DEBUG(Service_AOC, "called with offset={}, count={}, application_id={:016X}", offset,
+              count, application_id);
+
+    const auto current = FileSys::GetBaseTitleID(application_id);
+    const auto aoc_base = ResolveProgramAOCBaseTitleID(system, current);
+
+    std::vector<u32> out;
+    const auto& disabled = Settings::values.disabled_addons[current];
+    if (std::find(disabled.begin(), disabled.end(), "DLC") == disabled.end()) {
+        for (u64 content_id : AllAOCTitleIDs(system, add_on_content, true)) {
+            if (!CheckAOCTitleIDMatchesProgram(content_id, current, aoc_base)) {
+                continue;
+            }
+            out.push_back(static_cast<u32>(FileSys::GetAOCID(content_id)));
+        }
+    }
+
+    R_UNLESS(out.size() >= offset, AM::ResultApplicationRecordNotFound);
+
+    *out_count = static_cast<u32>(std::min<size_t>(out.size() - offset, count));
+    std::rotate(out.begin(), out.begin() + offset, out.end());
+    std::memcpy(out_addons.data(), out.data(), *out_count * sizeof(u32));
+
+    R_SUCCEED();
+}
+
 Result IAddOnContentManager::CountAddOnContent(Out<u32> out_count, ClientProcessId process_id) {
     LOG_DEBUG(Service_AOC, "called. process_id={}", process_id.pid);
 
-    const auto current = GetCallerBaseTitleID(system, process_id);
+    const auto program_id = system.ResolveCallerProgramId(*process_id);
+    const auto current = FileSys::GetBaseTitleID(program_id);
+    const auto aoc_base = ResolveProgramAOCBaseTitleID(system, program_id);
 
     const auto& disabled = Settings::values.disabled_addons[current];
     if (std::find(disabled.begin(), disabled.end(), "DLC") != disabled.end()) {
@@ -127,9 +195,9 @@ Result IAddOnContentManager::CountAddOnContent(Out<u32> out_count, ClientProcess
     }
 
     const auto all = AllAOCTitleIDs(system, add_on_content);
-    *out_count = static_cast<u32>(
-        std::count_if(all.begin(), all.end(),
-                      [current](u64 tid) { return CheckAOCTitleIDMatchesBase(tid, current); }));
+    *out_count = static_cast<u32>(std::count_if(all.begin(), all.end(), [current, aoc_base](u64 tid) {
+        return CheckAOCTitleIDMatchesProgram(tid, current, aoc_base);
+    }));
 
     R_SUCCEED();
 }
@@ -140,13 +208,15 @@ Result IAddOnContentManager::ListAddOnContent(Out<u32> out_count,
     LOG_DEBUG(Service_AOC, "called with offset={}, count={}, process_id={}", offset, count,
               process_id.pid);
 
-    const auto current = GetCallerBaseTitleID(system, process_id);
+    const auto program_id = system.ResolveCallerProgramId(*process_id);
+    const auto current = FileSys::GetBaseTitleID(program_id);
+    const auto aoc_base = ResolveProgramAOCBaseTitleID(system, program_id);
 
     std::vector<u32> out;
     const auto& disabled = Settings::values.disabled_addons[current];
     if (std::find(disabled.begin(), disabled.end(), "DLC") == disabled.end()) {
         for (u64 content_id : AllAOCTitleIDs(system, add_on_content, true)) {
-            if (FileSys::GetBaseTitleID(content_id) != current) {
+            if (!CheckAOCTitleIDMatchesProgram(content_id, current, aoc_base)) {
                 continue;
             }
 
@@ -164,6 +234,29 @@ Result IAddOnContentManager::ListAddOnContent(Out<u32> out_count,
     R_SUCCEED();
 }
 
+Result IAddOnContentManager::GetAddOnContentBaseIdByApplicationId(Out<u64> out_title_id,
+                                                                  u64 application_id) {
+    LOG_DEBUG(Service_AOC, "called. application_id={:016X}", application_id);
+
+    const FileSys::PatchManager pm{application_id, system.GetFileSystemController(),
+                                   system.GetContentProvider()};
+    const auto res = pm.GetControlMetadata();
+    u64 metadata_base = res.first ? res.first->GetDLCBaseTitleId() : 0;
+    if (metadata_base == 0) {
+        FileSys::NACP loader_nacp;
+        if (system.GetAppLoader().ReadControlData(loader_nacp) == Loader::ResultStatus::Success) {
+            metadata_base = loader_nacp.GetDLCBaseTitleId();
+        }
+    }
+    std::vector<u64> carried;
+    if (metadata_base == 0 &&
+        system.GetAppLoader().ReadAddOnTitleIds(carried) != Loader::ResultStatus::Success) {
+        carried.clear();
+    }
+    *out_title_id = FileSys::ResolveAOCBaseTitleID(application_id, metadata_base, carried);
+    R_SUCCEED();
+}
+
 Result IAddOnContentManager::GetAddOnContentBaseId(Out<u64> out_title_id,
                                                    ClientProcessId process_id) {
     LOG_DEBUG(Service_AOC, "called. process_id={}", process_id.pid);
@@ -173,16 +266,29 @@ Result IAddOnContentManager::GetAddOnContentBaseId(Out<u64> out_title_id,
                                    system.GetContentProvider()};
 
     const auto res = pm.GetControlMetadata();
-    const u64 metadata_base = res.first ? res.first->GetDLCBaseTitleId() : 0;
+    u64 metadata_base = res.first ? res.first->GetDLCBaseTitleId() : 0;
+    if (metadata_base == 0) {
+        FileSys::NACP loader_nacp;
+        if (system.GetAppLoader().ReadControlData(loader_nacp) == Loader::ResultStatus::Success) {
+            metadata_base = loader_nacp.GetDLCBaseTitleId();
+        }
+    }
     std::vector<u64> carried;
     if (metadata_base == 0 &&
         system.GetAppLoader().ReadAddOnTitleIds(carried) != Loader::ResultStatus::Success) {
         carried.clear();
     }
     *out_title_id = FileSys::ResolveAOCBaseTitleID(title_id, metadata_base, carried);
-    LOG_WARNING(Service_AOC, "title_id={:016X}, dlc_base_title_id={:016X}, returned={:016X}, fallback={}",
-                title_id, metadata_base, *out_title_id, metadata_base == 0);
+    LOG_DEBUG(Service_AOC, "title_id={:016X}, dlc_base_title_id={:016X}, returned={:016X}, fallback={}",
+              title_id, metadata_base, *out_title_id, metadata_base == 0);
 
+    R_SUCCEED();
+}
+
+Result IAddOnContentManager::PrepareAddOnContentByApplicationId(s32 addon_index,
+                                                                u64 application_id) {
+    LOG_DEBUG(Service_AOC, "called. addon_index={}, application_id={:016X}", addon_index,
+              application_id);
     R_SUCCEED();
 }
 
@@ -193,16 +299,18 @@ Result IAddOnContentManager::PrepareAddOnContent(s32 addon_index, ClientProcessI
     // listed, which is the first thing to know when a title stops at a missing add-on.
     const u64 program_id = system.ResolveCallerProgramId(*process_id);
     const u64 current = FileSys::GetBaseTitleID(program_id);
+    const u64 aoc_base = ResolveProgramAOCBaseTitleID(system, program_id);
     const auto& disabled = Settings::values.disabled_addons[current];
     const bool dlc_disabled = std::find(disabled.begin(), disabled.end(), "DLC") != disabled.end();
     const auto all = dlc_disabled ? std::vector<u64>{} : AllAOCTitleIDs(system, add_on_content);
 
-    if (FileSys::IsListedAddOnContentIndex(program_id, addon_index, all)) {
+    if (FileSys::IsListedAddOnContentIndex(program_id, addon_index, all) ||
+        FileSys::IsListedAddOnContentIndex(aoc_base, addon_index, all)) {
         LOG_INFO(Service_AOC, "addon_index={} is a listed add-on of {:016X}, process_id={}",
                  addon_index, current, process_id.pid);
     } else {
-        const auto listed = std::count_if(all.begin(), all.end(), [current](u64 tid) {
-            return CheckAOCTitleIDMatchesBase(tid, current);
+        const auto listed = std::count_if(all.begin(), all.end(), [current, aoc_base](u64 tid) {
+            return CheckAOCTitleIDMatchesProgram(tid, current, aoc_base);
         });
         LOG_WARNING(Service_AOC,
                     "addon_index={} is not an add-on of {:016X} ({} listed{}), process_id={}; "

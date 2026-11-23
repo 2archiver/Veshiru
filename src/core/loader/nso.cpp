@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+#include <mutex>
 #include <span>
 #include <vector>
 
@@ -24,6 +25,10 @@
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_thread.h"
+#include "core/hle/nvn/bridge.h"
+#include "core/hle/nvn/config.h"
+#include "core/hle/nvn/hle_call.h"
+#include "core/hle/nvn/thunk_encoding.h"
 #include "core/loader/nso.h"
 #include "core/memory.h"
 
@@ -197,10 +202,20 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
     // the game's own wait for the second vblank, or every 2-step frame reads as 33 ms and the game
     // never leaves 30 FPS (found by SerkiGohan). Presents are then paced with interval 1.
     // Match the instruction sequences instead of relying on a title-version-specific address.
-    const bool mkw_dynamic = Settings::values.mkw_dynamic_fps.GetValue();
+    const bool mkw_main = name == "main" &&
+                          process.GetProgramId() == Settings::MarioKartWorldProgramId;
+    const bool mkw_30 = Settings::values.mkw_30fps.GetValue();
+    const bool mkw_vtx_pacing =
+        mkw_main && process.IsApplication() &&
+#ifdef HAS_NCE
+        patch == nullptr &&
+#endif
+        Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan &&
+        Settings::ResolveNvnHle().hle;
+    const bool mkw_dynamic =
+        mkw_vtx_pacing ? !mkw_30 : Settings::values.mkw_dynamic_fps.GetValue();
     bool mkw_dynamic_fps_patch_applied = false;
-    if ((mkw_dynamic || Settings::values.mkw_30fps.GetValue()) && name == "main" &&
-        process.GetProgramId() == Settings::MarioKartWorldProgramId) {
+    if (mkw_main && (mkw_dynamic || mkw_30)) {
         constexpr u32 ModeLoadInsn = 0xB9421268; // ldr w8, [x19, #0x210]
         const u32 mode = mkw_dynamic ? 0U : 2U;
         const u32 mode_instruction = 0x52800008U | (mode << 5); // mov w8, #mode
@@ -379,6 +394,25 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
     }
 #endif
 
+    // NVN bridge: the sdk module gets a thunk region appended in both passes, so the process
+    // code layout stays consistent. Off (no switch set) means nothing here runs.
+    u32 nvn_region_offset = 0;
+    if (name == "sdk" && Core::NvnHle::ConfigFromEnvironment().AnyEnabled()) {
+        bool allowed = true;
+#ifdef HAS_NCE
+        allowed = patch == nullptr;
+#endif
+        if (allowed) {
+            nvn_region_offset = image_size;
+            image_size += Core::NvnHle::Thunk::RegionBytes;
+        } else {
+            static std::once_flag nce_logged;
+            std::call_once(nce_logged, [] {
+                LOG_WARNING(Loader, "[nvn] census/HLE requested but NCE is active; bridge disabled");
+            });
+        }
+    }
+
     // If we aren't actually loading (i.e. just computing the process code layout), we are done
     if (!load_into_process) {
 #ifdef HAS_NCE
@@ -422,7 +456,47 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         }
     }
     LOG_INFO(Loader, "Module {} loaded at {:#x} (size {:#x})", nso_file.GetName(), load_base, image_size);
+    if (nvn_region_offset != 0) {
+        // The region joins the data segment (RW) instead of getting RX/RW blocks of its own: the
+        // guest rtld walks the process memory block by block and would take a separate RX block
+        // for another module (its MOD0 offset read at +4 hits our slot code). Dynarmic does not
+        // enforce execute permission, so the slots run fine from RW pages.
+        codeset.memory.resize(image_size);
+        codeset.DataSegment().size += Core::NvnHle::Thunk::RegionBytes;
+        // Library applets that run as real processes load their own sdk module with the same
+        // layout, but only the application process is hooked: a second PrepareSdk would reset
+        // the bridge under the running game.
+        if (process.IsApplication()) {
+            // The graphics path is chosen per game: the process-wide bridge takes it from the
+            // setting (EDEN_NX2_NVN_HLE overrides) before it hooks this game's SDK. The HLE bodies
+            // must exist before PrepareSdk: it reads the nv:: hook bodies.
+            const Settings::NvnHleChoice choice = Settings::ResolveNvnHle();
+            LOG_INFO(Loader, "[nvn] graphics path: {} ({})",
+                     choice.hle ? "VTX-HLE (NVN)" : "emulated GPU",
+                     Settings::NvnHleReasonText(choice.reason));
+            Core::NvnHle::Bridge::Instance().SetHle(choice.hle);
+            if (choice.hle) {
+                Core::NvnHle::Hle::RegisterAll(Core::NvnHle::Bridge::Instance());
+                // VTX-HLE's pool mirrors track guest writes; turned on before the game runs.
+                process.GetMemory().EnablePageTracker();
+            }
+            Core::NvnHle::Bridge::Instance().PrepareSdk(
+                {std::span{codeset.memory}, nvn_region_offset, load_base,
+                 Common::HexToString(nso_header.build_id)});
+        }
+    }
+    if (name == "sdk" && nvn_region_offset == 0 && process.IsApplication()) {
+        // Nothing hooks this game's NVN: it runs on the emulated GPU. Say why once per boot.
+        const Settings::NvnHleChoice choice = Settings::ResolveNvnHle();
+        LOG_INFO(Loader, "[nvn] graphics path: emulated GPU ({})",
+                 choice.hle ? "the NVN bridge is not available with this CPU backend"
+                            : Settings::NvnHleReasonText(choice.reason));
+    }
     process.LoadModule(system.Kernel(), std::move(codeset), load_base);
+    if (nvn_region_offset != 0 && process.IsApplication()) {
+        Core::NvnHle::Bridge::Instance().Activate(&process, load_base + nvn_region_offset,
+                                                  process.GetProgramId());
+    }
     if (name == "main" && process.GetProgramId() == Settings::MarioKartWorldProgramId) {
         process.SetMkwDynamicFpsPatchApplied(mkw_dynamic_fps_patch_applied);
     }

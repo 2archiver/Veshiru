@@ -34,6 +34,8 @@ class BasicSetting;
 
 namespace ConfigurationShared {
 
+class VtxHleGrey;
+
 enum class RequestType {
     Default,
     ComboBox,
@@ -94,6 +96,17 @@ public:
      */
     [[nodiscard]] static QPushButton* CreateRestoreGlobalButton(bool using_global, QWidget* parent);
 
+    /**
+     * Greys the setting's controls out and explains why, without touching the setting or the value
+     * the controls show, so nothing is written back differently. The restore-global button of a
+     * custom configuration stays usable. An empty `reason` makes the controls available again as
+     * they were (a control that was disabled for another reason stays so).
+     *
+     * @param reason Added to the tooltip
+     * @param label_suffix Appended to the visible label (or the checkbox text)
+     */
+    void SetUnavailable(const QString& reason, const QString& label_suffix);
+
     // Direct handles to sub components created
     QPushButton* restore_button{}; ///< Restore button for custom configurations
     QLineEdit* line_edit{};        ///< QLineEdit, used for LineEdit and HexEdit
@@ -151,6 +164,11 @@ private:
 
     bool created{false};
     bool runtime_lock{false};
+
+    QLabel* title_label{}; ///< The label left of the controls (none for a checkbox row)
+    bool unavailable{};    ///< SetUnavailable greyed the controls out
+    QString available_tooltip;
+    QString available_title;
 };
 
 class Builder {
@@ -173,12 +191,17 @@ public:
 
     const ComboboxTranslationMap& ComboboxTranslations() const;
 
+    /// The dialog's VTX-HLE greying: every widget built here for a setting VTX-HLE does not apply
+    /// is tracked by it.
+    VtxHleGrey& VtxHle() const;
+
 private:
     std::unique_ptr<TranslationMap> translations;
     std::unique_ptr<ComboboxTranslationMap> combobox_translations;
 
     QWidget* parent;
     const bool runtime_lock;
+    VtxHleGrey* vtx_hle; ///< Owned by `parent`
 };
 
 } // namespace ConfigurationShared

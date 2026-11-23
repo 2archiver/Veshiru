@@ -5,6 +5,7 @@
 
 add_library(shader_recompiler STATIC
     backend/bindings.h
+    bindless_table.h
     backend/spirv/emit_spirv.cpp
     backend/spirv/emit_spirv.h
     backend/spirv/emit_spirv_atomic.cpp
@@ -196,6 +197,7 @@ add_library(shader_recompiler STATIC
     object_pool.h
     profile.h
     program_header.h
+    raw_coverage_layout.h
     runtime_info.h
     shader_info.h
     storage_write_extent.h

@@ -1,0 +1,41 @@
+// SPDX-FileCopyrightText: Copyright 2026 Vortex727 (FUKKO)
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#version 450
+
+// NVN HLE (Vulkan::Nvn::MeshIndirectGpu). The 1D mesh-task entries of NVN2
+// (nvnCommandBufferDrawMeshTasksIndirect, MultiDrawMeshTasksIndirect[Count]) keep their arguments
+// as {count, first} per draw; VK_EXT_mesh_shader reads {groupCountX, groupCountY, groupCountZ}.
+// One invocation rewrites one draw record into the destination array (12 bytes per draw).
+// VK_EXT_mesh_shader has no first workgroup: a draw whose `first` is not 0 is written as an empty
+// draw (0 groups) instead of drawing the wrong workgroups; the replay counts such calls when it
+// can see them (direct draws).
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Source {
+    uint source[];
+};
+
+layout(std430, binding = 1) writeonly buffer Destination {
+    uint destination[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint first_word;   // word of the first record in `source`
+    uint stride_words; // words between records
+    uint draws;        // records to convert
+} pc;
+
+void main() {
+    const uint draw = gl_GlobalInvocationID.x;
+    if (draw >= pc.draws) {
+        return;
+    }
+    const uint base = pc.first_word + draw * pc.stride_words;
+    const uint count = source[base];
+    const uint first = source[base + 1u];
+    destination[draw * 3u] = first == 0u ? count : 0u;
+    destination[draw * 3u + 1u] = 1u;
+    destination[draw * 3u + 2u] = 1u;
+}

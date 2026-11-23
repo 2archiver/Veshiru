@@ -93,10 +93,16 @@ void SetPatch(Info& info, IR::Patch patch) {
     }
 }
 
+void SetAllNVNBuffers(Info& info) {
+    for (u32 index = 0; index < info.nvn_buffer_count; ++index) {
+        info.nvn_buffer_used.set(index, true);
+    }
+}
+
 void CheckCBufNVN(Info& info, IR::Inst& inst) {
     const IR::Value cbuf_index{inst.Arg(0)};
     if (!cbuf_index.IsImmediate()) {
-        info.nvn_buffer_used.set();
+        SetAllNVNBuffers(info);
         return;
     }
     const u32 index{cbuf_index.U32()};
@@ -105,12 +111,12 @@ void CheckCBufNVN(Info& info, IR::Inst& inst) {
     }
     const IR::Value cbuf_offset{inst.Arg(1)};
     if (!cbuf_offset.IsImmediate()) {
-        info.nvn_buffer_used.set();
+        SetAllNVNBuffers(info);
         return;
     }
     const u32 offset{cbuf_offset.U32()};
     const u32 descriptor_size{0x10};
-    const u32 upper_limit{info.nvn_buffer_base + descriptor_size * 16};
+    const u32 upper_limit{info.nvn_buffer_base + descriptor_size * info.nvn_buffer_count};
     if (offset >= info.nvn_buffer_base && offset < upper_limit) {
         const std::size_t nvn_index{(offset - info.nvn_buffer_base) / descriptor_size};
         info.nvn_buffer_used.set(nvn_index, true);
@@ -439,6 +445,10 @@ void VisitUsages(Info& info, IR::Inst& inst) {
     case IR::Opcode::GlobalAtomicMaxF16x2:
     case IR::Opcode::GlobalAtomicMaxF32x2:
         info.stores_global_memory = true;
+        info.stores_raw_global_memory |= info.nvn_raw_global_memory;
+        if (inst.GetOpcode() >= IR::Opcode::GlobalAtomicIAdd32) {
+            info.global_atomics |= GlobalAtomicBit(inst.GetOpcode());
+        }
         [[fallthrough]];
     case IR::Opcode::LoadGlobalU8:
     case IR::Opcode::LoadGlobalS8:
@@ -451,6 +461,17 @@ void VisitUsages(Info& info, IR::Inst& inst) {
         info.uses_global_memory = true;
         info.used_constant_buffer_types |= IR::Type::U32 | IR::Type::U32x2;
         info.used_storage_buffer_types |= IR::Type::U32 | IR::Type::U32x2 | IR::Type::U32x4;
+        if (info.nvn_raw_global_memory) {
+            // VTX-HLE: every global access left after the storage buffer pass is raw: it reads
+            // the guest -> device address table (a storage buffer of the program, or the driver
+            // bank (c0) without raw_global_table_ssbo).
+            info.uses_raw_global_memory = true;
+            if (!info.raw_global_table_ssbo) {
+                AddConstantBufferDescriptor(info, 0, 1);
+                u32& size{info.constant_buffer_used_sizes[0]};
+                size = (std::max)(size, 0x1000u);
+            }
+        }
         break;
     case IR::Opcode::LoadLocal:
     case IR::Opcode::WriteLocal:
@@ -994,19 +1015,46 @@ void GatherInfoFromHeader(Environment& env, Info& info) {
 }
 } // Anonymous namespace
 
+void ApplyNvnBufferWindow(Environment& env, IR::Program& program) {
+    const NvnBufferWindow window{env.NvnComputeBufferWindow()};
+    if (!window.active) {
+        return;
+    }
+    // NVN2 compute: the per-shader driver bank table replaces the fixed per-stage base.
+    if (program.stage != Stage::Compute) {
+        throw NotImplementedException("NVN buffer window on a {} program", program.stage);
+    }
+    if (window.count > Info::MAX_NVN_BUFFERS) {
+        // Surfaces as a rejected shader with this reason (never silent).
+        throw NotImplementedException(
+            "NVN compute driver bank has {} buffer entries, more than the {} the recompiler tracks",
+            window.count, Info::MAX_NVN_BUFFERS);
+    }
+    Info& info{program.info};
+    info.nvn_buffer_window = true;
+    info.nvn_buffer_base = window.base;
+    info.nvn_buffer_count = window.count;
+}
+
 void CollectShaderInfoPass(Environment& env, IR::Program& program) {
     Info& info{program.info};
+    ApplyNvnBufferWindow(env, program);
+    // VTX-HLE lays out the driver bank itself: NVN2's task and mesh stages have their own tables
+    // after the fragment one (video_core/nvn/shader/nvn_driver_layout.h StorageBufferBase).
+    const bool hle{env.IsNvnHleProgram()};
     const u32 base{[&] {
         switch (program.stage) {
         case Stage::VertexA:
         case Stage::VertexB:
-        case Stage::Task: // bound in the vertex slot
             return 0x110u;
+        case Stage::Task: // bound in the vertex slot
+            return hle ? 0x670u : 0x110u;
         case Stage::TessellationControl:
             return 0x210u;
         case Stage::TessellationEval:
-        case Stage::Mesh: // bound in the tessellation slot
             return 0x310u;
+        case Stage::Mesh: // bound in the tessellation slot
+            return hle ? 0x770u : 0x310u;
         case Stage::Geometry:
             return 0x410u;
         case Stage::Fragment:
@@ -1016,7 +1064,9 @@ void CollectShaderInfoPass(Environment& env, IR::Program& program) {
         }
         throw InvalidArgument("Invalid stage {}", program.stage);
     }()};
-    info.nvn_buffer_base = base;
+    if (!info.nvn_buffer_window) {
+        info.nvn_buffer_base = base;
+    }
     if (program.stage == Stage::Task || program.stage == Stage::Mesh) {
         // The stage buffer reads the workgroup index; the epilogue splits work by invocation.
         info.uses_workgroup_id = true;

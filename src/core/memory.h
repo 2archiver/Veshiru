@@ -38,6 +38,8 @@ class MemoryManager;
 
 namespace Core::Memory {
 
+class PageTracker;
+
 /// Counts unmapped reads on this host thread since the CPU callbacks last checked (debug aid).
 u32& UnmappedReadFlag();
 
@@ -403,7 +405,10 @@ public:
     /**
      * Writes a range of bytes into the current process' address space at the specified
      * virtual address.
-     * This unsafe version does not invalidate GPU Memory.
+     * This unsafe version does not invalidate GPU Memory. It is still a write of the guest's
+     * memory: access traps call back before it and the page tracker (PageTracker, the pool
+     * mirrors of VTX-HLE) sees it as it sees a guest store. For a host service's writes (audio
+     * buffers, ...); the HLE's own write-back of GPU results uses WriteBlockUntracked.
      *
      * @param dest_addr  The destination virtual address to begin writing the data at.
      * @param src_buffer The data to write into the current process' address space.
@@ -418,6 +423,22 @@ public:
      */
     bool WriteBlockUnsafe(Common::ProcessAddress dest_addr, const void* src_buffer,
                           std::size_t size);
+
+    /**
+     * Writes a range of bytes like WriteBlockUnsafe, and tells neither the device caches nor the
+     * page tracker nor access traps: the VTX-HLE writes GPU results back to guest memory this
+     * way, and the mirror that produced them already holds those bytes.
+     */
+    bool WriteBlockUntracked(Common::ProcessAddress dest_addr, const void* src_buffer,
+                             std::size_t size);
+
+    /**
+     * Tells the page tracker that a host writer changed [dest_addr, dest_addr + size) without a
+     * guest store, through a raw host pointer (GetPointer, the device memory backing, the kernel's
+     * IPC copies, ...): tracked pages in the range turn dirty. The device caches are not told.
+     * Cheap when no mirror tracks anything.
+     */
+    void NotifyHostWrite(Common::ProcessAddress dest_addr, std::size_t size);
 
     /**
      * Copies data within a process' address space to another location within the
@@ -508,7 +529,17 @@ public:
 
     bool InvalidateSeparateHeap(void* fault_address);
 
+    /// Lets PageTracker register ranges of this memory. VTX-HLE turns it on when it hooks the
+    /// application, before the game runs; until then nothing is tracked and every hook in the
+    /// memory paths is a single flag check.
+    void EnablePageTracker();
+
+    /// CPU write and access tracking of guest ranges that host mirrors hold (page_tracker.h).
+    Core::Memory::PageTracker& PageTracker();
+
 private:
+    friend class Core::Memory::PageTracker;
+
     Core::System& system;
 
     struct Impl;

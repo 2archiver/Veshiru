@@ -270,8 +270,32 @@ void RemoveTransferableShaderCache(u64 program_id, GameListRemoveTarget target) 
                     shader_cache_folder_path, "vulkan_used",
                     VideoCommon::VulkanPipelineCacheVersion));
             }
-            return had_log && cleared == PipelineCacheClear::Missing ? PipelineCacheClear::Cleared
-                                                                     : cleared;
+            bool had_nvn = false;
+            bool nvn_ok = true;
+            const auto remove_nvn_in = [&](const std::filesystem::path& dir) {
+                if (!Common::FS::Exists(dir)) {
+                    return;
+                }
+                Common::FS::IterateDirEntries(
+                    dir,
+                    [&](const std::filesystem::directory_entry& entry) {
+                        const std::string name = entry.path().filename().string();
+                        if (VideoCommon::IsNvnPipelineCacheFile(name)) {
+                            had_nvn = true;
+                            nvn_ok &= Common::FS::RemoveFile(entry.path());
+                        }
+                        return true;
+                    },
+                    Common::FS::DirEntryFilter::File);
+            };
+            remove_nvn_in(shader_cache_folder_path);
+            remove_nvn_in(shader_cache_folder_path / VideoCommon::MKW_EMULATED_CACHE_SUBDIR);
+            if (!nvn_ok) {
+                return PipelineCacheClear::Failed;
+            }
+            return (had_log || had_nvn) && cleared == PipelineCacheClear::Missing
+                       ? PipelineCacheClear::Cleared
+                       : cleared;
         }
         default:
             return PipelineCacheClear::Missing;

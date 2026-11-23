@@ -45,6 +45,7 @@ add_library(core STATIC
     debugger/gdbstub.h
     debugger/gdbstub_arch.cpp
     debugger/gdbstub_arch.h
+    debugger/mapped_range_hook.h
     debugger/nx2_debug_server.cpp
     debugger/nx2_debug_server.h
     debugger/nx2_debug_tools.cpp
@@ -401,6 +402,43 @@ add_library(core STATIC
     hle/kernel/svc_results.h
     hle/kernel/svc_types.h
     hle/result.h
+    hle/nvn/aapcs64.h
+    hle/nvn/bridge.cpp
+    hle/nvn/bridge.h
+    hle/nvn/config.h
+    hle/nvn/dynsym.cpp
+    hle/nvn/dynsym.h
+    hle/nvn/function_table.cpp
+    hle/nvn/function_table.h
+    hle/nvn/functions_buffer.cpp
+    hle/nvn/functions_cmdbuf.cpp
+    hle/nvn/functions_cmdbuf_bind.cpp
+    hle/nvn/functions_device.cpp
+    hle/nvn/functions_dlss.cpp
+    hle/nvn/functions_event.cpp
+    hle/nvn/functions_native_image.cpp
+    hle/nvn/functions_nv.cpp
+    hle/nvn/functions_pool.cpp
+    hle/nvn/functions_program.cpp
+    hle/nvn/functions_queue.cpp
+    hle/nvn/functions_sampler.cpp
+    hle/nvn/functions_state.cpp
+    hle/nvn/functions_sync.cpp
+    hle/nvn/functions_texture.cpp
+    hle/nvn/functions_window.cpp
+    hle/nvn/hle_call.h
+    hle/nvn/hle_running.h
+    hle/nvn/hle_runtime.cpp
+    hle/nvn/hle_runtime.h
+    hle/nvn/present_pacing.h
+    hle/nvn/sdk_device_info.cpp
+    hle/nvn/sdk_device_info.h
+    hle/nvn/sdk_dlss_layout.cpp
+    hle/nvn/sdk_dlss_layout.h
+    hle/nvn/sdk_impl_table.cpp
+    hle/nvn/sdk_impl_table.h
+    hle/nvn/thunk_encoding.cpp
+    hle/nvn/thunk_encoding.h
     hle/service/acc/acc.cpp
     hle/service/acc/acc.h
     hle/service/acc/async_context.cpp
@@ -1068,12 +1106,14 @@ add_library(core STATIC
     hle/service/nx2_streamplay.h
     hle/service/nx2_stub_interface.h
     hle/service/nx2_gsv.h
+    hle/service/nx2_native_image_directory.h
     hle/service/nx2_fence_action.h
     hle/service/nx2_frame_interval.h
     hle/service/nx2_movie_clock.h
     hle/service/nx2_video_input_queue.h
     hle/service/nx2_image_layout.h
     hle/service/nx2_present_pacer.h
+    hle/service/nx2_present_queue.h
     hle/service/nx2_video_ready.h
     hle/service/services.cpp
     hle/service/services.h
@@ -1208,6 +1248,10 @@ add_library(core STATIC
     memory/dmnt_cheat_types.h
     memory/dmnt_cheat_vm.cpp
     memory/dmnt_cheat_vm.h
+    memory/page_tracker.h
+    memory/page_tracker_state.cpp
+    memory/page_tracker_state.h
+    memory/read_traps.h
     perf_stats.cpp
     perf_stats.h
     reporter.cpp
