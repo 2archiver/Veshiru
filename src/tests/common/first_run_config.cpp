@@ -121,8 +121,11 @@ void CheckLegacyProfile() {
     CHECK(values.scaling_filter.GetValue() == Settings::ScalingFilter::ScaleForce);
     CHECK(values.gpu_accuracy.GetValue() == Settings::GpuAccuracy::High);
     CHECK(values.nvdec_emulation.GetValue() == Settings::NvdecEmulation::Cpu);
-    CHECK_FALSE(values.async_presentation.GetValue());
-    CHECK_FALSE(values.use_asynchronous_shaders.GetValue());
+    // Unseeded configs fall back to the built-in defaults, whatever this build sets them to
+    // (2.9 turned both on).
+    CHECK(values.async_presentation.GetValue() == values.async_presentation.GetDefault());
+    CHECK(values.use_asynchronous_shaders.GetValue() ==
+          values.use_asynchronous_shaders.GetDefault());
 }
 
 void CheckUnchangedProfile() {
