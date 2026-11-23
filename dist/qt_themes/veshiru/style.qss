@@ -63,6 +63,16 @@ QLabel:disabled {
     color: #4A6180;
 }
 
+/* The per-game properties banner: what the dialog overrides, in plain words. */
+QLabel#PerGameBanner {
+    color: #B3C8DE;
+    background-color: rgba(79, 168, 255, 0.10);
+    border: 1px solid #1A3355;
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin: 0 0 6px 0;
+}
+
 /* Menus ----------------------------------------------------------------- */
 
 QMenuBar {

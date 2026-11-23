@@ -28,6 +28,15 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
   `pool_table_reconciled` / `pool_table_unresolved` join the recorder rows of the unsupported TSV.
   See the NVN `DESIGN.md`, "Guest-written descriptor tables".
 
+### Added
+
+- **Simpler per-game properties (2.9 UI overhaul).** The per-game dialog now opens with a plain
+  words banner ("changes here override your global configuration for this game only…"), every
+  tab carries a one-line tooltip saying what it holds, and a new **Reset to Global** button puts
+  every override for the game back on its global value in one confirmed click (driving each
+  widget's own restore path; Add-Ons and input profiles untouched). The banner is styled by the
+  Veshiru theme (`QLabel#PerGameBanner`).
+
 ### Changed
 
 - **Optimized defaults for everyone (2.9).** New global defaults, the first-run profile
