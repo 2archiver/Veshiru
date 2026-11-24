@@ -1091,8 +1091,8 @@ TEST_CASE("NVN HLE choice: the bridge configuration follows the setting", "[nvn]
     SetEnvironment("EDEN_NX2_NVN_HLE", "");
     const bool was_switch2 = Settings::CurrentProgramIsSwitch2();
     const auto setting = Settings::values.graphics_path.GetValue();
-    // 2.9 ships the VTX-HLE path as the default; this case sets the value explicitly below.
-    REQUIRE(Settings::values.graphics_path.GetDefault() == Settings::GraphicsPath::Hle);
+    // 3.1 ships the Emulated GPU path as the default; this case sets VTX-HLE explicitly below.
+    REQUIRE(Settings::values.graphics_path.GetDefault() == Settings::GraphicsPath::Emulated);
     Settings::values.graphics_path.SetValue(Settings::GraphicsPath::Hle);
 
     Settings::SetCurrentProgramIsSwitch2(true);

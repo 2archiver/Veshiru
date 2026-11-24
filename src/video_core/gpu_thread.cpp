@@ -12,6 +12,7 @@
 
 #include "common/assert.h"
 #include "common/dkb_cpu_trace.h"
+#include "common/game_presets.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -160,6 +161,15 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                                 break;
                             }
                         } while (until < poll_end);
+                    } else if (Settings::GetCurrentProgramID() ==
+                               Settings::MarioKartWorldProgramId) {
+                        // Mario Kart World releases pending channel semaphores via plain guest
+                        // CPU stores that do not signal Nx2PendingWake: yielding avoids Windows
+                        // timer-quantum oversleeps while still handing the core back to the OS.
+                        VideoCommon::Count(acquire_stats.front_sleeps);
+                        last_wait = WaitEnd::SleepTimedOut;
+                        std::this_thread::yield();
+                        woken = wake.Poll(std::chrono::steady_clock::now());
                     } else {
                         VideoCommon::Count(acquire_stats.front_sleeps);
                         last_wait = WaitEnd::SleepTimedOut;

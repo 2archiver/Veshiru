@@ -8,6 +8,83 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-24
+
+### Changed
+
+- **Defaults: `GraphicsPath::Emulated` (`SPLIT=2`), `VSyncMode::Mailbox`, `use_video_framerate`,
+  and `mkw_dynamic_fps`.** On the 4 GB GTX 1650 reference machine (`v22eshiru_log.txt`), running
+  Mario Kart World on `VTX-HLE` (`graphics_path=1`) allocated 2.57 GiB of `DeviceLocal` memory
+  and 1.24 GiB of `HostVisible` staging with no eviction path on the VTX-HLE image pool, spilling
+  into shared PCIe RAM and capping race gameplay at 29.7 FPS (`gpu=31.9 ms`, `cmd_submit=14.2 ms`),
+  while `VSyncMode::Fifo` (`vsync_mode=2`) quantized sub-60 Hz frames down to 30 Hz. Defaulting
+  `graphics_path` to `GraphicsPath::Emulated` routes Switch 2 rendering through the `SPLIT=2`
+  two-thread Maxwell/Ampere path and `TextureCache`'s 4 GB VRAM garbage collector and sparse ASTC
+  mip trimming (`satsuma_log.txt`: 53–61 FPS in the same race on the same GTX 1650). Defaulting
+  `vsync_mode` to `VSyncMode::Mailbox`, `use_video_framerate` to `true`, and `mkw_dynamic_fps` to
+  `true` removes the 30 Hz VSync step-down, paces `Nx2PresentPacer` to `nvnWindowSetPresentInterval`
+  during 30 FPS menus/cutscenes, and keeps Mario Kart World's dynamic frame-delta scaling active
+  without slowing simulation when a frame misses 16.67 ms (`src/common/settings.h`,
+  `src/common/recommended_settings.h`, `src/frontend_common/config.cpp`).
+- **Mario Kart World dynamic FPS patch reaches `GraphicsPath::Emulated`.** `PatchMarioKartWorld30Fps`
+  in `src/core/loader/nso.cpp` previously gated `mkw_dynamic_fps` behind `nvn_bridge_enabled`,
+  leaving the dynamic delta-time patch inert on `GraphicsPath::Emulated`. It now activates whenever
+  `!mkw_30 && mkw_dynamic_fps` on Mario Kart World (`0400C3F00006E000`).
+
+### Performance
+
+- **Native 64 KiB uniform bank page-diff tracker and streamed-uniform fast-out.** Switch 2 titles
+  bind 64 KiB constant buffer banks (`(*uniform_buffer_sizes)[stage][index] == 0x10000`) tens of
+  thousands of times per frame. Previously, `BindHostGraphicsUniformBuffer` ran the bank scan
+  before `use_fast_buffer` (uploading 64 KiB even when the draw streamed a 256 B slice) and
+  re-marked the entire bank CPU-dirty every frame. `BindHostGraphicsUniformBuffer` now exits
+  through `use_fast_buffer` first, and `CheckNativeBankPagesTracked` maintains per-page 4 KiB
+  snapshots (`native_bank_pages`, invalidated on `DeleteBuffer`), comparing guest memory via
+  inline SSE2 `Nx2BytesEqual` (`src/video_core/buffer_cache/nx2_bytes_equal.h`) only when
+  lock-free write filters (`g_collected_write_pages`, `g_buffer_write_pages`), `memory_tracker`,
+  a 16-frame hot window, or the once-per-frame safety check ask for it, then coalescing changed
+  slices into a single staged `CopyBuffer` (`FlushNativeBankUploads`).
+- **Lock-free Switch 2 CPU write collection in `Memory::WriteToRasterizer`.** When `g_nx2_ampere`
+  is active and `Nx2MayBeGpuWritten` is clear, `WriteToRasterizer` now collects page writes
+  lock-free (`collect_unasked = true`) and marks `g_collected_write_pages` without taking the
+  buffer-cache mutex (`src/core/memory.cpp`, `src/video_core/page_filter.h`).
+- **`nx2:gsv` present and video decoder sessions run on dedicated `ServerManager` threads.**
+  `OpenViSession` (`Nx2Present`) and `OpenVideoSession` (`Nx2Video` / `INx2VideoDecoderService`)
+  now spin up isolated guest-core `ServerManager` threads via `RunOnGuestCoreProcess`, preventing
+  `WaitSystemEvent` presentation waits and `AppendFrame` NVDEC decode bursts from head-of-line
+  blocking `nx2:gsv` IPC on the main service manager (`src/core/hle/service/nx2_gsv.h`).
+- **BufferCache overlap chain cutting (`>= 128 MiB`), dead-join-copy skip, and per-frame LRU
+  touch guard.** `ResolveOverlaps` now cuts pre-existing buffers `>= 128 MiB` (created in an
+  earlier frame) when the shared edge overlap is at most one `CACHING_PAGESIZE` (64 KiB),
+  downloading any GPU-modified ranges before deleting the oversized neighbor instead of merging
+  adjacent heap blocks into multi-hundred-MiB allocations; same-frame creations tracked in
+  `frame_created_buffers` still join normally. `JoinOverlap` skips buffer-to-buffer `CopyBuffer`
+  calls (`JoinCopyIsDead` via `WordManager::IsRegionCpuModifiedOnly` /
+  `MemoryTrackerBase::IsRegionWhollyCpuModified`) when an overlapped buffer is wholly
+  CPU-modified with no GPU-written or pending-download ranges, emitting `PostCopyBarrier()` if all
+  copies were skipped. `TouchBuffer` records `lru_touched_tick` on `BufferBase` to skip redundant
+  LRU touches within the same `frame_tick`.
+- **GPU virtual-to-physical range cache and Mario Kart World pending-work yield.**
+  `MemoryManager::MaxContinuousRange` caches single-page contiguous-tail lookups in a 4,096-entry
+  `thread_local` table invalidated by `MapSerial()`, and `GPUThread::RunThread` yields rather than
+  tight-spinning while Mario Kart World waits on pending command-queue work
+  (`src/video_core/memory_manager.cpp`, `src/video_core/gpu_thread.cpp`).
+
+### Fixed
+
+- **Switch 2 per-title compute SSBO sizing and legacy Ampere timestamps.** Mario Kart World
+  (`0400C3F00006E000`) and Nintendo Switch Sports (`04008E001F098000`) pass sized NVN
+  `{address, size}` compute SSBO descriptors in constant buffers; `BindComputeStorageBuffer` now
+  sets `native_pointer = false` for both titles so small bindings are not inflated to 8 MiB and
+  written bindings larger than 8 MiB are not truncated (fixing black character/stage models in
+  Switch Sports). `StorageBufferBinding` now reads the trailing size word and honors
+  `packed_size > 8 MiB` on written native compute descriptors for Kirby Air Riders
+  (`0400F9C0231B8000`), and `UsesLegacyAmpereTimestamps` includes `SwitchSportsProgramId`
+  (`src/common/game_presets.h`, `src/video_core/gpu_timestamp.h`,
+  `src/video_core/buffer_cache/buffer_cache.h`).
+- **Tests:** unit coverage added and verified across `src/tests/common/{recommended_settings,first_run_config,game_presets}.cpp`,
+  `src/tests/nvn/bridge.cpp`, and `src/tests/video_core/{page_filter,gpu_timestamp,buffer_cache_ports}.cpp`.
+
 ## [3.0.0] - 2026-11-24
 
 ### Fixed

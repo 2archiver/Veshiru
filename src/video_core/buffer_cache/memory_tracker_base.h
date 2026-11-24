@@ -57,6 +57,16 @@ public:
         });
     }
 
+    /// True when every page of [query_cpu_addr, query_cpu_addr + query_size) is CPU-modified and
+    /// holds neither GPU-modified nor Preflushable state. Unallocated 4 MiB managers default to
+    /// all pages CPU-modified and clean on the GPU.
+    [[nodiscard]] bool IsRegionWhollyCpuModified(VAddr query_cpu_addr, u64 query_size) noexcept {
+        return !IteratePages<false>(query_cpu_addr, query_size,
+                                    [](Manager* manager, u64 offset, size_t size) {
+                                        return !manager->IsRegionCpuModifiedOnly(offset, size);
+                                    });
+    }
+
     /// Returns true if a region has been modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(VAddr query_cpu_addr, u64 query_size) noexcept {
         return IteratePages<false>(query_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {

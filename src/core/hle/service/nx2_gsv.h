@@ -102,7 +102,8 @@ namespace Service {
 // works from a domain too, for callers that want a raw session handle.
 template <class T>
 inline Kernel::KClientSession* CreateRawSession(Core::System& system, HLERequestContext& ctx,
-                                                std::shared_ptr<T> iface) {
+                                                std::shared_ptr<T> iface,
+                                                ServerManager* server = nullptr) {
     auto& kernel = system.Kernel();
     ASSERT(Kernel::GetCurrentProcess(kernel).GetResourceLimit()->Reserve(
         kernel, Kernel::LimitableResource::SessionCountMax, 1));
@@ -111,10 +112,10 @@ inline Kernel::KClientSession* CreateRawSession(Core::System& system, HLERequest
     session->Initialize(kernel, nullptr, 0);
     Kernel::KSession::Register(kernel, session);
 
-    auto manager =
-        std::make_shared<SessionRequestManager>(kernel, ctx.GetManager()->GetServerManager());
+    auto& server_manager = server ? *server : ctx.GetManager()->GetServerManager();
+    auto manager = std::make_shared<SessionRequestManager>(kernel, server_manager);
     manager->SetSessionHandler(std::move(iface));
-    ctx.GetManager()->GetServerManager().RegisterSession(&session->GetServerSession(), manager);
+    server_manager.RegisterSession(&session->GetServerSession(), manager);
     return &session->GetClientSession();
 }
 
@@ -143,8 +144,9 @@ inline void TipcHandshake(HLERequestContext& ctx, std::string_view session) {
 
 // Replies with success and a copied handle to a new session served by `iface`.
 template <class T>
-inline void ReturnRawSession(Core::System& system, HLERequestContext& ctx, std::shared_ptr<T> iface) {
-    auto* client = CreateRawSession(system, ctx, std::move(iface));
+inline void ReturnRawSession(Core::System& system, HLERequestContext& ctx, std::shared_ptr<T> iface,
+                             ServerManager* server = nullptr) {
+    auto* client = CreateRawSession(system, ctx, std::move(iface), server);
     IPC::ResponseBuilder rb{ctx, 2, 1, 0};
     rb.Push(ResultSuccess);
     rb.PushCopyObjects(ctx, *client);
@@ -1779,6 +1781,8 @@ struct Nx2NativeObjects {
     std::map<u32, Memory> memories;
     std::map<u32, Image> images;
     std::optional<VideoTrace> last_video_write;
+    ServerManager* present_server{};
+    ServerManager* video_server{};
     u32 next_memory{1};
     u32 next_image{1};
 
@@ -4557,7 +4561,8 @@ private:
                  ctx.GetCommand(), w[2], w[3], w[4]);
         ReturnRawSession(system, ctx,
                          std::make_shared<INx2VideoSession>(system, m_objects,
-                                                            second ? "nx2:vdec2" : "nx2:vdec"));
+                                                            second ? "nx2:vdec2" : "nx2:vdec"),
+                         OwnServer(m_objects->video_server, "Nx2Video"));
     }
 
     // nn::camera::sdk::CreateCameraContext sends 601() then 602(u64 1), which returns the camera
@@ -5147,6 +5152,22 @@ private:
         TipcReplyWords(ctx, {});
     }
 
+    // Isolates blocking HLE sessions (nx2:vi2's PaceToVblank sleep and nx2:vdecsvc's video
+    // decoding) onto dedicated ServerManager threads so they never stall nx2:gsv, nx2:gpu, or
+    // nx2:syncpt IPC on the AM server thread.
+    ServerManager* OwnServer(ServerManager*& slot, const char* name) {
+        std::scoped_lock lk{m_objects->mutex};
+        if (!slot) {
+            auto server = std::make_unique<ServerManager>(system);
+            slot = server.get();
+            system.Kernel().RunOnGuestCoreProcess(
+                std::string{name}, [owned = std::move(server)]() mutable {
+                    ServerManager::RunServer(std::move(owned));
+                });
+        }
+        return slot;
+    }
+
     void OpenViSession(HLERequestContext& ctx) {
         // Used by nn::vi2::sdk::Initialize; takes one u64, returns a session (handle at word 3,
         // result at word 4).
@@ -5154,7 +5175,8 @@ private:
         const size_t data = TipcDataOffset(cmd_buf);
         LOG_WARNING(Service, "(STUBBED) nx2:gsv TIPC 305 arg={:#x}, returning a nx2:vi2 session",
                     u64{cmd_buf[data]} | (u64{cmd_buf[data + 1]} << 32));
-        ReturnRawSession(system, ctx, std::make_shared<INx2Vi2Session>(system, m_objects));
+        ReturnRawSession(system, ctx, std::make_shared<INx2Vi2Session>(system, m_objects),
+                         OwnServer(m_objects->present_server, "Nx2Present"));
     }
 
     void OpenGpuSession(HLERequestContext& ctx) {

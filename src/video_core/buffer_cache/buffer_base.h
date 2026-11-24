@@ -128,6 +128,8 @@ public:
         write_tick = write_tick_;
     }
 
+    u64 lru_touched_tick = ~u64{0};
+
 private:
     VAddr cpu_addr = 0;
     BufferFlagBits flags{};

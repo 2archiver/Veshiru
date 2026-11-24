@@ -63,10 +63,38 @@ public:
         return false;
     }
 
+    /// Atomically tests and clears the single 4 KiB page containing `address`.
+    /// Ranges past the 36-bit space return true so callers conservatively inspect them.
+    [[nodiscard]] bool Take(u64 address) {
+        const u64 page = address >> PageBits;
+        if (page >= NumWords * 64) {
+            return true;
+        }
+        const u64 bit = u64{1} << (page % 64);
+        auto& word = words[page / 64];
+        if ((word.load(std::memory_order_relaxed) & bit) == 0) {
+            return false;
+        }
+        return (word.fetch_and(~bit, std::memory_order_relaxed) & bit) != 0;
+    }
+
+    /// Clears every tracked page bit (called when guest memory is reset for a new session).
+    void Clear() {
+        for (u64 i = 0; i < NumWords; ++i) {
+            words[i].store(0, std::memory_order_relaxed);
+        }
+    }
+
 private:
     static constexpr u64 PageBits = 12;
     static constexpr u64 NumWords = (u64{1} << (36 - PageBits)) / 64; // 2 MiB of bits
     std::unique_ptr<std::atomic<u64>[]> words;
 };
+
+/// 4 KiB device pages for which guest CPU writes were collected since the page was last taken.
+inline PageFilter g_collected_write_pages{};
+
+/// 4 KiB device pages written by GPU downloads or engine memory writes since last taken.
+inline PageFilter g_buffer_write_pages{};
 
 } // namespace VideoCommon

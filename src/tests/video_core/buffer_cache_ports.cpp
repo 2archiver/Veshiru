@@ -117,6 +117,10 @@ struct Runtime {
     }
     void CopyBuffer(Buffer& dst, Buffer& src, std::span<const VideoCommon::BufferCopy> copies,
                     bool) {
+        ++join_copies;
+        for (const auto& copy : copies) {
+            join_copy_bytes += copy.size;
+        }
         CopyBuffer(dst, &src, copies, true, true);
     }
     void CopyBuffer(Buffer& dst, Buffer* src, std::span<const VideoCommon::BufferCopy> copies, bool,
@@ -185,8 +189,13 @@ struct Runtime {
         Finish();
     }
     void PreCopyBarrier() {}
-    void PostCopyBarrier() {}
+    void PostCopyBarrier() {
+        ++post_copy_barriers;
+    }
     void BindUniformBuffer(Buffer&, u32, u32) {}
+    void BindComputeStorageBuffer(u32, Buffer&, u32, u32 size, bool) {
+        last_compute_ssbo_size = size;
+    }
     std::span<u8> BindMappedUniformBuffer(size_t, u32, u32 size) {
         stream.resize(size);
         return stream;
@@ -194,8 +203,9 @@ struct Runtime {
 
     u32 alignment{256};
     u32 allocations{}, downloads{}, download_calls{}, uploads{}, finishes{}, waits{};
+    u32 join_copies{}, post_copy_barriers{}, last_compute_ssbo_size{};
     u32 host_read_barriers{}, host_read_waits{}, queued_host_reads{};
-    u64 download_bytes{}, upload_bytes{}, waited_tick{};
+    u64 download_bytes{}, upload_bytes{}, join_copy_bytes{}, waited_tick{};
     u64 submitted_tick{}, completed_tick{};
     std::vector<std::unique_ptr<Buffer>> stagings;
     std::vector<u8> stream;
@@ -374,7 +384,8 @@ struct BufferCacheTestAccess {
         channel.compute_storage_write_marks[index] = write_mark;
     }
     static void NextFrame(Cache& cache) {
-        cache.native_indirect_uniforms_this_frame.clear();
+        cache.frame_created_buffers.clear();
+        ++cache.frame_tick;
     }
     static u32 CpuMarks(Cache& cache) {
         return cache.memory_tracker.cpu_marks;
@@ -447,6 +458,27 @@ struct BufferCacheTestAccess {
     static u64 BufferBytes(Cache& cache) {
         return cache.buffer_bytes;
     }
+    static BufferId ObtainCpu(Cache& cache, DAddr address, u32 size) {
+        return cache.FindBuffer(address, size, false);
+    }
+    static bool Contains(Cache& cache, BufferId id) {
+        return cache.slot_buffers.contains(id);
+    }
+    static Binding BindComputeStorage(Cache& cache, BufferCacheChannelInfo& channel, size_t index,
+                                      GPUVAddr cbuf_addr, bool written) {
+        cache.channel_state = &channel;
+        cache.maxwell3d = &channel.maxwell3d;
+        cache.kepler_compute = &channel.kepler_compute;
+        cache.gpu_memory = &channel.gpu_memory;
+        channel.kepler_compute.SetNativeMacroMode(reinterpret_cast<Tegra::MacroEngine*>(1), {});
+        channel.kepler_compute.launch_description.const_buffer_enable_mask.Assign(1U);
+        channel.kepler_compute.launch_description.const_buffer_config[0].address_low =
+            static_cast<u32>(cbuf_addr);
+        channel.kepler_compute.launch_description.const_buffer_config[0].address_high.Assign(
+            static_cast<u32>(cbuf_addr >> 32));
+        cache.BindComputeStorageBuffer(index, 0, 0, written);
+        return channel.compute_storage_buffers[index];
+    }
     static u64 CachingPageSize() {
         return Cache::CACHING_PAGESIZE;
     }
@@ -499,7 +531,7 @@ struct BasicFixture {
         system.Initialize();
         process = std::make_unique<Kernel::KProcess>(system.Kernel());
         auto& table = process->GetPageTable().GetImpl();
-        table.Resize(24, 12);
+        table.Resize((mapped_bytes + 0x10000) > (1ULL << 24) ? 32 : 24, 12);
         bytes = physical.GetPointerFromRaw<u8>(0x10000);
         std::memset(bytes, 0, mapped_bytes);
         const u64 num_pages = mapped_bytes >> 12;
@@ -991,9 +1023,56 @@ TEST_CASE("Native uniform uploads stop at holes and keep unaligned bank boundari
     f.device.Map(0x22000, 0x22000, 0x1000, f.asid);
     Access::NextFrame(*f.cache);
     Access::Uniform(*f.cache, channel, id, 0x20123, 0x10000);
-    REQUIRE(f.runtime.upload_bytes == 0x11edd);
+    // Pages [0x20123, 0x22000) did not change and are skipped; only newly mapped [0x22000, 0x30123)
+    // is uploaded (0x1edd + 0xe123 == 0x10000 total).
+    REQUIRE(f.runtime.upload_bytes == 0x10000);
     REQUIRE(data[0x10122] == 0x6b);
     REQUIRE(data[0x10123] == 0);
+}
+
+TEST_CASE("Native uniform bank tracker skips unchanged frames, uploads changed pages, and skips streamed binds",
+          "[buffer_ports]") {
+    Fixture f;
+    f.memory->EnableNativeTiling();
+    Tegra::Control::ChannelState state{0};
+    state.memory_manager = &*f.memory;
+    state.payload.emplace(f.system, *f.memory, state);
+    VideoCommon::BufferCacheChannelInfo channel{state};
+    VideoCommon::UniformBufferSizes sizes{};
+    sizes[0][0] = 0x10000;
+    channel.uniform_buffer_sizes = &sizes;
+    const auto id = Access::Add(*f.cache, 0x20000, 0x10000);
+    std::memset(f.bytes + 0x10000, 0x11, 0x10000);
+
+    // Frame 0: initial 64 KiB upload.
+    Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
+    REQUIRE(f.runtime.uploads == 1);
+    REQUIRE(f.runtime.upload_bytes == 0x10000);
+
+    // Frame 1 with no guest changes: 0 bytes uploaded.
+    Access::NextFrame(*f.cache);
+    Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
+    REQUIRE(f.runtime.uploads == 1);
+    REQUIRE(f.runtime.upload_bytes == 0x10000);
+
+    // Mid-frame collected CPU write to a single 4 KiB page uploads only that page on the next draw.
+    std::memset(f.bytes + 0x13000, 0x77, 0x1000);
+    VideoCommon::g_collected_write_pages.Mark(0x23000, 0x1000);
+    Access::Uniform(*f.cache, channel, id, 0x20000, 0x10000);
+    REQUIRE(f.runtime.uploads == 2);
+    REQUIRE(f.runtime.upload_bytes == 0x11000);
+    REQUIRE(Access::Get(*f.cache, id).bytes[0x3000] == 0x77);
+    REQUIRE(Access::CpuMarks(*f.cache) == 0);
+
+    // Streamed small uniform (size <= uniform_buffer_skip_cache_size) skips host bank upload even
+    // while shader uniform_buffer_sizes[0][0] == 0x10000 (native_bank == true).
+    channel.uniform_buffer_skip_cache_size = 4096;
+    std::memset(f.bytes + 0x14000, 0x99, 256);
+    VideoCommon::g_collected_write_pages.Mark(0x24000, 256);
+    Access::Uniform(*f.cache, channel, id, 0x24000, 256);
+    REQUIRE(f.runtime.uploads == 2);
+    REQUIRE(f.runtime.stream.size() == 256);
+    REQUIRE(f.runtime.stream[0] == 0x99);
 }
 
 TEST_CASE("Downloads keep CPU writes collected and not yet applied", "[buffer_ports]") {
@@ -2978,3 +3057,129 @@ TEST_CASE("Speculative read downloads cap each flush to a forward-biased window"
     REQUIRE(f.bytes[Base - 0x10000] == 0x5a);
     REQUIRE_FALSE(Access::Pending(*f.cache, Base, TotalSize));
 }
+
+TEST_CASE("JoinOverlap skips dead CPU-modified copies and preserves GPU-modified bytes",
+          "[buffer_ports]") {
+    Fixture f{0x80000};
+
+    // Two adjacent CACHING_PAGESIZE buffers whose ranges remain wholly CPU-modified (never
+    // uploaded or GPU-written): joining them skips both buffer-to-buffer CopyBuffer calls and
+    // still emits PostCopyBarrier.
+    const auto dead_a = Access::Register(*f.cache, 0x10000, 0x10000);
+    const auto dead_b = Access::Register(*f.cache, 0x20000, 0x10000);
+    f.runtime.join_copies = 0;
+    f.runtime.post_copy_barriers = 0;
+
+    const auto joined_dead = Access::ObtainCpu(*f.cache, 0x10000, 0x20000);
+    REQUIRE_FALSE(Access::Contains(*f.cache, dead_a));
+    REQUIRE_FALSE(Access::Contains(*f.cache, dead_b));
+    REQUIRE(Access::Contains(*f.cache, joined_dead));
+    REQUIRE(f.runtime.join_copies == 0);
+    REQUIRE(f.runtime.post_copy_barriers == 1);
+
+    // When one overlap has GPU-modified bytes, JoinOverlap copies that buffer while still skipping
+    // the wholly CPU-modified neighbor.
+    const auto gpu_buf = Access::Add(*f.cache, 0x40000, 0x10000);
+    const auto cpu_buf = Access::Register(*f.cache, 0x50000, 0x10000);
+    std::ranges::fill(Access::Get(*f.cache, gpu_buf).bytes, u8{0x77});
+    Access::MarkWritten(*f.cache, gpu_buf, 0x40000, 0x10000);
+
+    f.runtime.join_copies = 0;
+    f.runtime.join_copy_bytes = 0;
+    const auto joined_live = Access::ObtainCpu(*f.cache, 0x40000, 0x20000);
+    REQUIRE_FALSE(Access::Contains(*f.cache, gpu_buf));
+    REQUIRE_FALSE(Access::Contains(*f.cache, cpu_buf));
+    REQUIRE(f.runtime.join_copies == 1);
+    REQUIRE(f.runtime.join_copy_bytes == 0x10000);
+    REQUIRE(Access::Get(*f.cache, joined_live).bytes[0] == 0x77);
+}
+
+TEST_CASE("ResolveOverlaps cuts cross-frame >=128 MiB edge overlaps instead of merging",
+          "[buffer_ports]") {
+    constexpr DAddr Base = 0x20000;
+    constexpr u32 LargeSize = 128U << 20;
+    constexpr u32 Page = 0x10000; // CACHING_PAGESIZE
+
+    Fixture f{LargeSize + 0x80000};
+
+    // Frame 1: creating a 128 MiB buffer records it in frame_created_buffers, so a same-frame
+    // CACHING_PAGESIZE edge overlap still joins instead of thrashing same-frame allocations.
+    const auto first_large = Access::ObtainCpu(*f.cache, Base, LargeSize);
+    REQUIRE(Access::Get(*f.cache, first_large).SizeBytes() == LargeSize);
+    const auto same_frame = Access::ObtainCpu(*f.cache, Base + LargeSize - Page, 2 * Page);
+    REQUIRE(Access::Get(*f.cache, same_frame).SizeBytes() == LargeSize + Page);
+
+    // Frame 2: frame_created_buffers is cleared; a <= CACHING_PAGESIZE overlap at the tail of the
+    // >= 128 MiB buffer downloads any GPU-modified bytes and cuts the old buffer instead of
+    // growing an even larger merged buffer.
+    Access::NextFrame(*f.cache);
+    const DAddr dirty_page = Base + 0x4000;
+    Access::Upload(*f.cache, same_frame, dirty_page, 0x1000);
+    std::fill_n(Access::Get(*f.cache, same_frame).bytes.begin() + 0x4000, 0x1000, u8{0xac});
+    Access::MarkWritten(*f.cache, same_frame, dirty_page, 0x1000);
+
+    const DAddr tail_overlap = Base + LargeSize;
+    const auto cut_tail = Access::ObtainCpu(*f.cache, tail_overlap, 2 * Page);
+    f.runtime.Finish();
+
+    // DeleteBuffer(same_frame) frees its slot before CreateBuffer inserts cut_tail, so SlotVector
+    // reuses that slot for the new 2-page buffer while total cached bytes drop from >128 MiB to
+    // 2 * CACHING_PAGESIZE.
+    REQUIRE(cut_tail == same_frame);
+    REQUIRE(Access::Get(*f.cache, cut_tail).CpuAddr() == tail_overlap);
+    REQUIRE(Access::Get(*f.cache, cut_tail).SizeBytes() == 2 * Page);
+    REQUIRE(Access::BufferBytes(*f.cache) == 2 * Page);
+    REQUIRE(f.bytes[dirty_page - 0x10000] == 0xac);
+}
+
+TEST_CASE("Per-title compute storage buffer sizing honors Switch 2 title contracts",
+          "[buffer_ports]") {
+    struct ProgramIdScope {
+        explicit ProgramIdScope(u64 id)
+            : prev_ampere{Tegra::g_nx2_ampere}, prev_id{Settings::GetCurrentProgramID()} {
+            Tegra::g_nx2_ampere = true;
+            Settings::SetCurrentProgramID(id);
+        }
+        ~ProgramIdScope() {
+            Tegra::g_nx2_ampere = prev_ampere;
+            Settings::SetCurrentProgramID(prev_id);
+        }
+        bool prev_ampere;
+        u64 prev_id;
+    };
+
+    Fixture f{0x1200000};
+    f.memory->Map(0x200000, 0x20000, 0x1000000, Tegra::PTEKind::PITCH, true);
+
+    Tegra::Control::ChannelState state{0};
+    state.memory_manager = &*f.memory;
+    state.payload.emplace(f.system, *f.memory, state);
+    VideoCommon::BufferCacheChannelInfo channel{state};
+
+    // Mario Kart World & Switch Sports treat compute SSBOs as sized NVN descriptors rather than
+    // bare pointers: small bindings stay exact (not inflated to 8 MiB) and written >8 MiB bindings
+    // are not truncated to 8 MiB.
+    for (const u64 title_id :
+         {Settings::MarioKartWorldProgramId, Settings::SwitchSportsProgramId}) {
+        const ProgramIdScope scope{title_id};
+        f.Descriptor(0x200000, 0x2000);
+        REQUIRE(Access::BindComputeStorage(*f.cache, channel, 0, 0x100000, false).size == 0x2000);
+
+        f.Descriptor(0x200000, 0x900000);
+        REQUIRE(Access::BindComputeStorage(*f.cache, channel, 0, 0x100000, true).size == 0x900000);
+    }
+
+    // Kirby Air Riders keeps bare-pointer semantics for small bindings while honoring packed_size
+    // > 8 MiB on written native compute pointer descriptors.
+    {
+        const ProgramIdScope scope{Settings::KirbyAirRidersProgramId};
+        f.Descriptor(0x200000, 0x2000);
+        REQUIRE(Access::BindComputeStorage(*f.cache, channel, 0, 0x100000, false).size ==
+                0x800000);
+
+        f.Descriptor(0x200000, 0x900000);
+        REQUIRE(Access::BindComputeStorage(*f.cache, channel, 0, 0x100000, true).size ==
+                0x900000);
+    }
+}
+

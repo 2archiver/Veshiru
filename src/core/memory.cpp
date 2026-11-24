@@ -40,8 +40,10 @@
 #include "video_core/gpu.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_fast_draw.h"
+#include "video_core/page_filter.h"
 #include "video_core/rasterizer_download_area.h"
 
 namespace Core::Memory {
@@ -1168,33 +1170,38 @@ struct Memory::Impl final : PageClaimSink {
         constexpr size_t sys_core = Core::Hardware::NUM_CPU_CORES - 1;
         const size_t core = (std::min)(system.GetCurrentHostThreadID(),
                                      sys_core); // any other calls threads go to syscore.
-        if (!gpu_device_memory) [[unlikely]] {
+        if (!gpu_device_memory) {
             gpu_device_memory = &system.Host1x().MemoryManager();
         }
-        if (!gpu_device_memory->IsPhysicalPointer(p)) [[unlikely]] {
+        if (!gpu_device_memory->IsPhysicalPointer(p)) {
             ReportForeignPointer(v_address, p);
             return;
         }
         // Guard on sys_core;
-        if (core == sys_core) [[unlikely]] {
+        if (core == sys_core) {
             sys_core_guard.lock();
         }
         SCOPE_EXIT {
-            if (core == sys_core) [[unlikely]] {
+            if (core == sys_core) {
                 sys_core_guard.unlock();
             }
         };
+        const bool nx2_ampere = Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
         gpu_device_memory->ApplyOpOnPointer(p, scratch_buffers[core], [&](DAddr address) {
             auto& current_area = rasterizer_write_areas[core];
             PAddr subaddress = address >> VESHIRU_PAGEBITS;
-            // Performance note:
-            // It may not be a good idea to assume accesses are within the same subaddress (i.e same page)
-            // It is often the case the games like to access wildly different addresses. Hence why I propose
-            // we should let the compiler just do it's thing...
             if (current_area.last_address != subaddress) {
-                // Short circuit the need to check for address/size
-                auto const do_collection = (address != 0 && size != 0)
-                    && system.GPU().OnCPUWrite(address, size);
+                if (address == 0 || size == 0) {
+                    return;
+                }
+                // On Switch 2 (SPLIT=2), pages never written by the GPU need no synchronous
+                // OnCPUWrite under BufferCache/TextureCache locks: collecting into
+                // gpu_dirty_managers applies the invalidation at the next FlushCaching without
+                // stalling guest CPU cores up to 5-6 ms behind VulkanWorker.
+                const bool collect_unasked =
+                    nx2_ampere && !Tegra::Nx2MayBeGpuWritten(address, size);
+                const bool do_collection =
+                    collect_unasked || system.GPU().OnCPUWrite(address, size);
                 if (do_collection) {
                     current_area.last_address = subaddress;
                 } else {
@@ -1205,6 +1212,7 @@ struct Memory::Impl final : PageClaimSink {
             // A download writing to guest memory here may have looked at the collected writes
             // before this one: its bytes would land over the ones stored after this returns.
             VideoCore::DownloadLanding::Await(address, size);
+            VideoCommon::g_collected_write_pages.Mark(address, size);
         });
     }
 
@@ -1271,6 +1279,8 @@ Memory::Memory(Core::System& system_) : system{system_} {
 Memory::~Memory() = default;
 
 void Memory::Reset() {
+    VideoCommon::g_collected_write_pages.Clear();
+    VideoCommon::g_buffer_write_pages.Clear();
     impl = std::make_unique<Impl>(system);
 }
 

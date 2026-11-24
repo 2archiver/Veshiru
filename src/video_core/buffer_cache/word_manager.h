@@ -296,6 +296,26 @@ struct WordManager {
         return result;
     }
 
+    /// True only when every page in [offset, offset + size) is CPU-modified and neither
+    /// GPU-modified nor Preflushable.
+    [[nodiscard]] bool IsRegionCpuModifiedOnly(u64 offset, u64 size) const noexcept {
+        const std::span<const u64> cpu_words = Span(Type::CPU);
+        const std::span<const u64> gpu_words = Span(Type::GPU);
+        const std::span<const u64> preflush_words = Span(Type::Preflushable);
+        const std::span<const u64> untracked_words = Span(Type::Untracked);
+        bool all_cpu_only = true;
+        IterateWords(offset, size, [&](size_t index, u64 mask) {
+            const u64 gpu_mask = gpu_words[index] & ~untracked_words[index];
+            if ((cpu_words[index] & mask) != mask || (gpu_mask & mask) != 0 ||
+                (preflush_words[index] & mask) != 0) {
+                all_cpu_only = false;
+                return true;
+            }
+            return false;
+        });
+        return all_cpu_only;
+    }
+
     /// @brief Returns a begin end pair with the inclusive modified region
     /// @param offset Offset in bytes from the start of the buffer
     /// @param size   Size in bytes of the region to query for modifications

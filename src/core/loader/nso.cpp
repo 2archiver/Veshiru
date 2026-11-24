@@ -213,7 +213,7 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan &&
         Settings::ResolveNvnHle().hle;
     const bool mkw_dynamic =
-        mkw_vtx_pacing ? !mkw_30 : Settings::values.mkw_dynamic_fps.GetValue();
+        !mkw_30 && (mkw_vtx_pacing || Settings::values.mkw_dynamic_fps.GetValue());
     bool mkw_dynamic_fps_patch_applied = false;
     if (mkw_main && (mkw_dynamic || mkw_30)) {
         constexpr u32 ModeLoadInsn = 0xB9421268; // ldr w8, [x19, #0x210]

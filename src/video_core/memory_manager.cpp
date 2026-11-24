@@ -19,6 +19,7 @@
 #include "video_core/guest_memory.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_perf.h"
+#include "video_core/page_filter.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/invalidation_accumulator.h"
 #include "video_core/memory_manager.h"
@@ -610,11 +611,12 @@ void MemoryManager::WriteBlockImpl(GPUVAddr gpu_dest_addr, const void* src_buffe
         if (!unsafe) {
             rasterizer->PrepareRegionWrite(dev_addr_base, copy_amount, which);
         }
-        if (u8* physical = memory.GetPointer<u8>(dev_addr_base)) [[likely]] {
+        if (u8* physical = memory.GetPointer<u8>(dev_addr_base)) {
             std::memcpy(physical, src_buffer, copy_amount);
         } else {
             memory.WriteKept(dev_addr_base, src_buffer, copy_amount);
         }
+        VideoCommon::g_buffer_write_pages.Mark(dev_addr_base, copy_amount);
         // After the copy: the buffer cache may upload the written bytes from guest memory.
         if (!unsafe) {
             rasterizer->InvalidateRegion(dev_addr_base, copy_amount, which);
@@ -629,11 +631,12 @@ void MemoryManager::WriteBlockImpl(GPUVAddr gpu_dest_addr, const void* src_buffe
         }
         u8* const physical = IsBigPageContinuous(page_index) ? memory.GetPointer<u8>(dev_addr_base)
                                                              : nullptr;
-        if (physical != nullptr) [[likely]] {
+        if (physical != nullptr) {
             std::memcpy(physical, src_buffer, copy_amount);
         } else {
             memory.WriteBlockUnsafe(dev_addr_base, src_buffer, copy_amount);
         }
+        VideoCommon::g_buffer_write_pages.Mark(dev_addr_base, copy_amount);
         if (!unsafe) {
             rasterizer->InvalidateRegion(dev_addr_base, copy_amount, which);
         }
@@ -690,6 +693,7 @@ void MemoryManager::WriteConstantBufferData(DAddr device_addr, const void* data,
         address += amount;
         src += amount;
     }
+    VideoCommon::g_buffer_write_pages.Mark(device_addr, size);
     if (!constant_buffer_writes.empty()) {
         auto& [last, last_size] = constant_buffer_writes.back();
         if (device_addr <= last + last_size && last <= device_addr + size) {
@@ -770,15 +774,39 @@ bool MemoryManager::IsMemoryDirty(GPUVAddr gpu_addr, size_t size,
 
 size_t MemoryManager::MaxContinuousRange(GPUVAddr gpu_addr, size_t size) const {
     // Native storage buffers ask this for up to 8 MiB on each bind, ~90,000 times a second in
-    // Ocarina's Kokiri village: answer from the runs kept at map time instead of walking pages.
+    // Ocarina's Kokiri village: cache each 4 KiB page's run end per mapping generation, and fall
+    // back to binary-searching the runs snapshot on a miss.
+    struct PageCacheEntry {
+        size_t owner;
+        u64 serial;
+        u64 page;
+        GPUVAddr run_end;
+    };
+    thread_local std::array<PageCacheEntry, 4096> page_cache{};
+
     size_t result = 0;
     if (IsWithinGPUAddressRange(gpu_addr) && size <= address_space_size - gpu_addr) {
-        const auto& runs = CurrentSnapshot().runs;
-        const auto it = std::upper_bound(
-            runs.begin(), runs.end(), gpu_addr,
-            [](GPUVAddr address, const MappingSnapshot::Run& run) { return address < run.begin; });
-        if (it != runs.begin() && gpu_addr < std::prev(it)->end) {
-            result = (std::min<size_t>)(size, std::prev(it)->end - gpu_addr);
+        const u64 serial = map_serial.load(std::memory_order_acquire);
+        const u64 page = gpu_addr >> cpu_page_bits;
+        PageCacheEntry& cached = page_cache[(page ^ (page >> 12)) & (page_cache.size() - 1)];
+        if (cached.owner == unique_identifier + 1 && cached.serial == serial &&
+            cached.page == page) {
+            if (cached.run_end > gpu_addr) {
+                result = (std::min<size_t>)(size, cached.run_end - gpu_addr);
+            }
+        } else {
+            const auto& runs = CurrentSnapshot().runs;
+            const auto it = std::upper_bound(
+                runs.begin(), runs.end(), gpu_addr,
+                [](GPUVAddr address, const MappingSnapshot::Run& run) {
+                    return address < run.begin;
+                });
+            const GPUVAddr run_end =
+                (it != runs.begin() && gpu_addr < std::prev(it)->end) ? std::prev(it)->end : 0;
+            cached = {unique_identifier + 1, serial, page, run_end};
+            if (run_end > gpu_addr) {
+                result = (std::min<size_t>)(size, run_end - gpu_addr);
+            }
         }
     }
     if (VideoCommon::Nx2Perf::Verify()) {

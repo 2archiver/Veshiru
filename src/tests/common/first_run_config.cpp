@@ -106,7 +106,10 @@ void CheckFreshProfile() {
     CHECK(values.use_asynchronous_shaders.GetValue());
     CHECK(values.native_async_draws.GetValue() == Settings::NativeAsyncDraws::Bounded);
     CHECK(values.native_pipeline_wait_ms.GetValue() == 8);
-    CHECK(values.graphics_path.GetValue() == Settings::GraphicsPath::Hle);
+    CHECK(values.graphics_path.GetValue() == Settings::GraphicsPath::Emulated);
+    CHECK(values.vsync_mode.GetValue() == Settings::VSyncMode::Mailbox);
+    CHECK(values.use_video_framerate.GetValue());
+    CHECK(values.mkw_dynamic_fps.GetValue());
     CHECK(values.nvn_pipeline_library.GetValue());
     CHECK(values.build_all_cached_shaders.GetValue());
     CHECK(values.precache_shaders.GetValue() == Settings::PrecacheShaders::Ask);
@@ -139,7 +142,7 @@ void CheckUnchangedProfile() {
     CHECK(values.turbo_speed_limit.GetValue() == 200);
     CHECK(values.sync_core_speed.GetValue());
     CHECK(values.memory_layout_mode.GetValue() == Settings::MemoryLayout::Memory_4Gb);
-    CHECK(values.vsync_mode.GetValue() == Settings::VSyncMode::Fifo);
+    CHECK(values.vsync_mode.GetValue() == Settings::VSyncMode::Mailbox);
     CHECK(values.fsr_sharpening_slider.GetValue() == 25);
     CHECK(values.dma_accuracy.GetValue() == Settings::DmaAccuracy::Default);
     CHECK(values.gpu_fence_behavior.GetValue() == Settings::GpuFenceBehavior::Default);
@@ -152,9 +155,9 @@ void CheckUnchangedProfile() {
     CHECK(values.renderer_force_max_clock.GetValue());
     CHECK(values.use_disk_shader_cache.GetValue());
     CHECK(values.use_vulkan_driver_pipeline_cache.GetValue());
-    CHECK_FALSE(values.use_video_framerate.GetValue());
+    CHECK(values.use_video_framerate.GetValue());
     CHECK_FALSE(values.mkw_30fps.GetValue());
-    CHECK_FALSE(values.mkw_dynamic_fps.GetValue());
+    CHECK(values.mkw_dynamic_fps.GetValue());
     CHECK_FALSE(values.hyrule_dynamic_fps.GetValue());
     CHECK_FALSE(values.hyrule_30fps.GetValue());
     CHECK(values.use_reactive_flushing.GetValue());
@@ -204,6 +207,7 @@ TEST_CASE("Absent global config receives the first-run profile and persists it",
                             "astc_recompression", "nvdec_emulation", "use_disk_shader_cache",
                             "use_vulkan_driver_pipeline_cache", "async_presentation",
                             "use_asynchronous_shaders", "force_max_clock", "graphics_path",
+                            "use_vsync", "use_video_framerate", "mkw_dynamic_fps",
                             "nvn_pipeline_library", "build_all_cached_shaders",
                             "precache_shaders",
                             "texture_cache_memory_limit", "native_async_draws",

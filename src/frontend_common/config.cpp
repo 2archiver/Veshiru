@@ -243,8 +243,9 @@ void Config::SetUpIni() {
         // 2.9: keep the GPU at its clocks; a downclock between frames is a hitch (docs/perf).
         seed(Settings::values.renderer_force_max_clock, ToString(true));
         seed(Settings::values.texture_cache_memory_limit, ToString(u32(0)));
-        // 2.9: VTX-HLE (NVN) with its fast pipeline links and its load-time pipeline builds.
-        seed(Settings::values.graphics_path, ToString(u32(Settings::GraphicsPath::Hle)));
+        // 3.1: Emulated GPU (SPLIT=2), Mailbox VSync, video-framerate pacing, and MKW dynamic FPS.
+        seed(Settings::values.graphics_path, ToString(u32(Settings::GraphicsPath::Emulated)));
+        seed(Settings::values.vsync_mode, ToString(u32(Settings::VSyncMode::Mailbox)));
         seed(Settings::values.nvn_pipeline_library, ToString(true));
         seed(Settings::values.build_all_cached_shaders, ToString(true));
         seed(Settings::values.precache_shaders, ToString(u32(Settings::PrecacheShaders::Ask)));
@@ -257,7 +258,8 @@ void Config::SetUpIni() {
         seed(Settings::values.sync_memory_operations, ToString(false));
         seed(Settings::values.native_async_draws, ToString(u32(Settings::NativeAsyncDraws::Bounded)));
         seed(Settings::values.native_pipeline_wait_ms, ToString(u32(8)));
-        seed(Settings::values.use_video_framerate, ToString(false));
+        seed(Settings::values.use_video_framerate, ToString(true));
+        seed(Settings::values.mkw_dynamic_fps, ToString(true));
         seed(Settings::values.use_reactive_flushing, ToString(true));
         seed(Settings::values.barrier_feedback_loops, ToString(true));
         seed(Settings::values.enable_buffer_history, ToString(false));

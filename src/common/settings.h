@@ -363,14 +363,13 @@ struct Values {
 #endif
         "backend", Category::Renderer};
     SwitchableSetting<u32> vulkan_device{linkage, 0, "vulkan_device", Category::Renderer, Specialization::RuntimeList};
-    // Which GPU path runs a Switch 2 game's NVN graphics: the emulated Maxwell GPU or VTX-HLE,
-    // the NVN high-level emulation (the default since 2.9: it replays the game's own command
-    // lists instead of re-driving a GPU, which is the faster path on every host we measure;
-    // guest-written descriptor tables are reconciled, see the NVN DESIGN.md). Read when the game
-    // boots (the NVN hooks and the Vulkan device features depend on it), so it is not runtime
-    // modifiable. See ResolveNvnHle().
+    // Which GPU path runs a Switch 2 game's NVN graphics: the emulated GPU (SPLIT=2 dual-thread
+    // front/back with texture-cache VRAM GC, sparse ASTC mip trimming, 512 MiB buffer GC, and
+    // async readback/uniform keeps; default since 3.1) or VTX-HLE, the NVN high-level emulation.
+    // Read when the game boots (the NVN hooks and the Vulkan device features depend on it), so it
+    // is not runtime modifiable. See ResolveNvnHle().
     SwitchableSetting<GraphicsPath> graphics_path{linkage,
-                                                  GraphicsPath::Hle,
+                                                  GraphicsPath::Emulated,
                                                   "graphics_path",
                                                   Category::Renderer,
                                                   Specialization::Default,
@@ -423,7 +422,7 @@ struct Values {
                                                         "resolution_setup", Category::Renderer};
 
     SwitchableSetting<VSyncMode, true> vsync_mode{linkage,
-                                                  VSyncMode::Fifo,
+                                                  VSyncMode::Mailbox,
                                                   "use_vsync",
                                                   Category::Renderer,
                                                   Specialization::RuntimeList,
@@ -802,12 +801,12 @@ struct Values {
     SwitchableSetting<bool> enable_compute_pipelines{linkage, false, "enable_compute_pipelines",
                                                      Category::RendererAdvanced};
 
-    SwitchableSetting<bool> use_video_framerate{linkage, false, "use_video_framerate",
+    SwitchableSetting<bool> use_video_framerate{linkage, true, "use_video_framerate",
                                                 Category::RendererAdvanced};
 
     // Mario Kart World: select a fixed or dynamic in-game frame-rate mode (loader/nso.cpp).
     SwitchableSetting<bool> mkw_30fps{linkage, false, "mkw_30fps", Category::RendererAdvanced};
-    SwitchableSetting<bool> mkw_dynamic_fps{linkage, false, "mkw_dynamic_fps",
+    SwitchableSetting<bool> mkw_dynamic_fps{linkage, true, "mkw_dynamic_fps",
                                             Category::RendererAdvanced};
 
     // Hyrule Warriors: Age of Imprisonment: 30 FPS at normal game speed while 60 can't be held,
