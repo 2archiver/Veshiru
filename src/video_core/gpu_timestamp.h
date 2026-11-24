@@ -27,7 +27,8 @@ namespace Tegra {
 /// changes every few frames, and each change recreates and re-uploads its render targets (~20 fps
 /// instead of ~28-30 on an RX 6700S, 16x the texture cache image creations).
 [[nodiscard]] constexpr bool UsesLegacyAmpereTimestamps(u64 program_id) {
-    return program_id == Settings::MarioKartWorldProgramId;
+    return program_id == Settings::MarioKartWorldProgramId ||
+           program_id == Settings::SwitchSportsProgramId;
 }
 
 /// The last present's CoreTiming time and the GPU clock latched with it, packed into one word so

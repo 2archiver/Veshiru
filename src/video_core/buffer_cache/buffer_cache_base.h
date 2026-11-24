@@ -234,6 +234,7 @@ class BufferCache : public VideoCommon::ChannelSetupCaches<BufferCacheChannelInf
 
     struct OverlapResult {
         boost::container::small_vector<BufferId, 16> ids;
+        boost::container::small_vector<BufferId, 2> cut;
         DAddr begin;
         DAddr end;
         bool has_stream_leap = false;
@@ -570,10 +571,39 @@ public:
     Common::SpinRecursiveMutex mutex;
     Runtime& runtime;
     bool any_buffer_uploaded = false;
-    /// Indirectly read banks of native programs already uploaded this frame.
-    std::unordered_set<DAddr> native_indirect_uniforms_this_frame;
 
 private:
+    static constexpr size_t NativeBankUploadCapacity = (64_KiB / Core::DEVICE_PAGESIZE) + 1;
+    static constexpr u64 NativeBankHotFrames = 16;
+    static constexpr size_t MaxNativeBankPageSnapshots = 16384;
+
+    struct NativeBankPage {
+        std::array<u8, Core::DEVICE_PAGESIZE> words{};
+        u64 checked_frame{~u64{0}};
+        u64 changed_frame{~u64{0}};
+        BufferId buffer_id{NULL_BUFFER_ID};
+        u16 covered_begin{static_cast<u16>(Core::DEVICE_PAGESIZE)};
+        u16 covered_end{0};
+        bool recheck{false};
+    };
+
+    struct NativeBankUpload {
+        DAddr addr{};
+        const u8* words{};
+        u32 size{};
+    };
+
+    struct NativeBankUploads {
+        std::array<NativeBankUpload, NativeBankUploadCapacity> slices{};
+        size_t count{0};
+        u64 total_bytes{0};
+    };
+
+    void CheckNativeBankPagesTracked(Buffer& buffer, BufferId buffer_id, DAddr device_addr,
+                                     u32 size);
+    void QueueNativeBankUpload(Buffer& buffer, DAddr slice_addr, const u8* words, u32 slice_size,
+                               NativeBankUploads& uploads);
+    void FlushNativeBankUploads(Buffer& buffer, const NativeBankUploads& uploads);
     template <typename Mask, typename Func>
     static void ForEachEnabledBit(Mask enabled_mask, Func&& func) {
         for (u32 index = 0; enabled_mask != 0; ++index, enabled_mask >>= 1) {
@@ -673,7 +703,9 @@ private:
 
     [[nodiscard]] OverlapResult ResolveOverlaps(DAddr device_addr, u32 wanted_size);
 
-    void JoinOverlap(BufferId new_buffer_id, BufferId overlap_id, bool accumulate_stream_score);
+    [[nodiscard]] bool JoinCopyIsDead(DAddr device_addr, u64 size);
+
+    bool JoinOverlap(BufferId new_buffer_id, BufferId overlap_id, bool accumulate_stream_score);
 
     [[nodiscard]] BufferId CreateBuffer(DAddr device_addr, u32 wanted_size, bool sparse_compatible,
                                         std::source_location caller = std::source_location::current());
@@ -1197,6 +1229,8 @@ private:
     VirtualRangeCache virtual_ranges;
     std::vector<MultiRangeSegment> graphics_segments;
     std::vector<MultiRangeSegment> compute_segments;
+    ::Common::unordered_map<DAddr, NativeBankPage> native_bank_pages;
+    std::vector<BufferId> frame_created_buffers;
     u64 frame_tick = 0;
     /// EDEN_NX2_TABLE_POINTER_TRACE: last table entry and size bound per table pointer slot.
     std::unordered_map<u64, std::pair<GPUVAddr, u32>> traced_table_pointers;

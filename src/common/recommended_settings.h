@@ -39,13 +39,13 @@ void ForEachRecommendedSetting(Values& settings, Func&& func) {
     entry(settings.native_async_draws, NativeAsyncDraws::Bounded);
     entry(settings.native_pipeline_wait_ms, 8);
     entry(settings.precache_shaders, PrecacheShaders::Ask);
-    // 2.9: VTX-HLE (NVN) and its load-time pipeline work.
-    entry(settings.graphics_path, GraphicsPath::Hle);
+    // 3.1: Emulated GPU (SPLIT=2) keeps 4 GB cards within local VRAM and cuts host submit cost.
+    entry(settings.graphics_path, GraphicsPath::Emulated);
     entry(settings.nvn_pipeline_library, true);
     entry(settings.build_all_cached_shaders, true);
-    entry(settings.use_video_framerate, false);
+    entry(settings.use_video_framerate, true);
     entry(settings.mkw_30fps, false);
-    entry(settings.mkw_dynamic_fps, false);
+    entry(settings.mkw_dynamic_fps, true);
     entry(settings.hyrule_dynamic_fps, false);
     entry(settings.hyrule_30fps, false);
     entry(settings.use_reactive_flushing, true);

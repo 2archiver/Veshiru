@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <array>
+#include <numeric>
 #include <catch2/catch_test_macros.hpp>
 
+#include "video_core/buffer_cache/nx2_bytes_equal.h"
 #include "video_core/page_filter.h"
 
 using VideoCommon::PageFilter;
@@ -54,4 +57,37 @@ TEST_CASE("Page filter answers conservatively outside its range", "[video_core][
     filter.Mark(Limit, Page);
     CHECK(filter.Any(Limit, Page));
     CHECK_FALSE(filter.Any(0, Page));
+}
+
+TEST_CASE("Page filter Take consumes one page and Clear resets all marks",
+          "[video_core][page_filter]") {
+    constexpr u64 Limit = u64{1} << 36;
+    PageFilter filter;
+    filter.Mark(10 * Page + 0x40, 2 * Page);
+    CHECK(filter.Take(10 * Page + 0xff));
+    CHECK_FALSE(filter.Take(10 * Page));
+    CHECK_FALSE(filter.Any(10 * Page, Page));
+    CHECK(filter.Any(11 * Page, Page));
+
+    filter.Clear();
+    CHECK_FALSE(filter.Any(11 * Page, Page));
+    CHECK(filter.Take(Limit));
+}
+
+TEST_CASE("Nx2BytesEqual matches across 128-byte, 16-byte, and unaligned tails",
+          "[video_core][page_filter]") {
+    std::array<u8, 4129> a{};
+    std::iota(a.begin(), a.end(), u8{7});
+    auto b = a;
+
+    CHECK(VideoCommon::Nx2BytesEqual(a.data(), b.data(), 0));
+    CHECK(VideoCommon::Nx2BytesEqual(a.data(), b.data(), Page));
+    CHECK(VideoCommon::Nx2BytesEqual(a.data() + 3, b.data() + 3, 4099));
+
+    for (const size_t pos : {size_t{0}, size_t{15}, size_t{127}, size_t{128}, size_t{4095},
+                             size_t{4128}}) {
+        b[pos] ^= 0x01;
+        CHECK_FALSE(VideoCommon::Nx2BytesEqual(a.data(), b.data(), a.size()));
+        b[pos] ^= 0x01;
+    }
 }
