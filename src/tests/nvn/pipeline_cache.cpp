@@ -2386,7 +2386,8 @@ TEST_CASE("Async compile: a miss is not ready, then a hit; the worker never sees
     REQUIRE(oracle.live_queries == 0); // only the frozen copy was asked
 }
 
-TEST_CASE("Compute lookahead: the dispatch finds the pipeline the workers built", "[nvn]") {
+TEST_CASE("Compute lookahead: the dispatch takes the pipeline the worker built, compiles nothing",
+          "[nvn]") {
     const auto vulkan = MakeHeadlessVulkan();
     if (!vulkan) {
         SKIP("no Vulkan device");
@@ -2399,34 +2400,81 @@ TEST_CASE("Compute lookahead: the dispatch finds the pipeline the workers built"
     const ComputeRequest request = MakeComputeRequest(program, &oracle);
     REQUIRE(cache.ComputePrefetchEnabled());
 
-    // The worker is held inside its first texture query: the lookahead neither compiles on the
-    // calling thread nor waits, and a key that is pending is not queued twice.
-    oracle.SetGate(false);
+    // Queued from a frozen copy of the oracle; a key that is pending is not queued twice.
     cache.PrefetchCompute(request);
     cache.PrefetchCompute(request);
-    CHECK(cache.Stats().compiled_at_runtime == 0);
     CHECK(cache.Stats().async_queued == 1);
     CHECK(cache.Stats().compute_prefetch_queued == 1);
     REQUIRE(oracle.freeze_masks == std::vector<u32>{1u << 5});
+    CHECK(oracle.live_queries == 0);
 
-    // The dispatch's synchronous lookup waits for that compile instead of starting another.
-    std::shared_ptr<ComputePipeline> from_dispatch;
+    // The synchronous lookup takes that pipeline (waiting for it if it is still compiling) instead
+    // of compiling on the calling thread.
+    std::shared_ptr<Vulkan::Nvn::ComputePipeline> from_dispatch;
     std::thread dispatch{[&] { from_dispatch = cache.GetCompute(request); }};
-    std::this_thread::sleep_for(std::chrono::milliseconds{50});
-    oracle.SetGate(true);
     dispatch.join();
     REQUIRE(from_dispatch != nullptr);
     cache.Flush();
     const auto stats = cache.Stats();
     CHECK(stats.compiled_at_runtime == 1);
     CHECK(stats.async_queued == 1);
+    CHECK(stats.async_failed == 0);
     CHECK(stats.async_not_ready == 0);
     CHECK(stats.compute_prefetch_used == 1);
-    CHECK(stats.preload_waits == 1);
-    // From now on the dispatch finds it without a wait.
-    REQUIRE(cache.GetCompute(request) != nullptr);
-    CHECK(cache.Stats().preload_waits == 1);
+    CHECK(stats.preload_waits <= 1);
+    // From now on the dispatch finds it without a wait, and nothing else was compiled.
+    REQUIRE(cache.GetCompute(request) == from_dispatch);
+    CHECK(cache.Stats().preload_waits == stats.preload_waits);
     CHECK(cache.Stats().compute_prefetch_used == 1);
+    CHECK(cache.Stats().compiled_at_runtime == 1);
+}
+
+TEST_CASE("Compute lookahead: a dispatch that arrives first waits for the worker, never recompiles",
+          "[nvn]") {
+    const auto vulkan = MakeHeadlessVulkan();
+    if (!vulkan) {
+        SKIP("no Vulkan device");
+    }
+    auto options = AsyncOptions(true);
+    options.prefetch_compute = true;
+    PipelineCache cache{*vulkan->device, options};
+    const TestProgram program = MakeAddProgram(5, 42);
+    const TestProgram fragment = MakeTexturedFragment();
+    FreezableOracle oracle;
+    oracle.answer.type = Shader::TextureType::Color2D;
+    // Every compile worker (at most six) is held inside a texture query of a graphics job, so the
+    // lookahead's compute job cannot run until the gate opens.
+    oracle.SetGate(false);
+    for (u32 i = 0; i < 6; ++i) {
+        const TestProgram vertex = MakeAddProgram(0, 7 + i);
+        const auto graphics = MakeGraphicsRequest(vertex, fragment, &oracle);
+        bool not_ready = false;
+        REQUIRE(cache.GetGraphics(graphics, &not_ready) == nullptr);
+        REQUIRE(not_ready);
+    }
+    const ComputeRequest request = MakeComputeRequest(program, &oracle);
+    cache.PrefetchCompute(request);
+    CHECK(cache.Stats().compute_prefetch_queued == 1);
+
+    // The dispatch waits for that job instead of queueing or running a compile of its own.
+    std::shared_ptr<Vulkan::Nvn::ComputePipeline> from_dispatch;
+    std::atomic<bool> dispatched{false};
+    std::thread dispatch{[&] {
+        from_dispatch = cache.GetCompute(request);
+        dispatched.store(true, std::memory_order_release);
+    }};
+    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+    CHECK_FALSE(dispatched.load(std::memory_order_acquire));
+    CHECK(cache.Stats().async_queued == 7);
+    oracle.SetGate(true);
+    dispatch.join();
+    REQUIRE(from_dispatch != nullptr);
+    cache.Flush();
+    CHECK(cache.Stats().compiled_at_runtime == 7);
+    CHECK(cache.Stats().async_failed == 0);
+    CHECK(cache.Stats().compute_prefetch_used == 1);
+    CHECK(cache.Stats().preload_waits == 1);
+    REQUIRE(oracle.gate->frozen_queries.load() > 0);
 }
 
 TEST_CASE("Compute lookahead off: nothing is queued", "[nvn]") {

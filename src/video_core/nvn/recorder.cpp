@@ -1758,7 +1758,7 @@ u64 Recorder::ResolveTextureId(u32 id) {
                      "[nvn] pool table id {} (pool base {} + {}): {:#x} {}x{}x{} format {:#x}: {}",
                      id, pool->base, local, attempt.entry.Address(), attempt.entry.Width(),
                      attempt.entry.Height(), attempt.entry.Depth(),
-                     static_cast<u32>(attempt.entry.format), why);
+                     static_cast<u32>(attempt.entry.format.Value()), why);
         }
         return 0;
     }
