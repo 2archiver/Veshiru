@@ -4639,9 +4639,13 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
                 native_bank_pages.erase(page);
             }
         } else {
-            std::erase_if(native_bank_pages, [first_page, end_page](const auto& entry) {
-                return entry.first >= first_page && entry.first < end_page;
-            });
+            for (auto it = native_bank_pages.begin(); it != native_bank_pages.end();) {
+                if (it->first >= first_page && it->first < end_page) {
+                    it = native_bank_pages.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
     }
 
