@@ -5160,10 +5160,9 @@ private:
         if (!slot) {
             auto server = std::make_unique<ServerManager>(system);
             slot = server.get();
+            auto holder = std::make_shared<std::unique_ptr<ServerManager>>(std::move(server));
             system.Kernel().RunOnGuestCoreProcess(
-                std::string{name}, [owned = std::move(server)]() mutable {
-                    ServerManager::RunServer(std::move(owned));
-                });
+                std::string{name}, [holder]() { ServerManager::RunServer(std::move(*holder)); });
         }
         return slot;
     }
