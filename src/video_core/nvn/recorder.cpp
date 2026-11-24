@@ -847,7 +847,9 @@ RecorderStats Recorder::Stats() const {
         s.completion_actions.load(), s.retired_objects.load(), s.synthetic_evictions.load(),
         s.finalized_pool_lists.load(), s.synthetic_lists.load(), s.synthetic_list_bytes.load(),
         s.synthetic_cap_evictions.load(), s.pool_table_reconciled.load(),
-        s.pool_table_unresolved.load(),
+        s.pool_table_unresolved.load(), s.pool_table_unreadable.load(),
+        s.pool_table_empty.load(), s.pool_table_no_texture.load(),
+        s.pool_table_size_mismatch.load(),
     };
 }
 
@@ -1219,6 +1221,12 @@ bool Recorder::MemoryPoolMapVirtual(u64 pool_va, std::span<const VirtualMapReque
         mappings.push_back({request.virtual_offset, physical_serial, request.physical_offset,
                             request.size});
     }
+    {
+        // Kept for the PoolReconciler: a descriptor table in a virtual pool is only readable
+        // through the physical pool its mapping names.
+        std::lock_guard lock{impl->virtual_mappings_mutex};
+        impl->virtual_mappings[pool->serial] = mappings;
+    }
     std::lock_guard lock{impl->sink_mutex};
     impl->FlushDestroysLocked();
     impl->sink.MapVirtual(pool->serial, std::move(mappings));
@@ -1281,6 +1289,10 @@ void Recorder::MemoryPoolFinalize(u64 pool_va) {
     const u64 low = pool->address;
     const u64 high = pool->address + pool->size;
     const u64 serial = pool->serial;
+    {
+        std::lock_guard lock{impl->virtual_mappings_mutex};
+        impl->virtual_mappings.erase(serial);
+    }
     {
         std::lock_guard lock{impl->sink_mutex};
         if (const auto it = impl->snapshot_pools.find(low);
@@ -1616,7 +1628,10 @@ void Recorder::Impl::UnindexTexture(const TextureDesc& desc) {
     }
 }
 
-u64 Recorder::Impl::TextureAtGuestAddress(u64 address, u32 width, u32 height) {
+u64 Recorder::Impl::TextureAtGuestAddress(u64 address, u32 width, u32 height, bool* indexed) {
+    if (indexed != nullptr) {
+        *indexed = false;
+    }
     if (address == 0 || width == 0 || height == 0) {
         return 0;
     }
@@ -1625,8 +1640,13 @@ u64 Recorder::Impl::TextureAtGuestAddress(u64 address, u32 width, u32 height) {
     u64 view_serial = 0;
     for (auto it = begin; it != end; ++it) {
         const TextureObject* texture = textures.Get(it->second);
-        if (texture == nullptr || texture->desc.width != width ||
-            texture->desc.height != height) {
+        if (texture == nullptr) {
+            continue;
+        }
+        if (indexed != nullptr) {
+            *indexed = true;
+        }
+        if (texture->desc.width != width || texture->desc.height != height) {
             continue;
         }
         // A plain texture wins over a view of one: the guest header carries no view object.
@@ -1665,21 +1685,81 @@ u64 Recorder::ResolveTextureId(u32 id) {
     // pool whose entries the game pads to double width reads nothing valid at the first stride
     // and hits at the second.
     const u32 local = id - pool->base;
-    Tegra::Texture::TICEntry entry{};
+    constexpr u64 entry_size = sizeof(Tegra::Texture::TICEntry);
+    struct Attempt {
+        u64 va{};
+        bool readable{}; ///< the address resolves to bytes the CPU can read
+        bool read{};     ///< ... and the entry was read
+        bool indexed{};  ///< a live texture is indexed at the address the entry names
+        Tegra::Texture::TICEntry entry{};
+    };
+    std::array<Attempt, 2> attempts{};
     u64 serial = 0;
-    for (const u64 stride :
-         {u64{sizeof(Tegra::Texture::TICEntry)}, u64{2 * sizeof(Tegra::Texture::TICEntry)}}) {
-        const u64 va = memory->address + pool->offset + u64{local} * stride;
-        if (!state.memory.Read(va, &entry, sizeof(entry))) {
-            continue;
+    for (size_t i = 0; i < attempts.size() && serial == 0; ++i) {
+        Attempt& attempt = attempts[i];
+        const u64 entry_offset = pool->offset + u64{local} * (entry_size << i);
+        attempt.va = memory->address + entry_offset;
+        attempt.readable = true;
+        if ((memory->flags & 0x200) != 0) {
+            // A virtual pool has no guest storage: its GPU addresses are synthetic (nothing the
+            // CPU can read). The entry's bytes are in the physical pool its mapping names.
+            attempt.readable = false;
+            std::lock_guard lock{state.virtual_mappings_mutex};
+            const auto it = state.virtual_mappings.find(memory->serial);
+            if (it != state.virtual_mappings.end()) {
+                for (const VirtualMapping& mapping : it->second) {
+                    if (mapping.physical_pool_serial == 0 ||
+                        entry_offset < mapping.virtual_offset ||
+                        entry_offset - mapping.virtual_offset >= mapping.size) {
+                        continue;
+                    }
+                    if (mapping.size - (entry_offset - mapping.virtual_offset) < entry_size) {
+                        break; // the entry straddles the end of the mapping
+                    }
+                    if (const MemoryPoolObject* physical =
+                            state.memory_pools.Get(mapping.physical_pool_serial)) {
+                        attempt.va = physical->address + mapping.physical_offset +
+                                     (entry_offset - mapping.virtual_offset);
+                        attempt.readable = true;
+                    }
+                    break;
+                }
+            }
         }
-        serial = state.TextureAtGuestAddress(entry.Address(), entry.Width(), entry.Height());
-        if (serial != 0) {
-            break;
+        attempt.read = attempt.readable &&
+                       state.memory.Read(attempt.va, &attempt.entry, entry_size);
+        if (attempt.read) {
+            serial = state.TextureAtGuestAddress(attempt.entry.Address(), attempt.entry.Width(),
+                                                 attempt.entry.Height(), &attempt.indexed);
         }
     }
     if (serial == 0) {
         ++state.stats.pool_table_unresolved;
+        // Why, for the first few of a boot: the entry (the first readable attempt; a padded table
+        // reads nothing valid at the first stride, so the second is the one the game wrote).
+        const Attempt& attempt = attempts[0].readable ? attempts[0] : attempts[1];
+        const char* why = "the entry's bytes could not be read";
+        if (!attempt.read) {
+            ++state.stats.pool_table_unreadable;
+        } else if (attempt.entry.Address() == 0 || attempt.entry.Width() == 0 ||
+                   attempt.entry.Height() == 0) {
+            ++state.stats.pool_table_empty;
+            why = "the entry names no storage (zero address or size)";
+        } else if (!attempt.indexed) {
+            ++state.stats.pool_table_no_texture;
+            why = "the entry names an address no live texture is indexed at";
+        } else {
+            ++state.stats.pool_table_size_mismatch;
+            why = "a live texture is at the address but its width or height differs";
+        }
+        static Common::BootCounter logged;
+        if (logged.Next() < 8) {
+            LOG_INFO(Render_Vulkan,
+                     "[nvn] pool table id {} (pool base {} + {}): {:#x} {}x{}x{} format {:#x}: {}",
+                     id, pool->base, local, attempt.entry.Address(), attempt.entry.Width(),
+                     attempt.entry.Height(), attempt.entry.Depth(),
+                     static_cast<u32>(attempt.entry.format), why);
+        }
         return 0;
     }
     state.texture_table.Set(pool->base, local, serial);

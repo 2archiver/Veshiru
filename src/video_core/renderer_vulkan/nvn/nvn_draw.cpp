@@ -2262,14 +2262,17 @@ void DrawContext::PrefetchUpcomingGraphics(u32 current_mode, u64 current_key) {
         return;
     }
 
-    // Reuse the same state decoding as replay. Only the binding and fixed-state commands below
-    // may run in the scan; every other command is a boundary.
+    // Reuse the same state decoding as replay. Only the binding, pool and fixed-state commands
+    // below may run in the scan; commands that touch nothing a pipeline key reads (copies,
+    // clears, syncs, reports) are passed, and every other command is a boundary.
     const auto saved_fixed = fixed;
     const auto saved_stages = stages;
     const auto saved_handles = handle_gen;
     const u64 saved_clock = bank_clock;
     const bool saved_pipeline_dirty = pipeline_dirty;
     const bool saved_layout_dirty = vertex_layout_dirty;
+    const u32 saved_texture_pool_base = texture_pool_base;
+    const u32 saved_sampler_pool_base = sampler_pool_base;
     SCOPE_EXIT {
         fixed = saved_fixed;
         stages = saved_stages;
@@ -2277,10 +2280,15 @@ void DrawContext::PrefetchUpcomingGraphics(u32 current_mode, u64 current_key) {
         bank_clock = saved_clock;
         pipeline_dirty = saved_pipeline_dirty;
         vertex_layout_dirty = saved_layout_dirty;
+        texture_pool_base = saved_texture_pool_base;
+        sampler_pool_base = saved_sampler_pool_base;
     };
 
-    constexpr size_t MAX_COMMANDS = 192;
-    constexpr size_t MAX_DRAWS = 8;
+    // The window reaches past a pass or two of Mario Kart World (1200 draws a frame, 87 pass
+    // changes): the 2.9 log shows the lookahead caught 186 of 716 run-time compiles with 192
+    // commands and 8 draws, and every one it caught was used.
+    constexpr size_t MAX_COMMANDS = 512;
+    constexpr size_t MAX_DRAWS = 16;
     size_t draws = 0;
     u32 previous_mode = current_mode;
     bool changed = false;
@@ -2314,6 +2322,14 @@ void DrawContext::PrefetchUpcomingGraphics(u32 current_mode, u64 current_key) {
             lookahead.targets = *targets;
             continue;
         }
+        case Op::SetTexturePool:
+        case Op::SetSamplerPool:
+            // What a handle word of a uniform buffer resolves through: tracked, so the frozen
+            // oracle of a prefetched pipeline answers as the draw's will (a re-based pool may
+            // need another variant of the next draw's key).
+            Handle(header);
+            changed = true;
+            continue;
         case Op::BindProgram:
         case Op::BindState:
         case Op::BindVertexAttribs:
@@ -2347,6 +2363,26 @@ void DrawContext::PrefetchUpcomingGraphics(u32 current_mode, u64 current_key) {
         case Op::ClearDepthStencil:
         case Op::Barrier:
         case Op::SetRenderCondition:
+        // Nothing a pipeline key reads. An inline uniform update changes bytes a bindless handle
+        // word may be read from: the prefetched pipeline's queries then fail at the draw and it
+        // is compiled again there (the cost of a wrong guess, never a wrong pipeline). A wait
+        // suspends the stream, and another stream's commands may move the state before it
+        // resumes: a prediction past it is a guess on the same terms.
+        case Op::ClearTexture:
+        case Op::ClearBuffer:
+        case Op::CopyBufferToBuffer:
+        case Op::CopyBufferToTexture:
+        case Op::CopyTextureToBuffer:
+        case Op::CopyTextureToTexture:
+        case Op::FenceSync:
+        case Op::SignalEvent:
+        case Op::WaitSync:
+        case Op::WaitEvent:
+        case Op::UpdateUniformBuffer:
+        case Op::ReportValue:
+        case Op::ReportCounter:
+        case Op::ResetCounter:
+        case Op::SetViewportSwizzles:
             continue;
         case Op::Draw:
             if (bytes < sizeof(VC::DrawPayload)) {

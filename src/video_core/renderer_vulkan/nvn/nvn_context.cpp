@@ -2091,10 +2091,16 @@ std::string Context::DescribeState() const {
                             impl->device.GetDeviceMemorySlack() >> 20,
                             impl->sparse_pages ? impl->sparse_pages->UsedBytes() >> 20 : 0);
     }
-    text += " cmd(n/ms):";
+    text += " cmd(n/ms/ms_per_present):";
+    const u64 presents_for_rates = impl->stats.presents.load(std::memory_order_relaxed);
     for (size_t i = 0; i < std::size(names); ++i) {
-        text += fmt::format(" {}={}/{}", names[i], impl->command_count[i].load(),
-                            impl->command_ns[i].load() / 1'000'000);
+        const u64 ns = impl->command_ns[i].load();
+        const double ms_per_present =
+            presents_for_rates != 0
+                ? static_cast<double>(ns) / 1e6 / static_cast<double>(presents_for_rates)
+                : 0.0;
+        text += fmt::format(" {}={}/{}/{:.2f}", names[i], impl->command_count[i].load(),
+                            ns / 1'000'000, ms_per_present);
     }
     {
         const ContextStats c = Stats();

@@ -402,6 +402,10 @@ struct AtomicStats {
     std::atomic<u64> reinitialized_objects{};
     std::atomic<u64> pool_table_reconciled{};
     std::atomic<u64> pool_table_unresolved{};
+    std::atomic<u64> pool_table_unreadable{};
+    std::atomic<u64> pool_table_empty{};
+    std::atomic<u64> pool_table_no_texture{};
+    std::atomic<u64> pool_table_size_mismatch{};
     std::atomic<u64> submissions{};
     std::atomic<u64> presents{};
     std::atomic<u64> lists_submitted{};
@@ -465,7 +469,14 @@ struct Recorder::Impl {
     [[nodiscard]] u64 TextureAddress(const TextureDesc& desc);
     void IndexTexture(const TextureDesc& desc);
     void UnindexTexture(const TextureDesc& desc);
-    [[nodiscard]] u64 TextureAtGuestAddress(u64 address, u32 width, u32 height);
+    [[nodiscard]] u64 TextureAtGuestAddress(u64 address, u32 width, u32 height,
+                                            bool* indexed = nullptr);
+
+    /// The virtual pool mappings by memory pool serial, as the last MapVirtual left them. A
+    /// descriptor table can live in a virtual pool, whose GPU addresses are synthetic: the bytes
+    /// of an entry there are read through the physical pool the mapping names.
+    std::mutex virtual_mappings_mutex;
+    std::unordered_map<u64, std::vector<VirtualMapping>> virtual_mappings;
 
     // Serializes seq assignment and every Sink call except Wait/SetCompletionCallback.
     std::mutex sink_mutex;

@@ -53,6 +53,12 @@ struct RecorderStats {
     u64 synthetic_cap_evictions; ///< synthetic lists dropped by the byte cap (SetSyntheticListCap)
     u64 pool_table_reconciled;   ///< pool ids resolved from descriptors the guest wrote itself
     u64 pool_table_unresolved;   ///< reconcile asks whose guest entry named no live texture
+    /// Why a reconcile ask failed (each ask counts exactly one of these):
+    u64 pool_table_unreadable;   ///< the entry's bytes could not be read (a virtual pool with no
+                                 ///< mapping there, or memory the CPU cannot see)
+    u64 pool_table_empty;        ///< the entry names no storage (zero address or size)
+    u64 pool_table_no_texture;   ///< the entry names an address no live texture is indexed at
+    u64 pool_table_size_mismatch; ///< a texture is there, but its width or height differs
 };
 
 /// Textures (not view objects) by who keeps them alive, at a PublishTextureHolders call; the

@@ -697,6 +697,10 @@ std::vector<UnsupportedRow> Runtime::UnsupportedRows() {
         add("reinitialized_objects", s.reinitialized_objects);
         add("pool_table_reconciled", s.pool_table_reconciled);
         add("pool_table_unresolved", s.pool_table_unresolved);
+        add("pool_table_unreadable", s.pool_table_unreadable);
+        add("pool_table_empty", s.pool_table_empty);
+        add("pool_table_no_texture", s.pool_table_no_texture);
+        add("pool_table_size_mismatch", s.pool_table_size_mismatch);
         add("records_dropped", s.records_dropped);
     }
     if (gate != nullptr) {

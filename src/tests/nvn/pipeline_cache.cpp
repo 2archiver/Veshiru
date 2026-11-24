@@ -2386,6 +2386,63 @@ TEST_CASE("Async compile: a miss is not ready, then a hit; the worker never sees
     REQUIRE(oracle.live_queries == 0); // only the frozen copy was asked
 }
 
+TEST_CASE("Compute lookahead: the dispatch finds the pipeline the workers built", "[nvn]") {
+    const auto vulkan = MakeHeadlessVulkan();
+    if (!vulkan) {
+        SKIP("no Vulkan device");
+    }
+    auto options = AsyncOptions(true);
+    options.prefetch_compute = true;
+    PipelineCache cache{*vulkan->device, options};
+    const TestProgram program = MakeAddProgram(5, 42);
+    FreezableOracle oracle;
+    const ComputeRequest request = MakeComputeRequest(program, &oracle);
+    REQUIRE(cache.ComputePrefetchEnabled());
+
+    // The worker is held inside its first texture query: the lookahead neither compiles on the
+    // calling thread nor waits, and a key that is pending is not queued twice.
+    oracle.SetGate(false);
+    cache.PrefetchCompute(request);
+    cache.PrefetchCompute(request);
+    CHECK(cache.Stats().compiled_at_runtime == 0);
+    CHECK(cache.Stats().async_queued == 1);
+    CHECK(cache.Stats().compute_prefetch_queued == 1);
+    REQUIRE(oracle.freeze_masks == std::vector<u32>{1u << 5});
+
+    // The dispatch's synchronous lookup waits for that compile instead of starting another.
+    std::shared_ptr<ComputePipeline> from_dispatch;
+    std::thread dispatch{[&] { from_dispatch = cache.GetCompute(request); }};
+    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+    oracle.SetGate(true);
+    dispatch.join();
+    REQUIRE(from_dispatch != nullptr);
+    cache.Flush();
+    const auto stats = cache.Stats();
+    CHECK(stats.compiled_at_runtime == 1);
+    CHECK(stats.async_queued == 1);
+    CHECK(stats.async_not_ready == 0);
+    CHECK(stats.compute_prefetch_used == 1);
+    CHECK(stats.preload_waits == 1);
+    // From now on the dispatch finds it without a wait.
+    REQUIRE(cache.GetCompute(request) != nullptr);
+    CHECK(cache.Stats().preload_waits == 1);
+    CHECK(cache.Stats().compute_prefetch_used == 1);
+}
+
+TEST_CASE("Compute lookahead off: nothing is queued", "[nvn]") {
+    const auto vulkan = MakeHeadlessVulkan();
+    if (!vulkan) {
+        SKIP("no Vulkan device");
+    }
+    PipelineCache cache{*vulkan->device, AsyncOptions(true)};
+    const TestProgram program = MakeAddProgram(5, 42);
+    FreezableOracle oracle;
+    CHECK_FALSE(cache.ComputePrefetchEnabled());
+    cache.PrefetchCompute(MakeComputeRequest(program, &oracle));
+    CHECK(cache.Stats().async_queued == 0);
+    CHECK(oracle.freeze_masks.empty());
+}
+
 TEST_CASE("Async compile: many programs compile concurrently and each is delivered once",
           "[nvn]") {
     const auto vulkan = MakeHeadlessVulkan();

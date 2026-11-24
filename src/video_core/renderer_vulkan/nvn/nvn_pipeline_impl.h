@@ -319,6 +319,7 @@ struct PipelineCache::Impl {
                                                   const std::function<void(u64)>& look_ahead = {},
                                                   std::optional<u64> prefetch_skip = {});
     std::shared_ptr<ComputePipeline> GetCompute(const ComputeRequest& request, bool* not_ready);
+    void PrefetchCompute(const ComputeRequest& request);
     VkRenderPass GetRenderPass(const RenderPassKey& key);
     void Flush();
     void ClearShaders();
@@ -500,7 +501,8 @@ struct PipelineCache::Impl {
                                                       const GraphicsKey& key, bool had_variants,
                                                       bool speculative = false);
     std::shared_ptr<ComputePipeline> CompileCompute(const ComputeRequest& request,
-                                                    const ComputeKey& key, bool had_variants);
+                                                    const ComputeKey& key, bool had_variants,
+                                                    bool speculative = false);
 
     // --- asynchronous compiles (PipelineCacheOptions::async_compile) ---------------------------
     /// Deep copies of the program bytes of a request, owned by the job.
@@ -523,6 +525,7 @@ struct PipelineCache::Impl {
         std::unique_ptr<TextureOracle> oracle;
         ComputeKey key;
         bool had_variants{};
+        bool speculative{}; ///< a lookahead compile (PrefetchCompute), no dispatch waits on it yet
         std::shared_ptr<PendingKey> pending;
     };
     [[nodiscard]] bool AsyncEnabled(const bool* not_ready) const noexcept {
@@ -705,6 +708,8 @@ struct PipelineCache::Impl {
         translation_flights;
     std::atomic<u64> stat_prefetch_queued{};
     std::atomic<u64> stat_prefetch_used{};
+    std::atomic<u64> stat_compute_prefetch_queued{};
+    std::atomic<u64> stat_compute_prefetch_used{};
     std::atomic<u64> stat_gpl_fast_links{};
     std::atomic<u64> stat_gpl_cached_links{};
     std::atomic<u64> stat_gpl_reused{};

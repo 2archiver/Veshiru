@@ -5211,6 +5211,11 @@ bool Recorder::RecordList(std::span<const u64> list, size_t start, size_t& stop,
         piece_start = std::chrono::steady_clock::now();
     }
     size_t index = start;
+    // A dispatch waits for its pipeline: start the compiles of the dispatches ahead on the
+    // workers before the first of them runs (DrawContext::PrefetchUpcomingCompute).
+    current_list = list;
+    next_record = start;
+    draw.PrefetchUpcomingCompute();
     while (index < list.size()) {
         if (++ops_since_check >= 32) {
             ops_since_check = 0;
