@@ -379,7 +379,12 @@ struct ComputeRequest {
     VC::NvnEnvironmentOptions environment;
 };
 
-struct ComputePipeline : PipelineBase {};
+struct ComputePipeline : PipelineBase {
+    /// True once a lookahead compile (PrefetchCompute) published the pipeline and no dispatch
+    /// has taken it yet: the dispatch's first GetCompute clears it and counts the lookahead as
+    /// used.
+    std::atomic<bool> prefetched_unused{};
+};
 
 struct PipelineCacheOptions {
     /// Directory of the per-title files (`nvn_pipelines.k<key>.bin`, `nvn_pipelines.vkcache`);
@@ -410,6 +415,12 @@ struct PipelineCacheOptions {
     bool async_compile{false};
     /// Compile upcoming graphics state on workers while replay builds the current pipeline.
     bool prefetch_graphics{false};
+    /// Compile the compute pipelines of the dispatches a submission is about to replay on the
+    /// workers, before the first of them executes (DrawContext::PrefetchUpcomingCompute). A
+    /// dispatch never skips while its pipeline compiles, so without this the replay thread
+    /// compiles every new compute program itself, for seconds on a first encounter (the stall
+    /// the dispatch's fence makes the game wait for). Needs `async_compile` (the workers).
+    bool prefetch_compute{false};
     /// The nvn_pipeline_library setting: graphics pipelines are built from
     /// VK_EXT_graphics_pipeline_library parts (vertex input, pre-rasterization shaders, fragment
     /// shader, fragment output) that are compiled once and fast-linked, then compiled whole in
@@ -453,6 +464,8 @@ struct PipelineCacheStats {
     u64 preload_wait_ns{};     ///< ... and the total time they waited
     u64 prefetch_queued{};
     u64 prefetch_used{};
+    u64 compute_prefetch_queued{}; ///< compute lookahead: compiles queued
+    u64 compute_prefetch_used{};   ///< ... of which a dispatch took the pipeline
     u64 gpl_fast_links{};      ///< GPL path: pipelines fast-linked from libraries
     u64 gpl_cached_links{};    ///< ... of which every library was compiled already
     u64 gpl_translations_reused{}; ///< GPL path: pipelines built from an earlier translation
@@ -489,6 +502,13 @@ public:
                                                                 bool* not_ready = nullptr,
                 const std::function<void(u64)>& look_ahead = {});
     void PrefetchGraphics(const GraphicsRequest& request, u64 current_key);
+    /// Starts the compile of `request` on the workers when it is neither cached nor pending
+    /// (`PipelineCacheOptions::prefetch_compute`); never waits and never compiles on the calling
+    /// thread. The dispatch's own GetCompute then finds the pipeline, or waits for the compile
+    /// that much less. The oracle of `request` must be the one the dispatch will have (the
+    /// replay's lookahead state): a pipeline whose recorded queries the dispatch's oracle does
+    /// not confirm is compiled again there, as before.
+    void PrefetchCompute(const ComputeRequest& request);
     [[nodiscard]] std::shared_ptr<ComputePipeline> GetCompute(const ComputeRequest& request,
                                                               bool* not_ready = nullptr);
     /// Shader log only (call when `ShaderLog::Enabled()`): the compute program of `request` was
@@ -506,6 +526,9 @@ public:
     [[nodiscard]] bool UsesGraphicsPipelineLibrary() const noexcept;
     /// The render passes have no external dependencies (PipelineCacheOptions::sync_diet).
     [[nodiscard]] bool SyncDiet() const noexcept;
+    /// Compute lookahead on (PipelineCacheOptions::prefetch_compute) and workers to compile on:
+    /// DrawContext::PrefetchUpcomingCompute has work to do.
+    [[nodiscard]] bool ComputePrefetchEnabled() const noexcept;
 
     /// The render pass pipelines of this key are created for and that the replay begins with
     /// (attachments LOAD/STORE, color attachments in COLOR_ATTACHMENT_OPTIMAL, depth/stencil in

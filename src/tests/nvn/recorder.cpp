@@ -15,6 +15,7 @@
 
 #include "video_core/nvn/guest_layouts.h"
 #include "video_core/nvn/recorder.h"
+#include "video_core/textures/texture.h"
 
 using namespace VideoCommon::Nvn;
 
@@ -1105,4 +1106,87 @@ TEST_CASE("nvn recorder: infinite wait timeout and threads", "[nvn]") {
     CHECK(f.recorder.WaitForSeq(1, std::chrono::nanoseconds{-1}));
     gpu.join();
     CHECK(f.recorder.CompletedSeq() == 1);
+}
+
+namespace {
+
+/// A Tegra texture header naming `address` at `width` x `height`, the way the SDK writes a pool
+/// entry the HLE never sees (nvnTexturePoolWriteDescriptorTableData).
+Tegra::Texture::TICEntry MakeTic(u64 address, u32 width, u32 height) {
+    Tegra::Texture::TICEntry entry{};
+    entry.address_low = static_cast<u32>(address);
+    entry.address_high.Assign(static_cast<u32>(address >> 32));
+    entry.header_version.Assign(Tegra::Texture::TICHeaderVersion::BlockLinear);
+    entry.width_minus_one.Assign(width - 1);
+    entry.height_minus_1.Assign(height - 1);
+    return entry;
+}
+
+} // namespace
+
+TEST_CASE("nvn recorder: a guest-written descriptor table resolves by address", "[nvn]") {
+    Fixture f;
+    REQUIRE(f.recorder.TextureInitialize(Obj(10), MakeTextureDesc(64, 48), Fixture::POOL, 0x4000));
+    const u64 texture_serial = f.recorder.GetTexture(Obj(10))->serial;
+    REQUIRE(f.recorder.TexturePoolInitialize(Obj(20), Fixture::POOL, 0x20000, 16));
+    const u64 base = f.recorder.GetTexturePool(Obj(20))->base;
+
+    // The first stride: one 32-byte TIC per id.
+    f.memory.Put(STORAGE + 0x20000 + 5 * 0x20, MakeTic(STORAGE + 0x4000, 64, 48));
+    CHECK(f.recorder.ResolveTextureId(static_cast<u32>(base + 5)) == texture_serial);
+    CHECK(f.recorder.Stats().pool_table_reconciled == 1);
+    CHECK(f.recorder.Stats().pool_table_unresolved == 0);
+
+    // A pool whose entries the game pads to double width: the entry at the second stride.
+    REQUIRE(f.recorder.TexturePoolInitialize(Obj(21), Fixture::POOL, 0x24000, 16));
+    const u64 padded = f.recorder.GetTexturePool(Obj(21))->base;
+    f.memory.Put(STORAGE + 0x24000 + 3 * 0x40, MakeTic(STORAGE + 0x4000, 64, 48));
+    CHECK(f.recorder.ResolveTextureId(static_cast<u32>(padded + 3)) == texture_serial);
+    CHECK(f.recorder.Stats().pool_table_reconciled == 2);
+
+    // An entry that names a storage no live texture has: counted, and nothing is registered.
+    f.memory.Put(STORAGE + 0x20000 + 6 * 0x20, MakeTic(STORAGE + 0x9000, 64, 48));
+    CHECK(f.recorder.ResolveTextureId(static_cast<u32>(base + 6)) == 0);
+    CHECK(f.recorder.Stats().pool_table_unresolved == 1);
+    CHECK(f.recorder.Stats().pool_table_no_texture == 1);
+
+    // A live texture at the address, but of another size.
+    f.memory.Put(STORAGE + 0x20000 + 7 * 0x20, MakeTic(STORAGE + 0x4000, 32, 48));
+    CHECK(f.recorder.ResolveTextureId(static_cast<u32>(base + 7)) == 0);
+    CHECK(f.recorder.Stats().pool_table_unresolved == 2);
+    CHECK(f.recorder.Stats().pool_table_size_mismatch == 1);
+}
+
+TEST_CASE("nvn recorder: a descriptor table in a virtual pool resolves through its mapping",
+          "[nvn]") {
+    Fixture f;
+    REQUIRE(f.recorder.TextureInitialize(Obj(10), MakeTextureDesc(64, 48), Fixture::POOL, 0x4000));
+    const u64 texture_serial = f.recorder.GetTexture(Obj(10))->serial;
+
+    const u64 virtual_va = Obj(3);
+    REQUIRE(f.recorder.MemoryPoolInitialize(virtual_va, 0, 0x10000, 0x200));
+    const auto virtual_info = f.recorder.GetMemoryPool(virtual_va);
+    REQUIRE(virtual_info.has_value());
+    REQUIRE((virtual_info->flags & 0x200) != 0);
+    // Virtual offset 0x100..0x1100 is physical offset 0x20000..0x21000.
+    const Recorder::VirtualMapRequest mapping{Fixture::POOL, 0x20000, 0x100, 0x1000};
+    REQUIRE(f.recorder.MemoryPoolMapVirtual(virtual_va, std::array{mapping}));
+
+    // The texture pool starts at the virtual pool's offset 0x1a0 (id 0); the entry is at virtual
+    // 0x1a0, i.e. physical 0x200a0.
+    REQUIRE(f.recorder.TexturePoolInitialize(Obj(20), virtual_va, 0x1a0, 1));
+    const u64 base = f.recorder.GetTexturePool(Obj(20))->base;
+    f.memory.Put(STORAGE + 0x200a0, MakeTic(STORAGE + 0x4000, 64, 48));
+    CHECK(f.recorder.ResolveTextureId(static_cast<u32>(base)) == texture_serial);
+    CHECK(f.recorder.Stats().pool_table_reconciled == 1);
+    CHECK(f.recorder.Stats().pool_table_unreadable == 0);
+
+    // Without a mapping under it the entry's bytes are unreadable: counted, not guessed.
+    const u64 hole_va = Obj(4);
+    REQUIRE(f.recorder.MemoryPoolInitialize(hole_va, 0, 0x10000, 0x200));
+    REQUIRE(f.recorder.TexturePoolInitialize(Obj(21), hole_va, 0x1a0, 1));
+    const u64 hole = f.recorder.GetTexturePool(Obj(21))->base;
+    CHECK(f.recorder.ResolveTextureId(static_cast<u32>(hole)) == 0);
+    CHECK(f.recorder.Stats().pool_table_unresolved == 1);
+    CHECK(f.recorder.Stats().pool_table_unreadable == 1);
 }

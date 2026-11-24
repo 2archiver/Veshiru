@@ -256,9 +256,15 @@ void DrawResources::OpenCache(u64 title_id) {
     options.shader_notify = impl.options.shader_notify;
     options.load_progress = impl.options.load_progress;
     if (options.async_compile) {
+        // A dispatch never skips while its pipeline compiles, so a new compute program used to
+        // be compiled on the replay thread at its first dispatch (seconds, every one of them in
+        // one stall the first frame that meets them). Compile the dispatches a submission is
+        // about to replay on the workers first (DrawContext::PrefetchUpcomingCompute).
+        options.prefetch_compute = true;
         LOG_INFO(Render_Vulkan,
                  "[nvn] asynchronous shaders on: run-time pipeline compiles run on workers; the "
-                 "draws that may be skipped are skipped until they finish, dispatches wait{}",
+                 "draws that may be skipped are skipped until they finish, dispatches wait for "
+                 "a compile the compute lookahead started earlier{}",
                  options.graphics_pipeline_library
                      ? " (nvn_pipeline_library: library parts are compiled and linked there too)"
                      : "");
@@ -281,13 +287,24 @@ void DrawResources::OpenCache(u64 title_id) {
                                 "Emulated GPU to VTX-HLE", title_id);
     }
     // Isolate MKW's warm-start rendering regression from the opaque NVIDIA cache while keeping
-    // the portable pipeline records available for preload.
+    // the portable pipeline records available for preload. EDEN_NX2_NVN_MKW_DRIVER_CACHE=1 keeps
+    // the driver cache for an A/B of that workaround (the setting is otherwise ignored for MKW).
+    const char* const mkw_driver_cache = std::getenv("EDEN_NX2_NVN_MKW_DRIVER_CACHE");
+    const bool keep_mkw_driver_cache =
+        mkw_driver_cache != nullptr && *mkw_driver_cache != '\0' &&
+        std::strcmp(mkw_driver_cache, "0") != 0;
     if (title_id == Settings::MarioKartWorldProgramId && impl.device.IsNvidia() &&
         options.driver_cache_file && !shader_refresh) {
-        options.driver_cache_file = false;
-        LOG_INFO(Render_Vulkan,
-                 "[nvn] Mario Kart World: start with an empty NVIDIA driver pipeline cache; "
-                 "keep the NVN pipeline records");
+        if (keep_mkw_driver_cache) {
+            LOG_INFO(Render_Vulkan,
+                     "[nvn] Mario Kart World: keeping the NVIDIA driver pipeline cache "
+                     "(EDEN_NX2_NVN_MKW_DRIVER_CACHE)");
+        } else {
+            options.driver_cache_file = false;
+            LOG_INFO(Render_Vulkan,
+                     "[nvn] Mario Kart World: start with an empty NVIDIA driver pipeline cache; "
+                     "keep the NVN pipeline records");
+        }
     }
     if (shader_refresh) {
         options.driver_cache_file = false;

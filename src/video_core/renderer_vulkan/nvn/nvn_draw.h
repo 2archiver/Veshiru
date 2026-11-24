@@ -301,6 +301,14 @@ public:
     /// Handles a draw-path op. Returns false when the op is not this context's.
     bool Handle(const VC::RecordHeader* header);
 
+    /// Scans the records ahead (the rest of this list and the following lists of the submission)
+    /// for dispatches and starts the compile of each compute pipeline on the workers
+    /// (PipelineCache::PrefetchCompute), tracking the bindings with the same commands replay
+    /// uses so the frozen oracle answers as the dispatch's will. Nothing is recorded; the state
+    /// the scan touches is restored. A no-op without PipelineCacheOptions::prefetch_compute.
+    /// Called by the replay at the start of a list (nvn_compute.cpp).
+    void PrefetchUpcomingCompute();
+
     /// Ends the open render pass, if any, and writes pending inline uniform updates to memory.
     /// Idempotent. The single place a pass ends.
     void EndPass(BreakCause cause = BreakCause::Other);

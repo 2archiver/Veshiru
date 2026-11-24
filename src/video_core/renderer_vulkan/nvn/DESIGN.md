@@ -583,8 +583,12 @@ the game pads), and resolves the storage the header names by address against the
 (`textures_by_address`, kept by `IndexTexture` / `UnindexTexture`; width and height must match, a
 plain texture wins over a view). A hit registers the id in the descriptor table, so later
 submissions carry it in their snapshot and never ask again; a miss costs one guest read of 32
-bytes and is counted. Counters: `pool_table_reconciled` / `pool_table_unresolved` (recorder rows of
-the unsupported TSV).
+bytes and is counted. A descriptor table in a **virtual pool** has synthetic GPU addresses the CPU
+cannot read: the recorder keeps the pool's `MapVirtual` mappings (`virtual_mappings`) and reads the
+entry through the physical pool the mapping names. Counters: `pool_table_reconciled` /
+`pool_table_unresolved`, and the reason of each miss (`pool_table_unreadable`, `pool_table_empty`,
+`pool_table_no_texture`, `pool_table_size_mismatch`); the first 8 misses of a boot log the entry
+they read. (recorder rows of the unsupported report.)
 
 ## Virtual pools
 
@@ -2025,6 +2029,46 @@ graphics pipeline create info), `nvn_pipeline_disk.*` (file format), `nvn_pipeli
     (one-time setup, GPU-driven culling). The cache keeps answering `not_ready` for compute to a
     caller that passes it (the pipeline-cache tests use compute requests for the asynchronous
     machinery).
+  - **Graphics lookahead** (`DrawContext::PrefetchUpcomingGraphics`, nvn_draw.cpp;
+    `PipelineCacheOptions::prefetch_graphics`, Mario Kart World only; runs from a `GetGraphics`
+    miss before it compiles and while it waits for a speculative key). The scan of the records
+    ahead (the rest of the list and the following lists of the submission) tracks the state the
+    pipeline key reads with the replay's own `Handle` (binds, fixed state, `SetRenderTargets`
+    through `LookaheadPassKey`, and since 3.0 the texture/sampler pool bases, which a handle word
+    of a uniform buffer resolves through), passes the commands that touch nothing a key reads
+    (copies, clears, syncs, reports, inline uniform updates: a guess past those is checked by the
+    draw's `QueriesMatch` and compiled again there when wrong) and stops at anything else. 3.0
+    widened the window from 192 commands / 8 draws to 512 / 16: the 2.9 MKW log had the lookahead
+    catch 186 of 716 run-time compiles, every one used, while 502 fast links (p50 129 ms on the
+    GTX 1650) compiled on the replay thread. `[nvn] graphics lookahead: N compiles queued, M
+    pipelines used`.
+  - **Compute lookahead** (`DrawContext::PrefetchUpcomingCompute`, nvn_compute.cpp; on with
+    asynchronous shaders, `PipelineCacheOptions::prefetch_compute`; tests "Compute lookahead ..."
+    in `pipeline_cache.cpp`). Because a dispatch never skips, every new compute program used to be
+    compiled on the replay thread at its first dispatch: Ocarina of Time's home menu compiled ten
+    of them back to back in one frame (1256, 651, 243, 4289, 2296, 1030, 4387 ... ms, 16 s in
+    all, the `eventcpu` 16494 ms of the heartbeat), the stall the game's fence wait sat in. The
+    replay now scans the records ahead at the start of every list (the rest of the list and the
+    following lists of the same submission: op words only first, which costs nanoseconds when no
+    dispatch is in the window; then a pass that applies the binding commands with the replay's own
+    `Handle`, save/restored; up to 1024 records and 16 dispatches a scan) and again from a
+    dispatch that meets a program for the first time (so the dispatches beyond the window start
+    while that one's pipeline is built), and for each dispatch to come calls
+    `PipelineCache::PrefetchCompute`:
+    the key (`ComputeKeyOf`, as `GetCompute`), a hit or a pending key returns, otherwise the oracle
+    is frozen (`FreezeOracle` with the program's control tables) and an `AsyncComputeJob`
+    (`speculative`) is queued on the workers. The bound is wider than the graphics lookahead's
+    (`async_outstanding >= max(async_worker_count, COMPUTE_PREFETCH_OUTSTANDING = 16)`): the
+    dispatches of a submitted list all run in order and each blocks the replay until its pipeline
+    exists, so their compiles are needed work started early, and the workers must not idle while a
+    dispatch waits for a compile the replay thread would run itself. The dispatch's own
+    synchronous `GetCompute` then finds the pipeline
+    (`compute_prefetch_used`, cleared through `prefetched_unused`) or waits for the job that much
+    less (`preload_waits`); a pipeline whose queries the dispatch's oracle does not confirm is
+    compiled again there as before. A speculative compile that fails does not mark the key failed
+    (the dispatch compiles and rejects it itself). `[nvn] compute lookahead: N compiles queued, M
+    pipelines used` follows the async line; `NoteCompileTime` logs the compiles as `compute
+    prefetch`. Measured on hardware: pending (3.0 validation).
   - **Preload:** with the option on, a lookup that misses before the loader finished registering the
     cached keys (`loader_queued`), or that finds its key pending (preload or a worker), answers
     "not ready" instead of waiting; it never claims a key the preload may still deliver. Synchronous

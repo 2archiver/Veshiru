@@ -395,6 +395,10 @@ void PipelineCache::Impl::LogCounts() const {
         LOG_INFO(Render_Vulkan, "[nvn] graphics lookahead: {} compiles queued, {} pipelines used",
                  stat_prefetch_queued.load(), stat_prefetch_used.load());
     }
+    if (options.prefetch_compute) {
+        LOG_INFO(Render_Vulkan, "[nvn] compute lookahead: {} compiles queued, {} pipelines used",
+                 stat_compute_prefetch_queued.load(), stat_compute_prefetch_used.load());
+    }
     if (GplEnabled()) {
         LOG_INFO(Render_Vulkan,
                  "[nvn] pipeline libraries: {} fast links ({} from parts compiled already), {} "
@@ -555,7 +559,7 @@ PipelineCache::Impl::Impl(const Device& device_, PipelineCacheOptions options_)
                                                    Common::ThreadPlacement::Background));
         }
     }
-    if (options.async_compile || options.prefetch_graphics) {
+    if (options.async_compile || options.prefetch_graphics || options.prefetch_compute) {
         // Run-time compiles block draws that cannot be skipped by the preload, so they run at
         // normal priority on their own threads (the preload workers are a background queue).
         const s64 hw = static_cast<s64>(std::thread::hardware_concurrency());
@@ -697,6 +701,8 @@ PipelineCacheStats PipelineCache::Impl::Stats() const {
     stats.preload_wait_ns = stat_wait_ns;
     stats.prefetch_queued = stat_prefetch_queued;
     stats.prefetch_used = stat_prefetch_used;
+    stats.compute_prefetch_queued = stat_compute_prefetch_queued;
+    stats.compute_prefetch_used = stat_compute_prefetch_used;
     stats.gpl_fast_links = stat_gpl_fast_links;
     stats.gpl_cached_links = stat_gpl_cached_links;
     stats.gpl_translations_reused = stat_gpl_reused;
@@ -1636,7 +1642,7 @@ void PipelineCache::Impl::RunAsyncCompute(AsyncComputeJob& job) {
     std::shared_ptr<ComputePipeline> pipeline;
     if (!stopping.load()) {
         try {
-            pipeline = CompileCompute(job.request, job.key, job.had_variants);
+            pipeline = CompileCompute(job.request, job.key, job.had_variants, job.speculative);
         } catch (const std::exception& e) {
             ++stat_failures;
             NoteRow(fmt::format("pipeline: async compile failed: {}", FirstLine(e.what())));
@@ -1644,24 +1650,31 @@ void PipelineCache::Impl::RunAsyncCompute(AsyncComputeJob& job) {
             ++stat_failures;
             NoteRow("pipeline: async compile failed: unknown exception");
         }
-        if (!pipeline) {
+        if (!pipeline && !job.speculative) {
             ++stat_async_failed;
             std::scoped_lock lock{pipeline_mutex};
             failed_compute.insert(job.key);
+        } else if (!pipeline) {
+            // A lookahead compile that failed: the dispatch's own lookup compiles (and rejects
+            // it) itself, so a transient worker failure is not made permanent here.
+            ++stat_async_failed;
         }
     }
     ReleasePending(pending_compute, job.key, job.pending);
     AsyncDone();
 }
 
-std::shared_ptr<ComputePipeline> PipelineCache::Impl::GetCompute(const ComputeRequest& request,
-                                                                 bool* not_ready) {
-    if (not_ready != nullptr) {
-        *not_ready = false;
-    }
-    const TextureOracle& oracle = request.oracle != nullptr ? *request.oracle : DEFAULT_ORACLE;
+namespace {
+
+/// Async jobs the compute lookahead may have in flight at once, beyond the worker count
+/// (Impl::PrefetchCompute): a frame's dispatches are needed work, not guesses.
+constexpr u64 COMPUTE_PREFETCH_OUTSTANDING = 16;
+
+/// The key of the pipeline a lookup of `request` compiles or finds (GetCompute and PrefetchCompute
+/// must agree on it).
+[[nodiscard]] ComputeKey ComputeKeyOf(const ComputeRequest& request, u64 try_switch_hash) {
     ComputeKey key;
-    key.try_switch_hash = TrySwitchesHash();
+    key.try_switch_hash = try_switch_hash;
     key.hash = request.program.hash;
     if (request.environment.compute_local_memory_size) {
         key.environment_flags |= ENV_LOCAL_MEMORY;
@@ -1671,6 +1684,18 @@ std::shared_ptr<ComputePipeline> PipelineCache::Impl::GetCompute(const ComputeRe
         key.environment_flags |= ENV_SHARED_MEMORY;
         key.shared_memory_size = *request.environment.compute_shared_memory_size;
     }
+    return key;
+}
+
+} // namespace
+
+std::shared_ptr<ComputePipeline> PipelineCache::Impl::GetCompute(const ComputeRequest& request,
+                                                                 bool* not_ready) {
+    if (not_ready != nullptr) {
+        *not_ready = false;
+    }
+    const TextureOracle& oracle = request.oracle != nullptr ? *request.oracle : DEFAULT_ORACLE;
+    const ComputeKey key = ComputeKeyOf(request, TrySwitchesHash());
     const bool async = AsyncEnabled(not_ready);
     const bool preload_registered = !async || loader_queued.load(std::memory_order_acquire);
     std::shared_ptr<PendingKey> pending;
@@ -1682,6 +1707,9 @@ std::shared_ptr<ComputePipeline> PipelineCache::Impl::GetCompute(const ComputeRe
         if (const auto it = compute.find(key); it != compute.end()) {
             for (const auto& candidate : it->second) {
                 if (candidate->QueriesMatch(oracle)) {
+                    if (candidate->prefetched_unused.exchange(false)) {
+                        ++stat_compute_prefetch_used;
+                    }
                     return candidate;
                 }
             }
@@ -1771,9 +1799,87 @@ std::shared_ptr<ComputePipeline> PipelineCache::Impl::GetCompute(const ComputeRe
     return CompileCompute(request, key, had_variants);
 }
 
+void PipelineCache::Impl::PrefetchCompute(const ComputeRequest& request) {
+    // Only with the workers to compile on, and once the preload has registered the cached keys
+    // (a miss before that may be a pipeline the loader is about to deliver).
+    if (!options.prefetch_compute || async_workers == nullptr ||
+        !loader_queued.load(std::memory_order_acquire) || request.program.hash == 0 ||
+        request.program.control == nullptr || request.program.code == nullptr) {
+        return;
+    }
+    const TextureOracle& oracle = request.oracle != nullptr ? *request.oracle : DEFAULT_ORACLE;
+    const ComputeKey key = ComputeKeyOf(request, TrySwitchesHash());
+    // The dispatches of a submitted list all run, in order, and each blocks the replay until its
+    // pipeline exists: their compiles are needed work started early, not guesses, so the bound
+    // is wider than the graphics lookahead's (which keeps guesses from piling up): every compute
+    // program of a frame's worth of dispatches may be in flight, so the workers never idle while
+    // a dispatch waits for a compile the replay thread would otherwise run itself.
+    {
+        std::scoped_lock lock{async_mutex};
+        if (async_outstanding >= std::max<u64>(async_worker_count, COMPUTE_PREFETCH_OUTSTANDING)) {
+            return;
+        }
+    }
+    std::shared_ptr<PendingKey> claim;
+    {
+        std::scoped_lock lock{pipeline_mutex};
+        if (const auto it = compute.find(key); it != compute.end()) {
+            for (const auto& candidate : it->second) {
+                if (candidate->QueriesMatch(oracle)) {
+                    return; // the dispatch will find it
+                }
+            }
+        }
+        if (pending_compute.contains(key) || failed_compute.contains(key)) {
+            return; // compiling already, or rejected for good
+        }
+        // Claimed under the same lock as the search: the dispatch's lookup sees the pending key.
+        claim = std::make_shared<PendingKey>();
+        claim->speculative = true;
+        claim->outstanding = 1;
+        pending_compute.emplace(key, claim);
+    }
+    const u64 hashes[1]{key.hash};
+    if (AnyStageRejected(hashes)) {
+        ReleasePending(pending_compute, key, claim);
+        return;
+    }
+    std::unique_ptr<TextureOracle> frozen = oracle.Freeze(1u << STAGE_COMPUTE);
+    if (!frozen) {
+        // Nothing a worker could compile from; the dispatch compiles on the replay thread.
+        ReleasePending(pending_compute, key, claim);
+        return;
+    }
+    auto job = std::make_shared<AsyncComputeJob>();
+    job->request.program.hash = request.program.hash;
+    job->program.control = *request.program.control;
+    job->program.code = *request.program.code;
+    job->request.program.control = &job->program.control;
+    job->request.program.code = &job->program.code;
+    job->request.environment = request.environment;
+    job->request.environment.texture_info = nullptr; // the frozen oracle answers
+    job->oracle = std::move(frozen);
+    job->request.oracle = job->oracle.get();
+    job->key = key;
+    job->had_variants = false;
+    job->speculative = true;
+    job->pending = std::move(claim);
+    AsyncQueued();
+    try {
+        async_workers->QueueWork([this, job] { RunAsyncCompute(*job); });
+    } catch (...) {
+        AsyncDone();
+        ReleasePending(pending_compute, key, job->pending);
+        throw;
+    }
+    ++stat_async_queued;
+    ++stat_compute_prefetch_queued;
+}
+
 std::shared_ptr<ComputePipeline> PipelineCache::Impl::CompileCompute(const ComputeRequest& request,
                                                                      const ComputeKey& key,
-                                                                     bool had_variants) {
+                                                                     bool had_variants,
+                                                                     bool speculative) {
     const auto start = std::chrono::steady_clock::now();
     CompileFailureNote failure{*this, LogBaseKey(key)};
     const u64 hashes[1]{request.program.hash};
@@ -1816,6 +1922,7 @@ std::shared_ptr<ComputePipeline> PipelineCache::Impl::CompileCompute(const Compu
                                .count(),
                            static_cast<u32>(variants.size()));
         }
+        pipeline->prefetched_unused = speculative;
         variants.push_back(pipeline);
     }
     failure.armed = false;
@@ -1823,8 +1930,8 @@ std::shared_ptr<ComputePipeline> PipelineCache::Impl::CompileCompute(const Compu
     if (had_variants) {
         ++stat_retranslated;
     }
-    NoteCompileTime("compute", request.program.hash, start, create_start - translate_start,
-                    create_end - create_start);
+    NoteCompileTime(speculative ? "compute prefetch" : "compute", request.program.hash, start,
+                    create_start - translate_start, create_end - create_start);
     if (DiskEnabled()) {
         PostShader(stage);
         Disk::ComputePipelineRecord record;
@@ -1854,6 +1961,15 @@ PipelineCache::~PipelineCache() = default;
 void PipelineCache::PrefetchGraphics(const GraphicsRequest& request, u64 current_key) {
     u64 key_hash{};
     (void)impl->GetGraphics(request, nullptr, key_hash, {}, current_key);
+}
+
+void PipelineCache::PrefetchCompute(const ComputeRequest& request) {
+    try {
+        impl->PrefetchCompute(request);
+    } catch (const std::exception& error) {
+        impl->NoteIssue(
+            fmt::format("pipeline: compute lookahead failed: {}", FirstLine(error.what())));
+    }
 }
 
 std::shared_ptr<GraphicsPipeline> PipelineCache::GetGraphics(const GraphicsRequest& request,
@@ -1910,6 +2026,10 @@ bool PipelineCache::UsesGraphicsPipelineLibrary() const noexcept {
 
 bool PipelineCache::SyncDiet() const noexcept {
     return impl->options.sync_diet;
+}
+
+bool PipelineCache::ComputePrefetchEnabled() const noexcept {
+    return impl->options.prefetch_compute && impl->async_workers != nullptr;
 }
 
 VkRenderPass PipelineCache::GetRenderPass(const RenderPassKey& key) {

@@ -25,6 +25,7 @@
 
 #include "common/boot_counter.h"
 #include "common/logging.h"
+#include "common/scope_exit.h"
 #include "common/settings.h"
 
 #include "video_core/upscaler.h"
@@ -311,6 +312,12 @@ void DrawContext::Dispatch(const VC::DispatchPayload& p) {
     request.inputs = &oracle;
     // Only the first lookup of a program is timed (it is the one that translates and compiles).
     const bool first_dispatch = !resources.compute_programs.contains(request.program.hash);
+    if (first_dispatch) {
+        // A program met for the first time: the list's lookahead (RecordList) may not have reached
+        // the dispatches after this one (beyond its window, or refused by the bound). Start them on
+        // the workers now, so they compile while this one's pipeline is built.
+        PrefetchUpcomingCompute();
+    }
     const auto compile_start =
         first_dispatch ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     // A dispatch is never skipped while its pipeline compiles (use_asynchronous_shaders): the
@@ -617,6 +624,120 @@ void DrawContext::Dispatch(const VC::DispatchPayload& p) {
     if (pathdiff) [[unlikely]] {
         PathDiffEnd(std::move(*pathdiff));
     }
+}
+
+void DrawContext::PrefetchUpcomingCompute() {
+    PipelineCache& cache = resources.Cache();
+    if (!cache.ComputePrefetchEnabled()) {
+        return;
+    }
+    auto records = host->HostRecordsAhead();
+    auto following = host->HostFollowingLists();
+    if ((records.empty() && following.empty()) || VideoCommon::ShaderLog::Enabled()) {
+        return;
+    }
+    using VC::Op;
+    constexpr size_t MAX_COMMANDS = 1024; ///< records visited per scan (each pass)
+    constexpr size_t MAX_DISPATCHES = 16;  ///< pipelines started per scan
+    // Visits the records ahead in replay order (the rest of the current list, then the following
+    // lists of the same submission) until `visit` returns false or the window ends.
+    const auto for_each = [&](auto&& visit) {
+        size_t commands = 0;
+        auto rest = records;
+        size_t list = 0;
+        while (commands < MAX_COMMANDS) {
+            size_t index = 0;
+            while (index < rest.size() && commands < MAX_COMMANDS) {
+                const auto* header = reinterpret_cast<const VC::RecordHeader*>(&rest[index]);
+                const size_t words = header->size / sizeof(u64);
+                if (header->size < sizeof(*header) || header->size % sizeof(u64) != 0 ||
+                    words > rest.size() - index) {
+                    return; // malformed: replay reports it; nothing to start here
+                }
+                ++commands;
+                if (!visit(header)) {
+                    return;
+                }
+                index += words;
+            }
+            if (list >= following.size()) {
+                return;
+            }
+            rest = following[list++];
+        }
+    };
+    // The cheap pass reads op words only: a list without a dispatch in the window (every list of
+    // a game without compute) costs a few nanoseconds per record and stops here.
+    bool dispatch_ahead = false;
+    for_each([&](const VC::RecordHeader* header) {
+        if (static_cast<Op>(header->op) == Op::Dispatch) {
+            dispatch_ahead = true;
+            return false;
+        }
+        return true;
+    });
+    if (!dispatch_ahead) {
+        return;
+    }
+    // The tracking pass applies the binding commands as replay applies them (the same Handle), so
+    // each dispatch's frozen oracle sees the bindings the dispatch will see. Everything the scan
+    // touches is restored; nothing is recorded.
+    const auto saved_fixed = fixed;
+    const auto saved_stages = stages;
+    const auto saved_handle_gen = handle_gen;
+    const u64 saved_clock = bank_clock;
+    const bool saved_pipeline_dirty = pipeline_dirty;
+    SCOPE_EXIT {
+        fixed = saved_fixed;
+        stages = saved_stages;
+        handle_gen = saved_handle_gen;
+        bank_clock = saved_clock;
+        pipeline_dirty = saved_pipeline_dirty;
+    };
+    size_t dispatches = 0;
+    for_each([&](const VC::RecordHeader* header) {
+        switch (static_cast<Op>(header->op)) {
+        case Op::BindProgram:
+        case Op::BindUniformBuffers:
+        case Op::BindTextures:
+        case Op::BindSeparateTextures:
+        case Op::BindSeparateSamplers:
+        case Op::BindImages:
+            Handle(header);
+            return true;
+        case Op::Dispatch: {
+            if (dispatches >= MAX_DISPATCHES ||
+                header->size < sizeof(VC::RecordHeader) + sizeof(VC::DispatchPayload)) {
+                return false;
+            }
+            // As Dispatch: the compute program of the stage-5 binding and its control tables.
+            const StageBindings& bound = stages[STAGE_COMPUTE];
+            const auto program_it = impl.programs.find(bound.program_serial);
+            const auto hash_it = resources.program_hashes.find(bound.program_serial);
+            if (bound.program_serial == 0 || program_it == impl.programs.end() ||
+                hash_it == resources.program_hashes.end() ||
+                hash_it->second[STAGE_COMPUTE] == 0) {
+                return true; // replay skips this dispatch: nothing to compile
+            }
+            const VC::ProgramDesc& program = *program_it->second;
+            std::string error;
+            const std::optional<VC::NvnControl> control =
+                VC::ParseControl(program.control[STAGE_COMPUTE], error);
+            if (control && control->has_compute_counts) {
+                const ComputeOracle oracle{*this, control->compute.HandleTables()};
+                ComputeRequest request;
+                request.program = {hash_it->second[STAGE_COMPUTE], &program.control[STAGE_COMPUTE],
+                                   &program.code[STAGE_COMPUTE]};
+                request.oracle = &oracle;
+                cache.PrefetchCompute(request);
+                ++dispatches;
+            }
+            return true;
+        }
+        default:
+            return true; // no effect on what a dispatch binds
+        }
+    });
 }
 
 } // namespace Vulkan::Nvn

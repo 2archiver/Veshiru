@@ -8,6 +8,97 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-24
+
+### Fixed
+
+- **VTX-HLE: descriptor tables in virtual memory pools resolve (the 2.9 reconciler's gap).**
+  2.9's `PoolReconciler` read the pool entry at `memory->address + pool->offset + id * 0x20`.
+  Mario Kart World keeps its texture pools in *virtual* memory pools (`nvnMemoryPoolMapVirtual`
+  on `0x7d00…`), whose GPU addresses are synthetic (`VIRTUAL_POOL_BASE`): nothing the CPU can
+  read, so every ask failed before it looked at a texture. The 2.9 log shows it:
+  `pool_table_reconciled 0`, `pool_table_unresolved 151860` (14.6 a frame) and 161464 draws of
+  the transparent dummy (`descriptor fallback (graphics): texture handle names no texture`, 15.5
+  a frame). `Recorder` now keeps every virtual pool's `MapVirtual` mappings (`virtual_mappings`,
+  dropped at finalize) and reads the entry through the physical pool the mapping names
+  (`ResolveTextureId`); the storage the entry names resolves as before (MKW's textures in virtual
+  pools are indexed at their synthetic addresses, which is also what the game wrote into the
+  header). Each miss is now counted by reason (`pool_table_unreadable`, `pool_table_empty`,
+  `pool_table_no_texture`, `pool_table_size_mismatch`; recorder rows of the unsupported report)
+  and the first 8 of a boot log the entry they read (`[nvn] pool table id …: address WxHxD format
+  …: <why>`), so a remaining gap on hardware names itself. Tests: "a guest-written descriptor
+  table resolves by address", "a descriptor table in a virtual pool resolves through its mapping"
+  (`src/tests/nvn/recorder.cpp`). Verified at code level; the MKW menus (character select) are the
+  hardware check: `pool_table_reconciled` must climb and the fallback row must fall.
+
+### Added
+
+- **VTX-HLE: compute lookahead — a dispatch no longer compiles its pipeline on the replay
+  thread.** A dispatch never skips while its pipeline compiles (a skipped dispatch leaves what
+  it writes stale for every later draw), so `GetCompute` was called synchronously and every new
+  compute program was translated and compiled on the replay thread at its first dispatch.
+  Ocarina of Time's home menu met eleven of them on the reference machine between t=199.7 s and
+  t=215.5 s: 28, 1257, 651, 244, 4289, 2297, 1030, 4388, 136, 863, 284 ms — 15.5 s of compile
+  for a frame that took 15.9 s (`frame 80580 us (max 15898674)`); the heartbeat's `eventcpu 1481
+  calls / 16494 ms` is the same time, so the dispatches ran from streams a CPU event released.
+  With asynchronous shaders on
+  (`PipelineCacheOptions::prefetch_compute`), the replay now scans the records ahead at the start
+  of every list (`DrawContext::PrefetchUpcomingCompute`: op words only first, which costs
+  nanoseconds when no dispatch is in the window; then a pass that applies the binding commands
+  with the replay's own `Handle`, state restored) and for each dispatch to come calls
+  `PipelineCache::PrefetchCompute`: the key as `GetCompute` builds it, a hit or a pending key
+  returns, otherwise the oracle is frozen with the program's control tables and the compile is
+  queued on the workers (up to 16 in flight: the dispatches of a submitted list all run, so
+  their compiles are needed work, not guesses). The dispatch's own lookup then
+  finds the pipeline or waits for the job that much less; a pipeline whose recorded queries the
+  dispatch's oracle does not confirm is compiled again there, exactly as before, and a failed
+  speculative compile is not made permanent. Lines: `[nvn] compute lookahead: N compiles queued,
+  M pipelines used`, compiles logged as `compute prefetch`, `first dispatch N ms` now shows the
+  remaining wait. Tests: "Compute lookahead: the dispatch finds the pipeline the workers built",
+  "Compute lookahead off: nothing is queued" (`src/tests/nvn/pipeline_cache.cpp`). Verified at
+  code level; the OOT home menu first entry (cold cache) is the hardware check.
+- **Heartbeat: `cmd(n/ms/ms_per_present)`.** The replay's per-command times now also show the
+  milliseconds per present, the number the 2.9 MKW log had to be divided by hand (`submit
+  52677/398104` is 38 ms a present).
+- **`EDEN_NX2_NVN_MKW_DRIVER_CACHE=1`** keeps the NVIDIA driver pipeline cache for Mario Kart
+  World for one session (the renderer otherwise starts MKW with an empty one to isolate the
+  warm-start rendering regression; the NVN pipeline records are preloaded either way). An A/B
+  switch for the hardware validation, documented in `AGENTS.md`.
+
+- **VTX-HLE: a wider graphics lookahead for Mario Kart World.** `PrefetchUpcomingGraphics`
+  (MKW only, `prefetch_graphics`) scanned 192 commands / 8 draws ahead of a `GetGraphics` miss
+  and stopped at every command outside its whitelist. The 2.9 MKW log: 186 of 716 run-time
+  compiles came through the lookahead and every one was used, while 502 GPL fast links (p50
+  129 ms on the GTX 1650: a new shader set compiles its library parts) ran on the replay thread
+  — MKW's draws are never skipped (`may_skip` excludes it), so each was a stall. 3.0 widens the
+  window to 512 commands / 16 draws, tracks the texture/sampler pool bases through the scan (a
+  handle word of a uniform buffer resolves through them), and passes the commands that touch
+  nothing a pipeline key reads (copies, clears, syncs, reports, inline uniform updates); a wrong
+  guess past those is rejected by the draw's `QueriesMatch` and compiled again there, never
+  used. Speculative on the log's numbers; the hardware check is `graphics lookahead: N compiles
+  queued` against the `pipeline compile time` line of the same run.
+
+### Investigated
+
+- **The 2.9 Mario Kart World log (v2.9.0, 10317 presents in 1309 s).** No pipeline stalls:
+  `NoteWait` ≤ 102 ms, 0 draws skipped awaiting a pipeline, 529 slow compiles over 82.5 s of
+  which 502 are fast links. The replay thread's time is in `submit` (398 s of the 1309 s, 38 ms
+  a present, ~32 µs a draw for 12.45 M draws): CPU-side replay work, not compiles. Pass breaks
+  (894 k, 87 a frame) are 759 k `SetRenderTargets`, ~74 real target changes a frame at ~1200
+  draws a frame: the game's pass structure, not `memcmp` noise. The device heap reports 7.0 GB
+  used against a 3.3 GB budget (4 GB card) with 12.6 GB of storage images in host types
+  (`storage_images spilled 12609/15990 MiB`): VRAM oversubscription is the other candidate for
+  the 100-140 ms frames of the second half, and `EDEN_NX2_GPU_PROFILE=1` on the reference
+  machine is the next step (GPU waits by zone). Not changed in this release: speculative
+  renderer changes need that profile first.
+- **The 2.9 Ocarina of Time logs.** Compiles are 26 of 16207 ms: 15 graphics fast links (0.7 s)
+  and 11 compute (15.5 s), the compute ones synchronous at first dispatch (above). The pool
+  import (473 ms) and the present path (0.3 ms a present) are not the cost.
+
+### Changed
+
+- **Version** bumped to 3.0.0; release notes in `docs/release-notes/3.0.0.md`.
+
 ## [2.9.0] - 2026-11-23
 
 ### Fixed
