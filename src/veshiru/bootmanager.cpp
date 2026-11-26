@@ -58,6 +58,8 @@
 #include "input_common/drivers/mouse.h"
 #include "input_common/drivers/tas_input.h"
 #include "input_common/drivers/touch_screen.h"
+#include "hid_core/frontend/emulated_devices.h"
+#include "hid_core/hid_core.h"
 #include "input_common/main.h"
 #include "qt_common/qt_common.h"
 #include "video_core/gpu.h"
@@ -428,7 +430,34 @@ int GRenderWindow::QtModifierToSwitchModifier(Qt::KeyboardModifiers qt_modifiers
     return modifier;
 }
 
+void GRenderWindow::SetMouseModeCaptured(bool capture) {
+    if (mouse_mode_captured == capture) {
+        return;
+    }
+    mouse_mode_captured = capture;
+    if (capture) {
+        setCursor(Qt::BlankCursor);
+        QCursor::setPos(mapToGlobal(QPoint(width() / 2, height() / 2)));
+    } else {
+        unsetCursor();
+        input_subsystem->GetMouse()->ReleaseAllButtons();
+    }
+}
+
+void GRenderWindow::ToggleMouseModeCapture() {
+    if (!Settings::values.joycon2_mouse_enabled.GetValue()) {
+        return;
+    }
+    SetMouseModeCaptured(!mouse_mode_captured);
+}
+
 void GRenderWindow::keyPressEvent(QKeyEvent* event) {
+    if (Settings::values.joycon2_mouse_enabled.GetValue() && event->key() == Qt::Key_F9 &&
+        event->modifiers().testFlag(Qt::ControlModifier)) {
+        ToggleMouseModeCapture();
+        event->accept();
+        return;
+    }
     /**
      * This feature can be enhanced with the following functions, but they do not provide
      * cross-platform behavior.
@@ -490,6 +519,10 @@ void GRenderWindow::mousePressEvent(QMouseEvent* event) {
     if (event->source() == Qt::MouseEventSynthesizedBySystem) {
         return;
     }
+    // A click takes the mouse for mouse mode; Ctrl+F9 gives it back.
+    if (Settings::values.joycon2_mouse_enabled.GetValue() && !mouse_mode_captured) {
+        SetMouseModeCaptured(true);
+    }
     // Qt sometimes returns the parent coordinates. To avoid this we read the global mouse
     // coordinates and map them to the current render area
     const auto pos = mapFromGlobal(QCursor::pos());
@@ -509,6 +542,29 @@ void GRenderWindow::mouseMoveEvent(QMouseEvent* event) {
     if (event->source() == Qt::MouseEventSynthesizedBySystem) {
         return;
     }
+
+    // Joy-Con 2 mouse mode: forward the motion since the cursor was last centred, then centre it
+    // again so the mouse can keep moving without leaving the window.
+    if (Settings::values.joycon2_mouse_enabled.GetValue() && mouse_mode_captured &&
+        isActiveWindow()) {
+        const QPoint center{width() / 2, height() / 2};
+        const auto pos = mapFromGlobal(QCursor::pos());
+        const int dx = pos.x() - center.x();
+        const int dy = pos.y() - center.y();
+        if (dx != 0 || dy != 0) {
+            input_subsystem->GetMouse()->RelativeMove(dx, dy);
+            if (QtCommon::system != nullptr) {
+                if (auto* devices = QtCommon::system->HIDCore().GetEmulatedDevices();
+                    devices != nullptr) {
+                    devices->AddMouseDelta(static_cast<f32>(dx), static_cast<f32>(dy));
+                }
+            }
+            QCursor::setPos(mapToGlobal(center));
+        }
+        emit MouseActivity();
+        return;
+    }
+
     // Qt sometimes returns the parent coordinates. To avoid this we read the global mouse
     // coordinates and map them to the current render area
     const auto pos = mapFromGlobal(QCursor::pos());
@@ -547,7 +603,8 @@ void GRenderWindow::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void GRenderWindow::ConstrainMouse() {
-    if (QtCommon::emu_thread == nullptr || Settings::values.mouse_panning || !this->isActiveWindow()) {
+    if (QtCommon::emu_thread == nullptr || Settings::values.mouse_panning ||
+        mouse_mode_captured || !this->isActiveWindow()) {
         mouse_constrain_timer.stop();
         return;
     }
@@ -717,6 +774,7 @@ bool GRenderWindow::event(QEvent* event) {
 
 void GRenderWindow::focusOutEvent(QFocusEvent* event) {
     QWidget::focusOutEvent(event);
+    SetMouseModeCaptured(false);
     input_subsystem->GetKeyboard()->ReleaseAllKeys();
     input_subsystem->GetTouchScreen()->ReleaseAllTouch();
     input_subsystem->GetMouse()->ReleaseAllButtons();

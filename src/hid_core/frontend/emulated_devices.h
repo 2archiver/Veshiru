@@ -61,6 +61,8 @@ struct DeviceStatus {
     MouseButton mouse_button_state{};
     MousePosition mouse_position_state{};
     AnalogStickState mouse_wheel_state{};
+    /// Joy-Con 2 mouse mode motion, in pixels, not yet turned into a HID report.
+    MousePosition mouse_delta_state{};
 };
 
 enum class DeviceTriggerType {
@@ -136,6 +138,14 @@ public:
 
     /// Returns the latest mouse wheel change
     AnalogStickState GetMouseWheel() const;
+
+    /// Adds host mouse motion, in scaled pixels, for the emulated Joy-Con 2 mouse. Called by the
+    /// render window while mouse mode is captured.
+    void AddMouseDelta(f32 x, f32 y);
+
+    /// Returns and clears the motion added since the previous call. The HID mouse turns each of
+    /// these into one report's delta_x/delta_y.
+    MousePosition ConsumeMouseDelta();
 
     /**
      * Adds a callback to the list of events

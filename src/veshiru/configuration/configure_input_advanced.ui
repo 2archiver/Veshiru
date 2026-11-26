@@ -2631,6 +2631,85 @@
                  </property>
                 </widget>
                </item>
+               <item row="6" column="0" colspan="3">
+                <widget class="QCheckBox" name="enable_wii_remote_driver">
+                 <property name="toolTip">
+                  <string>Pair the Wii Remote in the operating system's Bluetooth settings first (hold 1 and 2), then restart Veshiru.</string>
+                 </property>
+                 <property name="text">
+                  <string>Wii Remote (Bluetooth)</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="7" column="0" colspan="3">
+                <widget class="QCheckBox" name="wii_remote_ir_pointer">
+                 <property name="toolTip">
+                  <string>Needs a Sensor Bar, or two infrared LEDs, in front of the screen. The pointer is published as the right stick and as emulated motion.</string>
+                 </property>
+                 <property name="text">
+                  <string>Wii Remote IR pointer as right stick</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <item>
+             <widget class="QGroupBox" name="joycon2MouseGroupBox">
+              <property name="title">
+               <string>Joy-Con 2 Mouse</string>
+              </property>
+              <layout class="QGridLayout" name="joycon2MouseGridLayout">
+               <item row="0" column="0" colspan="2">
+                <widget class="QCheckBox" name="joycon2_mouse_enabled">
+                 <property name="toolTip">
+                  <string>Makes the host mouse act as a Joy-Con 2 mouse. Click in the render window to capture it; Ctrl+F9 gives it back.</string>
+                 </property>
+                 <property name="text">
+                  <string>Enable Joy-Con 2 mouse mode</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="1" column="0">
+                <widget class="QLabel" name="joycon2_mouse_sensitivity_label">
+                 <property name="text">
+                  <string>Sensitivity</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="1" column="1">
+                <widget class="QSpinBox" name="joycon2_mouse_sensitivity">
+                 <property name="suffix">
+                  <string>%</string>
+                 </property>
+                 <property name="minimum">
+                  <number>10</number>
+                 </property>
+                 <property name="maximum">
+                  <number>400</number>
+                 </property>
+                 <property name="value">
+                  <number>100</number>
+                 </property>
+                </widget>
+               </item>
+               <item row="2" column="0" colspan="2">
+                <widget class="QCheckBox" name="joycon2_mouse_invert_y">
+                 <property name="text">
+                  <string>Invert vertical movement</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="3" column="0" colspan="2">
+                <widget class="QCheckBox" name="joycon2_mouse_stick_fallback">
+                 <property name="toolTip">
+                  <string>Also nudges the right stick while the mouse moves, for games that only read stick input.</string>
+                 </property>
+                 <property name="text">
+                  <string>Also move the right stick</string>
+                 </property>
+                </widget>
+               </item>
               </layout>
              </widget>
             </item>

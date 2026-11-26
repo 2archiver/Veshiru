@@ -85,6 +85,10 @@ ConfigureInputAdvanced::ConfigureInputAdvanced(Core::HID::HIDCore& hid_core_, QW
             &ConfigureInputAdvanced::UpdateUIEnabled);
     connect(ui->enable_ring_controller, &QCheckBox::STATE_CHANGED, this,
             &ConfigureInputAdvanced::UpdateUIEnabled);
+    connect(ui->joycon2_mouse_enabled, &QCheckBox::STATE_CHANGED, this,
+            &ConfigureInputAdvanced::UpdateUIEnabled);
+    connect(ui->enable_wii_remote_driver, &QCheckBox::STATE_CHANGED, this,
+            &ConfigureInputAdvanced::UpdateUIEnabled);
 
     connect(ui->debug_configure, &QPushButton::clicked, this,
             [this] { CallDebugControllerDialog(); });
@@ -146,7 +150,16 @@ void ConfigureInputAdvanced::ApplyConfiguration() {
     Settings::values.enable_ir_sensor = ui->enable_ir_sensor->isChecked();
     Settings::values.enable_joycon_driver = ui->enable_joycon_driver->isChecked();
     Settings::values.enable_procon_driver = ui->enable_procon_driver->isChecked();
+    Settings::values.enable_wii_remote_driver = ui->enable_wii_remote_driver->isChecked();
+    Settings::values.wii_remote_ir_pointer = ui->wii_remote_ir_pointer->isChecked();
     Settings::values.random_amiibo_id = ui->random_amiibo_id->isChecked();
+
+    Settings::values.joycon2_mouse_enabled = ui->joycon2_mouse_enabled->isChecked();
+    Settings::values.joycon2_mouse_sensitivity =
+        static_cast<u16>(ui->joycon2_mouse_sensitivity->value());
+    Settings::values.joycon2_mouse_invert_y = ui->joycon2_mouse_invert_y->isChecked();
+    Settings::values.joycon2_mouse_stick_fallback =
+        ui->joycon2_mouse_stick_fallback->isChecked();
 }
 
 void ConfigureInputAdvanced::LoadConfiguration() {
@@ -184,6 +197,16 @@ void ConfigureInputAdvanced::LoadConfiguration() {
     ui->enable_procon_driver->setChecked(Settings::values.enable_procon_driver.GetValue());
     ui->random_amiibo_id->setChecked(Settings::values.random_amiibo_id.GetValue());
 
+    ui->enable_wii_remote_driver->setChecked(
+        Settings::values.enable_wii_remote_driver.GetValue());
+    ui->wii_remote_ir_pointer->setChecked(Settings::values.wii_remote_ir_pointer.GetValue());
+    ui->joycon2_mouse_enabled->setChecked(Settings::values.joycon2_mouse_enabled.GetValue());
+    ui->joycon2_mouse_sensitivity->setValue(
+        static_cast<int>(Settings::values.joycon2_mouse_sensitivity.GetValue()));
+    ui->joycon2_mouse_invert_y->setChecked(Settings::values.joycon2_mouse_invert_y.GetValue());
+    ui->joycon2_mouse_stick_fallback->setChecked(
+        Settings::values.joycon2_mouse_stick_fallback.GetValue());
+
     UpdateUIEnabled();
 }
 
@@ -203,6 +226,12 @@ void ConfigureInputAdvanced::UpdateUIEnabled() {
     ui->debug_configure->setEnabled(ui->debug_enabled->isChecked());
     ui->touchscreen_advanced->setEnabled(ui->touchscreen_enabled->isChecked());
     ui->ring_controller_configure->setEnabled(ui->enable_ring_controller->isChecked());
+    const bool mouse_mode = ui->joycon2_mouse_enabled->isChecked();
+    ui->joycon2_mouse_sensitivity->setEnabled(mouse_mode);
+    ui->joycon2_mouse_sensitivity_label->setEnabled(mouse_mode);
+    ui->joycon2_mouse_invert_y->setEnabled(mouse_mode);
+    ui->joycon2_mouse_stick_fallback->setEnabled(mouse_mode);
+    ui->wii_remote_ir_pointer->setEnabled(ui->enable_wii_remote_driver->isChecked());
 #if !defined(VESHIRU_USE_QT_MULTIMEDIA)
     ui->enable_ir_sensor->setEnabled(false);
     ui->camera_configure->setEnabled(false);
