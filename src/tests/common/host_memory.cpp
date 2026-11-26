@@ -293,9 +293,10 @@ TEST_CASE("HostMemory: Trim zero pages keeps contents", "[common]") {
     REQUIRE(resident(view));
     REQUIRE(!resident(backing + 0x100000 + Page));
 
-    const auto [looked_at, trimmed] = mem.TrimZeroPages();
-    REQUIRE(looked_at >= 5 * Page);
-    REQUIRE(trimmed >= 4 * Page);
+    const HostMemory::ZeroTrimResult pass = mem.TrimZeroPages();
+    REQUIRE(pass.resident >= 5 * Page);
+    REQUIRE(pass.trimmed >= 4 * Page);
+    REQUIRE_FALSE(pass.truncated);
     REQUIRE(!resident(view));
     REQUIRE(!resident(view + 2 * Page));
     REQUIRE(!resident(view + 3 * Page));
@@ -311,6 +312,35 @@ TEST_CASE("HostMemory: Trim zero pages keeps contents", "[common]") {
     REQUIRE(all(view + 2 * Page, 0));
     REQUIRE(all(view + 3 * Page, 0));
     REQUIRE(all(backing + 0x400000, 0));
+}
+
+TEST_CASE("HostMemory: A bounded zero-page pass is a slice", "[common]") {
+    constexpr size_t Page = 0x1000;
+    HostMemory mem(BACKING_SIZE, VIRTUAL_SIZE);
+    REQUIRE(mem.BackingBasePointer() != nullptr);
+    // Four resident zero pages: a pass that may look at two of them is truncated, trims only what
+    // it looked at, and leaves the rest for the next slice.
+    mem.Map(0x10000, 0x100000, 4 * Page, PERMS, HEAP);
+    u8* const view = mem.VirtualBasePointer() + 0x10000;
+    std::memset(view, 0, 4 * Page);
+
+    const auto resident = [](const void* address) {
+        PSAPI_WORKING_SET_EX_INFORMATION info{};
+        info.VirtualAddress = const_cast<void*>(address);
+        REQUIRE(QueryWorkingSetEx(GetCurrentProcess(), &info, sizeof(info)));
+        return info.VirtualAttributes.Valid != 0;
+    };
+    REQUIRE(resident(view));
+
+    const HostMemory::ZeroTrimResult slice = mem.TrimZeroPages(2 * Page);
+    CHECK(slice.truncated);
+    CHECK(slice.resident <= 2 * Page);
+    CHECK(slice.trimmed <= 2 * Page);
+
+    const HostMemory::ZeroTrimResult rest = mem.TrimZeroPages();
+    CHECK_FALSE(rest.truncated);
+    CHECK(rest.trimmed >= 2 * Page);
+    CHECK(!resident(view));
 }
 
 // Latency of protect calls that take the placeholder lock (across two views) while a zero-page
