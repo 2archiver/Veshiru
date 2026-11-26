@@ -29,6 +29,7 @@ GpuThreadPinning PlanGpuThreadPinning(std::span<const LogicalProcessor> processo
     }
     const u32 front_core = cores[1];
     const u32 back_core = cores[2];
+    const bool pin_guest = cores.size() >= MinCoresForGuestCorePinning;
     for (const LogicalProcessor& processor : processors) {
         if (processor.efficiency_class != fastest) {
             continue;
@@ -37,7 +38,7 @@ GpuThreadPinning PlanGpuThreadPinning(std::span<const LogicalProcessor> processo
             plan.front.push_back(processor.id);
         } else if (processor.core == back_core) {
             plan.back.push_back(processor.id);
-        } else {
+        } else if (pin_guest) {
             plan.guest.push_back(processor.id);
         }
     }

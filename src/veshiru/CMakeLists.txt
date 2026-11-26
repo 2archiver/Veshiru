@@ -173,7 +173,6 @@ add_executable(veshiru
 
     game/game_list.cpp game/game_list.h
     game/game_grid.cpp game/game_grid.h
-    game/game_version_list.cpp game/game_version_list.h
 
     game/game_tree.h game/game_tree.cpp
     game/game_card.h game/game_card.cpp

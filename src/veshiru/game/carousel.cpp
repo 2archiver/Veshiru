@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <QScrollBar>
+#include <QWheelEvent>
+
 #include "qt_common/config/uisettings.h"
 #include "qt_common/game_list/model.h"
 #include "veshiru/game/common.h"
@@ -20,6 +23,10 @@ GameCarousel::GameCarousel(QWidget* parent) : QListView{parent} {
     setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
 
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // The cover row scrolls sideways, so the bar that shows its position is the horizontal one;
+    // it stays hidden like the grid's, and the wheel below moves the row instead.
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setFocusPolicy(Qt::StrongFocus);
 
     setEditTriggers(QAbstractItemView::NoEditTriggers);
     setContextMenuPolicy(Qt::CustomContextMenu);
@@ -97,6 +104,24 @@ void GameCarousel::UpdateIconSize() {
 
         setUpdatesEnabled(true);
     }
+}
+
+void GameCarousel::wheelEvent(QWheelEvent* event) {
+    QScrollBar* bar = horizontalScrollBar();
+    if (bar->maximum() == 0) {
+        QListView::wheelEvent(event);
+        return;
+    }
+    // A mouse wheel reports vertical deltas; a touchpad also reports horizontal ones. Both move
+    // the row the way the gesture points, at the scroll-per-pixel distance the view is set to.
+    const QPoint delta = event->pixelDelta().isNull() ? event->angleDelta() : event->pixelDelta();
+    const int amount = delta.y() != 0 ? delta.y() : delta.x();
+    if (amount == 0) {
+        QListView::wheelEvent(event);
+        return;
+    }
+    bar->setValue(bar->value() - amount);
+    event->accept();
 }
 
 QModelIndex GameCarousel::indexAt(const QPoint& point) const {

@@ -8,6 +8,53 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-11-26
+
+### Changed
+
+- **The game library's Versioned List is gone; Carousel View takes its place.** View > Game List
+  Mode now offers Tree View, Grid View and Carousel View, and the carousel is the flat cover mode
+  that wraps the whole width, scrolled with the wheel, a drag or the arrow keys
+  (`src/veshiru/game/carousel.cpp`, `src/common/settings_enums.h`). A profile saved with the old
+  third mode (`game_list_mode=3`) clamps to Carousel View on load, so nobody lands back in Tree
+  View. `GameVersionList` and its 92 px rows are deleted.
+
+### Performance
+
+- **GPU thread pinning reaches 4 performance-core hybrid laptops.** `PlanGpuThreadPinning` needed
+  six physical performance cores and skipped every 4 P-core + E-core CPU, which is what the Yoshi
+  report ran on (`ve3shiru_log.txt`: `GPU thread pinning skipped: 4 physical performance cores,
+  needs 6`). The split GPU thread's front and back now take a performance core each from four
+  cores up, and the guest cores are pinned to the remaining performance cores only from six, so a
+  4 P-core machine keeps one core for the guest pool and the OS instead of giving the two
+  latency-critical GPU threads no dedicated core at all
+  (`src/common/core_pinning.cpp`, `src/common/thread.cpp`).
+- **The all-zero guest page trim can no longer stall a running game for seconds.**
+  `HostMemory::TrimZeroPages` took a whole pass — the Yoshi log shows one trimming 11 GiB of
+  15.8 GiB resident in 5,738 ms while the game presented, with 2.6 s frames and three frames over
+  a second in the same window. A pass over a presenting guest is now bounded to 512 MiB of
+  resident pages per slice (`HostMemory::ZeroTrimResult{truncated}`), and because trimmed pages
+  leave the working set the next slice continues past them without a cursor. Slices run back to
+  back while host commit is tight and stop as soon as the guest pauses, which still gets the full
+  pass. Idle and loading sessions keep the full pass, and the "ample host RAM" cut-off drops from
+  24 GiB to 20 GiB so a 24 GiB laptop (23.7 GiB reported) is no longer treated as tight
+  (`src/common/host_memory.cpp`, `src/core/device_memory.cpp`).
+- **Native compute storage binding diagnostics leave the hot path.** Every native compute storage
+  binding counted its own bound with a `steady_clock::now()` and three relaxed atomics, always on:
+  the Yoshi log binds 371,040 of them in a 10 s window. The counters now need
+  `EDEN_NX2_BINDING_STATS=1`; the line itself is unchanged
+  (`src/video_core/buffer_cache/buffer_cache.h`, `AGENTS.md`).
+
+### Fixed
+
+- **Search in the carousel view filters the carousel.** `GameList::OnTextChanged` sent the filter
+  to the grid in every flat mode, and row-hidden state belongs to the view, so the carousel kept
+  showing every game (`src/veshiru/game/game_list.cpp`).
+- **The carousel scrolls with the mouse wheel, and its scrollbar stays hidden.** The cover row now
+  turns wheel and touchpad deltas into horizontal movement, the way the grid already handled a
+  scroll, instead of dropping them because its vertical scrollbar is off
+  (`src/veshiru/game/carousel.cpp`).
+
 ## [3.1.0] - 2026-11-24
 
 ### Changed

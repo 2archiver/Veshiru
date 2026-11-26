@@ -166,7 +166,10 @@ ENUM(GpuUnswizzleChunk, VeryLow, Low, Normal, Medium, High)
 ENUM(TemperatureUnits, Celsius, Fahrenheit)
 ENUM(ExtendedDynamicState, Disabled, EDS1, EDS2, EDS3);
 ENUM(GpuLogLevel, Off, Errors, Standard, Verbose, All)
-ENUM(GameListMode, TreeView, GridView, CarouselView, VersionListView);
+// The game library's flat cover modes: Grid View wraps a cover sheet, Carousel View is the
+// single cover row the View > Game List Mode menu offers next to it. The old third flat mode
+// (Versioned List) is gone; a saved game_list_mode of 3 clamps to Carousel View, its replacement.
+ENUM(GameListMode, TreeView, GridView, CarouselView);
 ENUM(SpeedMode, Standard, Turbo, Slow);
 ENUM(FrameGenType, Lsfg, Fsr3, NvidiaDlssG, OpenFrameGen);
 ENUM(GraphicsPath, Hle, Emulated);

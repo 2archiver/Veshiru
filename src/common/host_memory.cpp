@@ -1234,11 +1234,13 @@ u64 HostMemory::MappedBytes() noexcept {
     return g_mapped_bytes.load(std::memory_order_relaxed);
 }
 
-std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
+HostMemory::ZeroTrimResult HostMemory::TrimZeroPages(size_t max_scan_bytes) const {
 #ifdef _WIN32
     if (backing_base == nullptr) {
-        return {0, 0};
+        return {};
     }
+    const size_t max_pages = max_scan_bytes / PageAlignment;
+    ZeroTrimResult result;
     std::vector<ULONG_PTR> entries(size_t{1} << 22);
     for (int attempt = 0;; ++attempt) {
         if (K32QueryWorkingSet(GetCurrentProcess(), entries.data(),
@@ -1246,7 +1248,7 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
             break;
         }
         if (GetLastError() != ERROR_BAD_LENGTH || attempt == 3) {
-            return {0, 0};
+            return {};
         }
         entries.assign((std::max)(entries.size() * 2, size_t{entries[0]} + (size_t{1} << 18)), 0);
     }
@@ -1271,6 +1273,13 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
     std::vector<uintptr_t> trim;
     size_t zero_bytes = 0;
     for (const uintptr_t page : backing_pages) {
+        if (max_pages != 0 && result.resident >= max_pages * PageAlignment) {
+            // A bounded pass: the pages trimmed so far leave the working set, so the next slice
+            // reaches new ones without remembering where this one stopped.
+            result.truncated = true;
+            break;
+        }
+        result.resident += PageAlignment;
         if (IsZeroPage(reinterpret_cast<const u8*>(page))) {
             trim.push_back(page);
             zero_bytes += PageAlignment;
@@ -1283,7 +1292,7 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
     constexpr size_t MaxRunPages = 512;
     std::sort(view_pages.begin(), view_pages.end());
     std::vector<Impl::BackingRun> runs;
-    for (size_t i = 0; i < view_pages.size();) {
+    for (size_t i = 0; i < view_pages.size() && !result.truncated;) {
         size_t j = i + 1;
         while (j < view_pages.size() && j - i < MaxRunPages &&
                view_pages[j] == view_pages[j - 1] + PageAlignment) {
@@ -1298,6 +1307,11 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
                 if (run.backing_offset + offset >= backing_size) {
                     break;
                 }
+                if (max_pages != 0 && result.resident >= max_pages * PageAlignment) {
+                    result.truncated = true;
+                    break;
+                }
+                result.resident += PageAlignment;
                 const uintptr_t page = view_begin + run.virtual_offset + offset;
                 const uintptr_t backing_page = backing_begin + run.backing_offset + offset;
                 if (IsZeroPage(reinterpret_cast<const u8*>(backing_page))) {
@@ -1332,9 +1346,11 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
         unlock(trim[i], trim[j - 1] + PageAlignment);
         i = j;
     }
-    return {(backing_pages.size() + view_pages.size()) * PageAlignment, zero_bytes};
+    result.trimmed = zero_bytes;
+    return result;
 #else
-    return {0, 0};
+    (void)max_scan_bytes;
+    return {};
 #endif
 }
 

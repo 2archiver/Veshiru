@@ -280,7 +280,6 @@ public:
             }
             case Settings::GameListMode::GridView:
             case Settings::GameListMode::CarouselView:
-            case Settings::GameListMode::VersionListView:
                 return role == SortRole ? row1.toLower() : QVariant{row1};
             default:
                 break;

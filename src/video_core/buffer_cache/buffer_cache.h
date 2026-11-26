@@ -41,6 +41,50 @@ namespace VideoCommon {
 
 using Core::DEVICE_PAGESIZE;
 
+/// EDEN_NX2_BINDING_STATS=1: count how native compute storage bindings are bounded and log a line
+/// every 10 s. Always counting cost a clock read and three relaxed atomics on every native compute
+/// binding, and a title binds them tens of thousands of times a second (Yoshi's demo in the 3.2
+/// report: 371,040 in one 10 s window), so the counters wait for the switch.
+inline bool NativeBindingStatsEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_BINDING_STATS");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
+/// Counts one native compute storage binding: whether its size word reached past the 8 MiB cap,
+/// and whether the binding stopped at a mapping gap instead of its size.
+inline void ReportNativeBindingStats(u32 size, u32 wanted) {
+    static std::atomic<u64> computed{}, past_cap{}, at_gap{}, logged{};
+    static std::atomic<u32> largest{};
+    static std::atomic<s64> next_log{};
+    const u64 total = computed.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (size > 8_MiB) {
+        past_cap.fetch_add(1, std::memory_order_relaxed);
+        u32 seen = largest.load(std::memory_order_relaxed);
+        while (size > seen && !largest.compare_exchange_weak(seen, size, std::memory_order_relaxed)) {
+        }
+    }
+    if (size < wanted) {
+        at_gap.fetch_add(1, std::memory_order_relaxed);
+    }
+    const s64 now = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    const u64 long_bindings = past_cap.load(std::memory_order_relaxed);
+    const u64 gap_bindings = at_gap.load(std::memory_order_relaxed);
+    s64 due = next_log.load(std::memory_order_relaxed);
+    if (now >= due && logged.load(std::memory_order_relaxed) != long_bindings + gap_bindings &&
+        next_log.compare_exchange_strong(due, now + 10)) {
+        logged.store(long_bindings + gap_bindings, std::memory_order_relaxed);
+        LOG_INFO(HW_GPU,
+                 "Native compute storage bindings: {} reach past 8 MiB through their size word "
+                 "(largest {:#x} bytes), {} stop at a mapping gap, of {} bound",
+                 long_bindings, largest.load(std::memory_order_relaxed), gap_bindings, total);
+    }
+}
+
 template <class P>
 BufferCache<P>::BufferCache(Tegra::MaxwellDeviceMemoryManager& device_memory_, Runtime& runtime_)
     : runtime{runtime_}, device_memory{device_memory_}, memory_tracker{device_memory} {
@@ -4805,38 +4849,8 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
             // a written one isn't split into separate ranges without sparse sources.
             const u32 wanted = size;
             size = static_cast<u32>(gpu_memory->MaxContinuousRange(gpu_addr, size));
-            if (native_pointer && compute) {
-                static std::atomic<u64> computed{}, past_cap{}, at_gap{}, logged{};
-                static std::atomic<u32> largest{};
-                static std::atomic<s64> next_log{};
-                const u64 total = computed.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (size > 8_MiB) {
-                    past_cap.fetch_add(1, std::memory_order_relaxed);
-                    u32 seen = largest.load(std::memory_order_relaxed);
-                    while (size > seen &&
-                           !largest.compare_exchange_weak(seen, size, std::memory_order_relaxed)) {
-                    }
-                }
-                if (size < wanted) {
-                    at_gap.fetch_add(1, std::memory_order_relaxed);
-                }
-                const s64 now = std::chrono::duration_cast<std::chrono::seconds>(
-                                    std::chrono::steady_clock::now().time_since_epoch())
-                                    .count();
-                const u64 long_bindings = past_cap.load(std::memory_order_relaxed);
-                const u64 gap_bindings = at_gap.load(std::memory_order_relaxed);
-                s64 due = next_log.load(std::memory_order_relaxed);
-                if (now >= due && logged.load(std::memory_order_relaxed) !=
-                                      long_bindings + gap_bindings &&
-                    next_log.compare_exchange_strong(due, now + 10)) {
-                    logged.store(long_bindings + gap_bindings, std::memory_order_relaxed);
-                    LOG_INFO(HW_GPU,
-                             "Native compute storage bindings: {} reach past 8 MiB through their "
-                             "size word (largest {:#x} bytes), {} stop at a mapping gap, of {} "
-                             "bound",
-                             long_bindings, largest.load(std::memory_order_relaxed), gap_bindings,
-                             total);
-                }
+            if (native_pointer && compute && NativeBindingStatsEnabled()) {
+                ReportNativeBindingStats(size, wanted);
             }
         }
 

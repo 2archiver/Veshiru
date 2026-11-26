@@ -757,10 +757,17 @@ void PinCurrentThread(PinnedRole role) {
                         plan.performance_cores, MinCoresForGpuThreadPinning);
             return PinnedCpuSets{};
         }
-        LOG_INFO(Common,
-                 "GPU thread pinning: front and back on a physical core each, guest cores on the "
-                 "other {} performance cores ({} logical processors)",
-                 plan.performance_cores - 2, plan.guest.size());
+        if (plan.guest.empty()) {
+            LOG_INFO(Common,
+                     "GPU thread pinning: front and back on a physical core each; {} performance "
+                     "cores left for the guest, too few to pin it ({})",
+                     plan.performance_cores - 2, MinCoresForGuestCorePinning);
+        } else {
+            LOG_INFO(Common,
+                     "GPU thread pinning: front and back on a physical core each, guest cores on "
+                     "the other {} performance cores ({} logical processors)",
+                     plan.performance_cores - 2, plan.guest.size());
+        }
         return PinnedCpuSets{{plan.front.begin(), plan.front.end()},
                              {plan.back.begin(), plan.back.end()},
                              {plan.guest.begin(), plan.guest.end()}};
@@ -778,6 +785,11 @@ void PinCurrentThread(PinnedRole role) {
             LOG_WARNING(Common,
                         "GPU thread pinning skipped: {} physical performance cores, needs {}",
                         result.performance_cores, MinCoresForGpuThreadPinning);
+        } else if (result.guest.empty()) {
+            LOG_INFO(Common,
+                     "GPU thread pinning: front and back on a physical core each; {} performance "
+                     "cores left for the guest, too few to pin it ({})",
+                     result.performance_cores - 2, MinCoresForGuestCorePinning);
         } else {
             LOG_INFO(Common,
                      "GPU thread pinning: front and back on a physical core each, guest cores on "

@@ -135,19 +135,37 @@ TEST_CASE("Core pinning: E-cores enumerated first leave the P-cores to the pinne
     CheckCoresAreDedicated(processors, plan);
 }
 
-TEST_CASE("Core pinning: hybrid 4 P-cores and 8 E-cores is skipped", "[common][core_pinning]") {
+TEST_CASE("Core pinning: hybrid 4 P-cores and 8 E-cores pins the GPU threads only",
+          "[common][core_pinning]") {
     std::vector<LogicalProcessor> processors;
     AddCores(processors, 4, 2, 1);
     AddCores(processors, 8, 1, 0);
     const auto plan = Common::PlanGpuThreadPinning(processors);
     CHECK(plan.performance_cores == 4);
-    CheckSkipped(plan);
+    CHECK(plan.front == Ids(2, 2));
+    CHECK(plan.back == Ids(4, 2));
+    // Two performance cores are left, not enough to pin the guest cores too.
+    CHECK(plan.guest.empty());
+    CheckCoresAreDedicated(processors, plan);
 }
 
-TEST_CASE("Core pinning: 4 cores, 4 threads is skipped", "[common][core_pinning]") {
+TEST_CASE("Core pinning: 4 cores, 4 threads pins the GPU threads only", "[common][core_pinning]") {
     const auto plan = Common::PlanGpuThreadPinning(Uniform(4, 1));
     CHECK(plan.performance_cores == 4);
-    CheckSkipped(plan);
+    CHECK(plan.front == Ids(1, 1));
+    CHECK(plan.back == Ids(2, 1));
+    CHECK(plan.guest.empty());
+}
+
+TEST_CASE("Core pinning: 5 performance cores leave the guest cores unpinned too",
+          "[common][core_pinning]") {
+    const auto processors = Uniform(5, 2);
+    const auto plan = Common::PlanGpuThreadPinning(processors);
+    CHECK(plan.performance_cores == 5);
+    CHECK(plan.front == Ids(2, 2));
+    CHECK(plan.back == Ids(4, 2));
+    CHECK(plan.guest.empty());
+    CheckCoresAreDedicated(processors, plan);
 }
 
 TEST_CASE("Core pinning: 2 cores is skipped", "[common][core_pinning]") {
@@ -191,14 +209,18 @@ TEST_CASE("Core pinning: sysfs CPU lists", "[common][core_pinning]") {
     CHECK(ParseCpuList("4294967296").empty());
 }
 
-TEST_CASE("Core pinning: a 4P+4E CPU whose E-cores rank lower is skipped",
+TEST_CASE("Core pinning: a 4P+4E CPU whose E-cores rank lower pins the GPU threads only",
           "[common][core_pinning]") {
     // As LinuxProcessors reports an Intel hybrid CPU without cpu_capacity: the cpu_atom cores at
-    // half capacity.
+    // half capacity. The GPU threads still get the two P-cores after core 0; the guest does not
+    // get pinned to the last two.
     std::vector<LogicalProcessor> processors;
     AddCores(processors, 4, 2, 128);
     AddCores(processors, 4, 1, 64);
     const auto plan = Common::PlanGpuThreadPinning(processors);
     CHECK(plan.performance_cores == 4);
-    CheckSkipped(plan);
+    CHECK(plan.front == Ids(2, 2));
+    CHECK(plan.back == Ids(4, 2));
+    CHECK(plan.guest.empty());
+    CheckCoresAreDedicated(processors, plan);
 }

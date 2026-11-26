@@ -70,9 +70,22 @@ public:
     /// it needs RAM. The contents stay; using the pages brings them back.
     void HintCold(size_t physical_offset, size_t length,
                   std::optional<size_t> virtual_offset) const;
+    /// What one TrimZeroPages pass looked at and achieved.
+    struct ZeroTrimResult {
+        /// Resident bytes of guest memory the pass looked at.
+        size_t resident{};
+        /// Bytes of zero pages that left the working set.
+        size_t trimmed{};
+        /// The pass stopped at `max_scan_bytes` with resident pages left over.
+        bool truncated{};
+    };
+
     /// Windows: resident pages of guest memory (backing and its views) that hold only zeros leave
-    /// the working set, like HintCold. Returns {resident bytes looked at, bytes trimmed}.
-    std::pair<size_t, size_t> TrimZeroPages() const;
+    /// the working set, like HintCold. A pass over all of it takes seconds on a guest that holds
+    /// gigabytes, so a caller that must not stall a running game passes `max_scan_bytes` and gets a
+    /// bounded slice: pages already trimmed are no longer resident, so the next slice carries on
+    /// past them without a cursor.
+    ZeroTrimResult TrimZeroPages(size_t max_scan_bytes = 0) const;
 
     /// Bytes ClearBackingRegion has filled with zeros (memset) since start.
     static u64 ZeroFilledBytes() noexcept;
