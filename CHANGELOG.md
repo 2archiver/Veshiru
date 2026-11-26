@@ -8,6 +8,65 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-11-26
+
+### Added
+
+- **Bluetooth Wii Remote driver (RVL-CNT-01 and RVL-CNT-01-TR).** A new SDL HIDAPI driver
+  (`src/input_common/drivers/wii_remote.cpp`, `helpers/wii_remote_protocol.cpp`) enumerates remotes by
+  VID `0x057E` / PID `0x0306` or `0x0330`, sets the data-reporting mode (`0x37` accelerometer +
+  extension, `0x35` accelerometer + IR + extension), and publishes buttons, the accelerometer as
+  motion, and the Nunchuk (stick on the left stick, C/Z on ZL/ZR). LEDs and rumble follow the
+  emulated controller through the `{0x11, {leds << 4} | rumble}` and `{0x10, rumble}` builders, the
+  extension is identified with `{0x17, 0x04 | rumble, 0xA4, 0x00, 0xFA, 0x00, 0x06}`, and the IR
+  camera is enabled with `{0x13, 0x04}` / `{0x1A, 0x04}` so the pointer can be published as the
+  right stick. The remote alternates between accelerometer + extension and accelerometer + IR +
+  extension reports because a Bluetooth packet cannot carry all three. Off by default
+  (`enable_wii_remote_driver=false`); the boot manager registers and releases the driver around game
+  start and stop, and the driver is torn down before core shutdown. The IR and accelerometer report
+  builders and their tests are in `src/tests/input_common/wii_remote_protocol.cpp` (7 cases, passing).
+- **Joy-Con 2 mouse mode for the host mouse.** `Mouse::RelativeMove` now converts host motion into
+  the Joy-Con 2 mouse's `delta_x`/`delta_y` (`src/input_common/drivers/mouse.cpp`,
+  `helpers/mouse_mode.h`) with a deadzone, a 10-400 % sensitivity (`joycon2_mouse_sensitivity`,
+  `u16`), optional vertical inversion (`joycon2_mouse_invert_y`), and an optional right-stick
+  projection for games that only read sticks (`joycon2_mouse_stick_fallback`). The mouse is captured
+  only after a click in the render window and released with Ctrl+F9; the virtual cursor stays inside
+  the screen and `HID::Mouse::OnUpdate` clamps the deltas to ±2047. Sensitivity is applied in exactly
+  one place (`Mouse::RelativeMove`), so the stick fallback sees the same scaled motion, and the
+  sign convention stays positive `dx` → +x, positive `dy` → -y. Off by default
+  (`joycon2_mouse_enabled=false`). `src/tests/input_common/mouse_mode.cpp` covers the chain (5
+  cases, passing).
+
+### Changed
+
+- **Bundled icons and downloaded box art match Satsuma's icon handling.** The game list now resolves
+  a game's picture in this order: a bundled icon compiled from `dist/game_icons/<program ID>.png`,
+  the game's own Control NCA icon (or the cached HD artwork sidecar), a bundled
+  `dist/boxart/<program ID>.png`, a cover already in `cache/boxart.pack`, and finally a background
+  download from Nemyu's box-art repository and Eden's, tried by the cover slug of the Switch 2 title
+  table (`dist/switch2_titles.json`, `:/switch2_titles.json`) or slugified from the title
+  (`qt_common/util/boxart.cpp`). Covers are stored zstd-compressed in a single `SBXP` version 1 pack
+  (`cache/boxart.pack`) with a duplicate slug replacing the earlier record and a truncated tail
+  ignored then overwritten; downloads are throttled to 32 queued slugs, one attempt per slug per
+  session, with 3 s connect / 5 s read timeouts, certificate and hostname verification, an 8 MiB
+  cap, and the image magic checked before a cover is accepted. Saved covers are posted to the game
+  list's thread and applied to the row that holds the matching slug, so the tree, grid and carousel
+  fill in without a rescan; a row rebuilt from the parse cache looks in the pack again
+  (`GameListItemPath::ApplyCover`, `GameListWorker::BuildRow`, `GameListModel::ShowCover`).
+  `QtCommon::Boxart::Shutdown()` runs from `~MainWindow` so the download thread is joined at exit.
+  The bundled icons/box art are picked up by a configure-time glob and compiled into the executable
+  (`src/veshiru/CMakeLists.txt`), so dropping a PNG in `dist/game_icons` or `dist/boxart` is enough.
+- **Compatibility column.** `GameListModel::Column` gains `COLUMN_COMPAT` after the name, filled by
+  `GameListItemCompat` from a hard-coded copy of Satsuma's status list
+  (`game_list/satsuma_compat.h`: Playable, In Game +, In Game, Menus, Boots with their colours,
+  ranks and tooltips); unknown games leave the cell empty and sort last. Sorting uses the numeric
+  rank rather than the display text. `src/tests/qt_common/satsuma_compat.cpp` covers lookup and rank
+  order (3 cases, passing).
+- **The library's icon precedence is explicit.** `GameListItemPath` now keeps the icon bytes it was
+  built with (`IconDataRole`) and clears the cover slug when a cover arrives, so a row can never show
+  a stale waiting state; the apply path avoids `dynamic_cast` because the build disables RTTI
+  (`-fno-rtti`, `/GR-`).
+
 ## [3.2.0] - 2026-11-26
 
 ### Changed
