@@ -118,6 +118,7 @@
 #include "qt_common/qt_common.h"
 #include "qt_common/qt_string_lookup.h"
 
+#include "qt_common/util/boxart.h"
 #include "qt_common/util/content.h"
 #include "qt_common/util/meta.h"
 #include "qt_common/util/mod.h"
@@ -630,6 +631,7 @@ MainWindow::MainWindow(const QStringList& launch_arguments)
 }
 
 MainWindow::~MainWindow() {
+    QtCommon::Boxart::Shutdown();
     if (nup_cancel) {
         nup_cancel->store(true);
     }

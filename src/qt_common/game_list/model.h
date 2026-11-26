@@ -35,6 +35,7 @@ class GameListModel : public QStandardItemModel {
 public:
     enum Column {
         COLUMN_NAME,
+        COLUMN_COMPAT,
         COLUMN_FILE_TYPE,
         COLUMN_SIZE,
         COLUMN_PLAY_TIME,
@@ -51,6 +52,9 @@ public:
     void AddDirEntry(GameListDir* entry_items);
     void AddEntry(const QList<QStandardItem*>& entry_items, GameListDir* parent);
     void DonePopulating(const QStringList& watch_list);
+
+    /// Replaces the placeholder of a game waiting for box art with the saved cover.
+    void ShowCover(const QString& slug);
 
     void PopulateAsync(QVector<UISettings::GameDir>& game_dirs, GameListRefreshReason reason);
     void WorkerEvent();

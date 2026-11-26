@@ -41,6 +41,7 @@
 #include "qt_common/qt_common.h"
 
 #include "qt_common/game_list/game_list_p.h"
+#include "qt_common/util/boxart.h"
 
 #include "qt_common/game_list/model.h"
 #include "qt_common/game_list/discovery.h"
@@ -299,15 +300,43 @@ GameListParseCache::EntryData MakeEntryData(const std::string& path, const std::
     const QString game_version = QString::fromStdString(
         GameListVersion::Resolve(patch_versions.toStdString(), patch, loader));
 
+    // A game Satsuma ships an icon for (:/game_icons/<program ID>.png) shows it whatever the
+    // format: a .nup's own icon, a dump's or none.
+    std::vector<u8> picture;
+    {
+        QFile file(QStringLiteral(":/game_icons/%1.png")
+                       .arg(QString::fromStdString(fmt::format("{:016X}", program_id))));
+        if (file.open(QIODevice::ReadOnly)) {
+            const QByteArray bytes = file.readAll();
+            picture.assign(bytes.begin(), bytes.end());
+        }
+    }
+    if (picture.empty()) {
+        picture = icon;
+    }
+
+    // Without either: box art, built in or downloaded before; else the row waits for a download.
+    std::string cover_slug;
+    if (picture.empty() && program_id != 0) {
+        cover_slug = QtCommon::Boxart::GetSlug(program_id, name);
+        picture = QtCommon::Boxart::FindCover(program_id, cover_slug);
+        if (picture.empty() && !cover_slug.empty()) {
+            QtCommon::Boxart::Prefetch(program_id, cover_slug);
+        } else {
+            cover_slug.clear();
+        }
+    }
+
     GameListParseCache::EntryData data;
     data.path = path;
     data.name = name;
-    data.icon = icon;
+    data.icon = std::move(picture);
     data.file_type_string = file_type_string;
     data.program_id = program_id;
     data.size = size;
     data.patch_versions = patch_versions.toStdString();
     data.game_version = game_version.toStdString();
+    data.cover_slug = std::move(cover_slug);
     data.loose_dump = IsExtractedNCAMain(path);
     return data;
 }
@@ -358,11 +387,17 @@ GameListWorker::GameListWorker(FileSys::VirtualFilesystem vfs_,
 
 QList<QStandardItem*> GameListWorker::BuildRow(const GameListParseCache::EntryData& data,
                                                u64 play_time) {
+    auto* const name_item = new GameListItemPath(
+        FormatGameName(data.path), data.icon, QString::fromStdString(data.name),
+        QString::fromStdString(data.file_type_string), data.program_id, play_time,
+        QString::fromStdString(data.patch_versions), QString::fromStdString(data.game_version));
+    if (!data.cover_slug.empty()) {
+        name_item->setData(QString::fromStdString(data.cover_slug),
+                           GameListItemPath::CoverSlugRole);
+    }
     QList<QStandardItem*> entry{
-        new GameListItemPath(
-            FormatGameName(data.path), data.icon, QString::fromStdString(data.name),
-            QString::fromStdString(data.file_type_string), data.program_id, play_time,
-            QString::fromStdString(data.patch_versions), QString::fromStdString(data.game_version)),
+        name_item,
+        new GameListItemCompat(data.program_id),
         new GameListItem(QString::fromStdString(data.file_type_string)),
         new GameListItemSize(data.size),
         new GameListItemPlayTime(play_time),

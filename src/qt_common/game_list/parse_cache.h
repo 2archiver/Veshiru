@@ -61,6 +61,7 @@ struct EntryData {
     u64 size{};                 ///< row size (0 for loose dumps, which show "Not scanned")
     std::string patch_versions; ///< newline-joined patch names, as the UI expects
     std::string game_version;   ///< GameListVersion::Resolve result
+    std::string cover_slug;     ///< box-art name the row waits for, when it has no icon
     bool loose_dump{};          ///< an extracted NCA main, not a container
 };
 

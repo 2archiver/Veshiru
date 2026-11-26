@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <string>
+#include <vector>
+
 #include <QDir>
 #include <QIcon>
 #include <QJsonArray>
@@ -16,6 +19,7 @@
 #include "core/hle/service/filesystem/filesystem.h"
 #include "qt_common/config/uisettings.h"
 #include "qt_common/qt_common.h"
+#include "qt_common/util/boxart.h"
 #include "qt_common/util/game.h"
 
 #include "qt_common/game_list/game_list_p.h"
@@ -67,10 +71,43 @@ GameListModel::GameListModel(std::shared_ptr<FileSys::VfsFilesystem> vfs_,
     RetranslateUI();
 
     setSortRole(GameListItemPath::SortRole);
+
+    QtCommon::Boxart::OnSaved(
+        this, [this](const std::string& slug) { ShowCover(QString::fromStdString(slug)); });
 }
 
 GameListModel::~GameListModel() {
+    QtCommon::Boxart::OnSaved(this, {});
     StopWorker();
+}
+
+void GameListModel::ShowCover(const QString& slug) {
+    std::vector<u8> cover;
+    // Games sit under their directory and in favorites, or at the top of the flat list.
+    const auto update = [&](QStandardItem* game) {
+        if (game == nullptr || game->data(GameListItemPath::CoverSlugRole).toString() != slug) {
+            return;
+        }
+        if (cover.empty()) {
+            const u64 program_id = game->data(GameListItemPath::ProgramIdRole).toULongLong();
+            cover = QtCommon::Boxart::FindCover(program_id, slug.toStdString());
+            if (cover.empty()) {
+                return;
+            }
+        }
+        const QByteArray bytes(reinterpret_cast<const char*>(cover.data()),
+                               static_cast<qsizetype>(cover.size()));
+        // Every game-list item derives GameListItem, and only GameListItemPath holds a cover slug
+        // (checked above), so this cast is exact without RTTI, which the build disables.
+        static_cast<GameListItem*>(game)->ApplyCover(bytes);
+    };
+    for (int i = 0; i < rowCount(); ++i) {
+        auto* top = item(i);
+        update(top);
+        for (int j = 0; j < top->rowCount(); ++j) {
+            update(top->child(j));
+        }
+    }
 }
 
 void GameListModel::SetScanEnabled(bool enabled) {
@@ -252,6 +289,7 @@ void GameListModel::ResetExternalWatcher() {
 
 void GameListModel::RetranslateUI() {
     setHeaderData(COLUMN_NAME, Qt::Horizontal, tr("Name"));
+    setHeaderData(COLUMN_COMPAT, Qt::Horizontal, tr("Compatibility"));
     setHeaderData(COLUMN_ADD_ONS, Qt::Horizontal, tr("Add-ons"));
     setHeaderData(COLUMN_FILE_TYPE, Qt::Horizontal, tr("File type"));
     setHeaderData(COLUMN_SIZE, Qt::Horizontal, tr("Size"));

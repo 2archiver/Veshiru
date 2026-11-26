@@ -13,6 +13,7 @@ add_executable(tests
     qt_common/game_version.cpp
     ../qt_common/game_list/game_version.cpp
     qt_common/game_list_parse_cache.cpp
+    qt_common/satsuma_compat.cpp
     video_core/scaled_image_fits.cpp
     video_core/stale_targets.cpp
     video_core/superseded_images.cpp

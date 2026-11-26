@@ -187,6 +187,7 @@ void GameTree::LoadInterfaceLayout() {
         return;
 
     hdr->resizeSection(GameListModel::COLUMN_NAME, 840);
+    hdr->resizeSection(GameListModel::COLUMN_COMPAT, 110);
 }
 
 void GameTree::UpdateColumnVisibility(GameListModel* model) {
