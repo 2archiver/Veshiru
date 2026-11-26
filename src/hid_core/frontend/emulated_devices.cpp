@@ -130,7 +130,21 @@ void EmulatedDevices::ReloadInput() {
     }
 }
 
+void EmulatedDevices::AddMouseDelta(f32 x, f32 y) {
+    std::scoped_lock lock{mutex};
+    device_status.mouse_delta_state.x += x;
+    device_status.mouse_delta_state.y += y;
+}
+
+MousePosition EmulatedDevices::ConsumeMouseDelta() {
+    std::scoped_lock lock{mutex};
+    const MousePosition delta = device_status.mouse_delta_state;
+    device_status.mouse_delta_state = {};
+    return delta;
+}
+
 void EmulatedDevices::UnloadInput() {
+    device_status.mouse_delta_state = {};
     for (auto& button : mouse_button_devices) {
         button.reset();
     }

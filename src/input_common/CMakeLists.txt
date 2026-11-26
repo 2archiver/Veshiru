@@ -20,12 +20,15 @@ add_library(input_common STATIC
     drivers/virtual_amiibo.h
     drivers/virtual_gamepad.cpp
     drivers/virtual_gamepad.h
+    helpers/mouse_mode.h
     helpers/stick_from_buttons.cpp
     helpers/stick_from_buttons.h
     helpers/touch_from_buttons.cpp
     helpers/touch_from_buttons.h
     helpers/udp_protocol.cpp
     helpers/udp_protocol.h
+    helpers/wii_remote_protocol.cpp
+    helpers/wii_remote_protocol.h
     input_engine.cpp
     input_engine.h
     input_mapping.cpp
@@ -60,6 +63,8 @@ else()
         drivers/renhdrum_pad.h
         drivers/sdl_driver.cpp
         drivers/sdl_driver.h
+        drivers/wii_remote.cpp
+        drivers/wii_remote.h
         helpers/dualsense_haptics.cpp
         helpers/dualsense_haptics.h
         helpers/joycon_driver.cpp

@@ -28,6 +28,7 @@
 #ifdef HAVE_SDL3
 #include "input_common/drivers/joycon.h"
 #include "input_common/drivers/sdl_driver.h"
+#include "input_common/drivers/wii_remote.h"
 #endif
 
 #ifdef __ANDROID__
@@ -93,6 +94,8 @@ struct InputSubsystem::Impl {
 #ifdef HAVE_SDL3
         RegisterEngine("sdl", sdl);
         RegisterEngine("joycon", joycon);
+        RegisterEngine("wii_remote", wii_remote);
+        wii_remote->Setup();
 #endif
 
         Common::Input::RegisterInputFactory("touch_from_button",
@@ -127,6 +130,7 @@ struct InputSubsystem::Impl {
 #ifdef HAVE_SDL3
         UnregisterEngine(sdl);
         UnregisterEngine(joycon);
+        UnregisterEngine(wii_remote);
 #endif
 
         Common::Input::UnregisterInputFactory("touch_from_button");
@@ -157,6 +161,8 @@ struct InputSubsystem::Impl {
 #ifdef HAVE_SDL3
         auto joycon_devices = joycon->GetInputDevices();
         devices.insert(devices.end(), joycon_devices.begin(), joycon_devices.end());
+        auto wii_remote_devices = wii_remote->GetInputDevices();
+        devices.insert(devices.end(), wii_remote_devices.begin(), wii_remote_devices.end());
         auto sdl_devices = sdl->GetInputDevices();
         devices.insert(devices.end(), sdl_devices.begin(), sdl_devices.end());
 #endif
@@ -195,6 +201,9 @@ struct InputSubsystem::Impl {
         }
         if (engine == joycon->GetEngineName()) {
             return joycon;
+        }
+        if (engine == wii_remote->GetEngineName()) {
+            return wii_remote;
         }
 #endif
         return nullptr;
@@ -287,6 +296,9 @@ struct InputSubsystem::Impl {
         if (engine == joycon->GetEngineName()) {
             return true;
         }
+        if (engine == wii_remote->GetEngineName()) {
+            return true;
+        }
 #endif
         return false;
     }
@@ -304,6 +316,7 @@ struct InputSubsystem::Impl {
 #ifdef HAVE_SDL3
         sdl->BeginConfiguration();
         joycon->BeginConfiguration();
+        wii_remote->BeginConfiguration();
 #endif
     }
 
@@ -320,6 +333,7 @@ struct InputSubsystem::Impl {
 #ifdef HAVE_SDL3
         sdl->EndConfiguration();
         joycon->EndConfiguration();
+        wii_remote->EndConfiguration();
 #endif
     }
 
@@ -359,6 +373,7 @@ struct InputSubsystem::Impl {
 #ifdef HAVE_SDL3
     std::shared_ptr<SDLDriver> sdl;
     std::shared_ptr<Joycons> joycon;
+    std::shared_ptr<WiiRemote> wii_remote;
 #endif
 
 #ifdef __ANDROID__

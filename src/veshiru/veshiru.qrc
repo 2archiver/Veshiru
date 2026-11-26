@@ -8,4 +8,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
         <file alias="veshiru_wordmark.png">../../dist/veshiru_wordmark.png</file>
         <file alias="veshiru_wordmark@2x.png">../../dist/veshiru_wordmark@2x.png</file>
     </qresource>
+    <qresource prefix="/">
+        <file alias="switch2_titles.json">../../dist/switch2_titles.json</file>
+    </qresource>
 </RCC>

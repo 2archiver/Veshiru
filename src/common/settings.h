@@ -1016,6 +1016,13 @@ struct Values {
     Setting<bool> controller_navigation{linkage, true, "controller_navigation", Category::Controls};
     Setting<bool> enable_joycon_driver{linkage, true, "enable_joycon_driver", Category::Controls};
     Setting<bool> enable_procon_driver{linkage, false, "enable_procon_driver", Category::Controls};
+    // Wii Remote over Bluetooth HID (SDL's hidapi). Off by default: a paired remote is then left
+    // to SDL, as before.
+    Setting<bool> enable_wii_remote_driver{linkage, false, "enable_wii_remote_driver",
+                                           Category::Controls};
+    // The remote switches between accelerometer + extension (0x35) and accelerometer + IR +
+    // extension (0x37), because Bluetooth reports are too small to carry all three at once.
+    Setting<bool> wii_remote_ir_pointer{linkage, true, "wii_remote_ir_pointer", Category::Controls};
 
     SwitchableSetting<bool> vibration_enabled{linkage, true, "vibration_enabled",
                                               Category::Controls};
@@ -1105,6 +1112,16 @@ struct Values {
     Setting<u8, true> mouse_panning_sensitivity{
                                                 linkage, 50, 1, 100, "mouse_panning_sensitivity", Category::Controls};
     Setting<bool> mouse_enabled{linkage, false, "mouse_enabled", Category::Controls};
+    // Mouse mode: the host mouse drives the emulated Joy-Con 2 optical mouse. Motion is relative
+    // and captured (Ctrl+F9 toggles), unlike the absolute mouse above.
+    Setting<bool> joycon2_mouse_enabled{linkage, false, "joycon2_mouse_enabled", Category::Controls};
+    Setting<u16, true> joycon2_mouse_sensitivity{
+        linkage, 100, 10, 400, "joycon2_mouse_sensitivity", Category::Controls};
+    Setting<bool> joycon2_mouse_invert_y{linkage, false, "joycon2_mouse_invert_y",
+                                         Category::Controls};
+    // Also drive the right stick from mouse motion for games that only expose a stick.
+    Setting<bool> joycon2_mouse_stick_fallback{linkage, true, "joycon2_mouse_stick_fallback",
+                                               Category::Controls};
 
     Setting<u8, true> mouse_panning_x_sensitivity{
                                                   linkage, 50, 1, 100, "mouse_panning_x_sensitivity", Category::Controls};

@@ -12,6 +12,7 @@
 #include <string_view>
 #include <utility>
 
+#include <QColor>
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -28,6 +29,7 @@
 #include "common/string_util.h"
 #include "frontend_common/play_time_manager.h"
 #include "qt_common/config/uisettings.h"
+#include "qt_common/game_list/satsuma_compat.h"
 #include "qt_common/qt_common.h"
 
 enum class GameListItemType {
@@ -161,6 +163,9 @@ public:
     explicit GameListItem(const QString& string) : QStandardItem(string) {
         setData(string, SortRole);
     }
+    /// Shows a cover a row was waiting for; only GameListItemPath has one to show. Exists so the
+    /// model can call it without a dynamic_cast (the build has RTTI off).
+    virtual void ApplyCover(const QByteArray&) {}
 };
 
 /**
@@ -180,6 +185,10 @@ public:
     /// True on the row the worker keeps for a game whose file moved or was deleted, so a view
     /// can mark it without comparing a translated string.
     static constexpr int MissingRole = SortRole + 7;
+    /// The game's icon file as read, before scaling.
+    static constexpr int IconDataRole = SortRole + 8;
+    /// The box-art name a game without an icon waits for (qt_common/util/boxart), else empty.
+    static constexpr int CoverSlugRole = SortRole + 9;
 
     GameListItemPath() = default;
     GameListItemPath(const QString& game_path, const std::vector<u8>& picture_data,
@@ -191,6 +200,9 @@ public:
         setData(game_name, TitleRole);
         setData(qulonglong(program_id), ProgramIdRole);
         setData(game_type, FileTypeRole);
+        setData(QByteArray(reinterpret_cast<const char*>(picture_data.data()),
+                           static_cast<qsizetype>(picture_data.size())),
+                IconDataRole);
 
         const auto readable_play_time =
             play_time > 0 ? QObject::tr("Play Time: %1")
@@ -235,6 +247,26 @@ public:
                 setData(resolved_title, TitleRole);
             }
         }
+    }
+
+    /// Shows a box-art image the worker waited for (qt_common/util/boxart) without touching the
+    /// title.
+    void ApplyCover(const QByteArray& bytes) override {
+        if (bytes.isEmpty()) {
+            return;
+        }
+        const u32 size = UISettings::CurrentGameIconSize().GetValue();
+        bool valid_icon = false;
+        const QPixmap pixmap = FormatHiDpiGameIcon(
+            reinterpret_cast<const u8*>(bytes.constData()),
+            static_cast<std::size_t>(bytes.size()), size, &valid_icon);
+        if (!valid_icon) {
+            return;
+        }
+        setData(pixmap, Qt::DecorationRole);
+        setData(true, HasIconRole);
+        setData(bytes, IconDataRole);
+        setData(QVariant{}, CoverSlugRole);
     }
 
     int type() const override {
@@ -295,38 +327,22 @@ class GameListItemCompat : public GameListItem {
 public:
     static constexpr int CompatNumberRole = SortRole;
     GameListItemCompat() = default;
-    explicit GameListItemCompat(const QString& compatibility) {
+    /// The status Satsuma's compatibility list (satsuma_compat.h) records for the game: a coloured
+    /// circle and the status text. Empty for a game that is not on the list.
+    explicit GameListItemCompat(u64 program_id) {
         setData(type(), TypeRole);
-
-        struct CompatStatus {
-            QString color;
-            const char* text;
-            const char* tooltip;
-        };
-        // clang-format off
-        const auto ingame_status =
-                       CompatStatus{QStringLiteral("#f2d624"), QT_TR_NOOP("Ingame"),     QT_TR_NOOP("Game starts, but crashes or major glitches prevent it from being completed.")};
-        static const std::map<QString, CompatStatus> status_data = {
-            {QStringLiteral("0"),  {QStringLiteral("#5c93ed"), QT_TR_NOOP("Perfect"),    QT_TR_NOOP("Game can be played without issues.")}},
-            {QStringLiteral("1"),  {QStringLiteral("#47d35c"), QT_TR_NOOP("Playable"),   QT_TR_NOOP("Game functions with minor graphical or audio glitches and is playable from start to finish.")}},
-            {QStringLiteral("2"),  ingame_status},
-            {QStringLiteral("3"),  ingame_status}, // Fallback for the removed "Okay" category
-            {QStringLiteral("4"),  {QStringLiteral("#FF0000"), QT_TR_NOOP("Intro/Menu"), QT_TR_NOOP("Game loads, but is unable to progress past the Start Screen.")}},
-            {QStringLiteral("5"),  {QStringLiteral("#828282"), QT_TR_NOOP("Won't Boot"), QT_TR_NOOP("The game crashes when attempting to startup.")}},
-            {QStringLiteral("99"), {QStringLiteral("#000000"), QT_TR_NOOP("Not Tested"), QT_TR_NOOP("The game has not yet been tested.")}},
-        };
-        // clang-format on
-
-        auto iterator = status_data.find(compatibility);
-        if (iterator == status_data.end()) {
-            LOG_WARNING(Frontend, "Invalid compatibility number {}", compatibility.toStdString());
+        const auto status = QtCommon::Game::FindSatsumaCompat(program_id);
+        if (!status) {
+            setData(99, CompatNumberRole);
             return;
         }
-        const CompatStatus& status = iterator->second;
-        setData(compatibility, CompatNumberRole);
-        setText(tr(status.text));
-        setToolTip(tr(status.tooltip));
-        setData(QtCommon::CreateCirclePixmapFromColor(status.color), Qt::DecorationRole);
+        setData(status->rank, CompatNumberRole);
+        setText(tr(status->text));
+        setToolTip(tr(status->tooltip));
+        setData(QtCommon::CreateCirclePixmapFromColor(
+                    QColor(QString::fromLatin1(status->color.data(),
+                                               static_cast<int>(status->color.size())))),
+                Qt::DecorationRole);
     }
 
     int type() const override {
@@ -334,8 +350,7 @@ public:
     }
 
     bool operator<(const QStandardItem& other) const override {
-        return data(CompatNumberRole).value<QString>() <
-               other.data(CompatNumberRole).value<QString>();
+        return data(CompatNumberRole).toInt() < other.data(CompatNumberRole).toInt();
     }
 };
 

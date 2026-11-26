@@ -159,11 +159,77 @@ void Mouse::Move(int x, int y, int center_x, int center_y) {
     }
 }
 
+void Mouse::UpdateRelativeInput(Common::SteadyClock::time_point timestamp) {
+    if (!relative_active) {
+        return;
+    }
+    const float dt_ms = static_cast<float>(
+        std::chrono::duration_cast<std::chrono::microseconds>(timestamp - last_relative_timestamp)
+            .count()) / 1000.0f;
+    last_relative_timestamp = timestamp;
+    relative_stick.Decay(dt_ms);
+    if (!Settings::values.joycon2_mouse_stick_fallback.GetValue()) {
+        relative_stick.Reset();
+        relative_active = false;
+        return;
+    }
+    const auto value = relative_stick.Value();
+    SetAxis(identifier, mouse_axis_x, value.x);
+    SetAxis(identifier, mouse_axis_y, value.y);
+    if (!relative_stick.Active()) {
+        relative_active = false;
+    }
+}
+
 void Mouse::NotifyChanged() {
     auto const timestamp = Common::SteadyClock::Now();
     UpdateStickInput(timestamp);
     UpdateMotionInput(timestamp);
+    UpdateRelativeInput(timestamp);
     last_notify_timestamp = timestamp;
+}
+
+void Mouse::RelativeMove(int dx, int dy) {
+    const MouseMode::Config config{
+        .sensitivity = MouseMode::ClampSensitivity(
+            static_cast<float>(Settings::values.joycon2_mouse_sensitivity.GetValue())),
+        .invert_y = Settings::values.joycon2_mouse_invert_y.GetValue(),
+    };
+    const MouseMode::Delta delta = MouseMode::Scale(dx, dy, config);
+    if (delta.x == 0.0f && delta.y == 0.0f) {
+        return;
+    }
+
+    const auto timestamp = Common::SteadyClock::Now();
+    if (!relative_active) {
+        last_relative_timestamp = timestamp;
+        relative_active = true;
+    }
+
+    relative_stick.Push(delta);
+
+    // The same motion as gyro, for titles whose controller profile maps motion instead of a
+    // mouse. The HID mouse path does not use this; it carries the raw deltas.
+    const BasicMotion motion{
+        .gyro_x = std::clamp(-delta.y * default_motion_panning_sensitivity,
+                             -maximum_rotation_speed, maximum_rotation_speed),
+        .gyro_y = std::clamp(-delta.x * default_motion_panning_sensitivity,
+                             -maximum_rotation_speed, maximum_rotation_speed),
+        .gyro_z = 0.0f,
+        .accel_x = 0.0f,
+        .accel_y = 0.0f,
+        .accel_z = 0.0f,
+        .delta_timestamp = static_cast<u64>(
+            std::chrono::duration_cast<std::chrono::microseconds>(timestamp - last_notify_timestamp)
+                .count()),
+    };
+    SetMotion(motion_identifier, 0, motion);
+
+    if (Settings::values.joycon2_mouse_stick_fallback.GetValue()) {
+        const auto value = relative_stick.Value();
+        SetAxis(identifier, mouse_axis_x, value.x);
+        SetAxis(identifier, mouse_axis_y, value.y);
+    }
 }
 
 void Mouse::MouseMove(f32 touch_x, f32 touch_y) {

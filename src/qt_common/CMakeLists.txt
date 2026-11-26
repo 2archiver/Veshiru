@@ -17,6 +17,7 @@ add_library(qt_common STATIC
     config/shared_translation.cpp
     config/shared_translation.h
 
+    util/boxart.h util/boxart.cpp
     util/path.h util/path.cpp
     util/game.h util/game.cpp
     util/meta.h util/meta.cpp
@@ -82,6 +83,7 @@ target_compile_definitions(qt_common PUBLIC
     QT_NO_URL_CAST_FROM_STRING
 )
 
+target_link_libraries(qt_common PRIVATE zstd::zstd httplib::httplib OpenSSL::SSL OpenSSL::Crypto)
 target_link_libraries(qt_common PRIVATE core Qt6::Core Qt6::Concurrent SimpleIni::SimpleIni QuaZip::QuaZip)
 target_link_libraries(qt_common PUBLIC frozen::frozen-headers Vulkan::Headers)
 target_link_libraries(qt_common PRIVATE gamemode::headers frontend_common)

@@ -13,6 +13,7 @@ add_executable(tests
     qt_common/game_version.cpp
     ../qt_common/game_list/game_version.cpp
     qt_common/game_list_parse_cache.cpp
+    qt_common/satsuma_compat.cpp
     video_core/scaled_image_fits.cpp
     video_core/stale_targets.cpp
     video_core/superseded_images.cpp
@@ -460,7 +461,9 @@ add_test(NAME shader_translation_tests COMMAND shader_translation_tests)
 
 if (NOT ANDROID)
     target_sources(tests PRIVATE input_common/joycon_subcommand_response.cpp
+                                 input_common/mouse_mode.cpp
                                  input_common/rumble_mapping.cpp
+                                 input_common/wii_remote_protocol.cpp
                                  input_common/xbox_hd_rumble.cpp)
     target_link_libraries(tests PRIVATE SDL3::SDL3)
 

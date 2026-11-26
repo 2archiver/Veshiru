@@ -513,3 +513,22 @@ if (TARGET nxformat::static_nozstd)
     target_compile_definitions(veshiru PRIVATE VESHIRU_NX_TOOLS)
 endif()
 create_target_directory_groups(veshiru)
+
+# Satsuma-style bundled icons and box art. Fil's icons live in dist/game_icons and are picked up at
+# configure time, so adding one is enough: <program ID>.png overrides the game's own icon.
+file(GLOB VESHIRU_BUNDLED_GAME_ICONS CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/dist/game_icons/*.png")
+file(GLOB VESHIRU_BUNDLED_BOXART CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/dist/boxart/*.png")
+if (VESHIRU_BUNDLED_GAME_ICONS)
+    qt_add_resources(veshiru "bundled_game_icons"
+        PREFIX "/game_icons"
+        BASE "${PROJECT_SOURCE_DIR}/dist/game_icons"
+        FILES ${VESHIRU_BUNDLED_GAME_ICONS})
+endif()
+if (VESHIRU_BUNDLED_BOXART)
+    qt_add_resources(veshiru "bundled_boxart"
+        PREFIX "/boxart"
+        BASE "${PROJECT_SOURCE_DIR}/dist/boxart"
+        FILES ${VESHIRU_BUNDLED_BOXART})
+endif()

@@ -105,6 +105,11 @@ public:
     void InitializeCamera();
     void FinalizeCamera();
 
+    /// True while host mouse motion is being sent to the emulated Joy-Con 2 mouse.
+    [[nodiscard]] bool IsMouseModeCaptured() const {
+        return mouse_mode_captured;
+    }
+
     bool event(QEvent* event) override;
 
     void focusOutEvent(QFocusEvent* event) override;
@@ -129,6 +134,8 @@ public:
 
 public slots:
     void OnFramebufferSizeChanged();
+    /// Captures or releases the host mouse for Joy-Con 2 mouse mode (Ctrl+F9).
+    void ToggleMouseModeCapture();
 
 signals:
     /// Emitted when the window is closed
@@ -145,6 +152,7 @@ private:
     void TouchEndEvent();
     void ConstrainMouse();
     void UpdateMouse();
+    void SetMouseModeCaptured(bool capture);
 
     void RequestCameraCapture();
     void OnCameraCapture(int requestId, const QImage& img);
@@ -172,6 +180,7 @@ private:
     QWidget* child_widget = nullptr;
 
     bool first_frame = false;
+    bool mouse_mode_captured = false;
     InputCommon::TasInput::TasState last_tas_state;
 
 #if VESHIRU_USE_QT_MULTIMEDIA

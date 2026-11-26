@@ -28,6 +28,11 @@ public:
 private:
     Core::HID::MouseState next_state{};
     Core::HID::AnalogStickState last_mouse_wheel_state{};
+    /// Virtual cursor for Joy-Con 2 mouse mode. It only exists so x/y stay in the protocol's
+    /// screen space; games read delta_x/delta_y for the sensor movement itself.
+    f32 mouse_mode_x{};
+    f32 mouse_mode_y{};
+    bool mouse_mode_positioned{};
     Core::HID::EmulatedDevices* emulated_devices = nullptr;
 };
 } // namespace Service::HID

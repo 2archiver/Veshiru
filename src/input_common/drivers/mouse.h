@@ -11,6 +11,7 @@
 #include "common/steady_clock.h"
 #include "common/polyfill_thread.h"
 #include "common/vector_math.h"
+#include "input_common/helpers/mouse_mode.h"
 #include "input_common/input_engine.h"
 
 namespace InputCommon {
@@ -92,6 +93,11 @@ public:
      */
     void MouseWheelChange(int x, int y);
 
+    /// Feeds relative mouse motion captured for Joy-Con 2 mouse mode. Unlike Move() this is not
+    /// tied to a cursor position; it also drives the optional right-stick fallback and the gyro
+    /// mapping for titles that only read motion.
+    void RelativeMove(int dx, int dy);
+
     void ReleaseAllButtons();
 
     /// @brief Notifies we changed something about the mouse state and we must update
@@ -104,6 +110,7 @@ public:
 private:
     void UpdateStickInput(Common::SteadyClock::time_point timestamp);
     void UpdateMotionInput(Common::SteadyClock::time_point timestamp);
+    void UpdateRelativeInput(Common::SteadyClock::time_point timestamp);
     bool IsMousePanningEnabled();
 
     Common::Input::ButtonNames GetUIButtonName(const Common::ParamPackage& params) const;
@@ -114,6 +121,9 @@ private:
     Common::Vec<float, 3> last_motion_change;
     Common::Vec<int, 2> wheel_position;
     Common::SteadyClock::time_point last_notify_timestamp{};
+    Common::SteadyClock::time_point last_relative_timestamp{};
+    MouseMode::StickProjection relative_stick{};
+    bool relative_active = false;
     bool button_pressed = false;
 };
 
