@@ -9,6 +9,7 @@
 class GameCard;
 class GameListModel;
 class QResizeEvent;
+class QWheelEvent;
 
 class GameCarousel : public QListView {
     Q_OBJECT
@@ -21,6 +22,9 @@ public:
     void UpdateIconSize();
 
     QModelIndex indexAt(const QPoint& point) const override;
+
+protected:
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     GameCard* m_gameCard = nullptr;

@@ -42,6 +42,12 @@ DeviceMemory::~DeviceMemory() = default;
 // spawns), whose map calls stalled 10-14 ms while a pass ran, and (2.7) it waits out the guest
 // presenting: a 1.7-2.1 s pass in the middle of gameplay is a freeze the player sees, and the
 // saving is optional (ShouldTrimZeroPages).
+//
+// When host commit is tight enough to override the presenting rule (a 24 GiB laptop in the 3.2
+// report trimmed 11 GiB in one 5.7 s pass and the game lost frames for seconds), the pass is cut
+// into slices of GuestTrimSliceBytes: each one costs a fraction of a frame, and the pages it
+// trimmed are no longer resident, so the next slice goes further without a cursor. The slices run
+// back to back while the memory is tight and stop as soon as the guest pauses.
 void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     using namespace std::chrono_literals;
     Common::SetCurrentThreadName("ZeroTrim");
@@ -51,18 +57,27 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     // pressure during normal 4-6 GiB Switch 2 course loads, whereas scanning resident guest pages
     // takes ~1000 ms under VAD locks. Defer whenever guest mapping is active and only scan on idle
     // intervals once enough new zero-filled guest memory has accumulated.
-    const bool ample_host_ram = host_ram_bytes >= (u64{24} << 30);
+    // 24 GiB hosts report 23.7 GiB, and they hold a 4-6 GiB guest as comfortably as a 32 GiB one:
+    // the earlier 24 GiB cut-off treated them as tight and ran full passes during gameplay.
+    const bool ample_host_ram = host_ram_bytes >= (u64{20} << 30);
+    // What one pass may scan while the guest is presenting; a full pass when it is not.
+    constexpr size_t GuestTrimSliceBytes = size_t{512} << 20;
     const size_t min_useful_trim = ample_host_ram ? (size_t{256} << 20) : (size_t{64} << 20);
     const u64 active_map_threshold = ample_host_ram ? (u64{8} << 20) : (u64{16} << 20);
     std::mutex mutex;
     std::condition_variable_any wake;
-    std::chrono::seconds interval = ample_host_ram ? 30s : 5s;
+    // Milliseconds: a resumed slice waits 250 ms, not a whole second.
+    std::chrono::milliseconds interval = ample_host_ram ? 30000ms : 5000ms;
     u64 last_zero_filled_bytes = 0;
     u32 consecutive_busy_deferrals = 0;
     u32 consecutive_presenting_deferrals = 0;
     // How long a game that keeps presenting holds a pass back once host commit is under pressure.
     const std::chrono::seconds trim_escape = ample_host_ram ? 120s : 20s;
     auto last_pass = std::chrono::steady_clock::now();
+    // Time of the last bounded slice, which is not a pass for the escape interval above, and how
+    // many of them ran since the last full pass.
+    auto last_slice = std::chrono::steady_clock::time_point{};
+    u32 slices_since_pass = 0;
     u64 last_seen_presents = Core::g_nx2_present_count.load(std::memory_order_relaxed);
     auto last_present_time = std::chrono::steady_clock::time_point{};
     while (true) {
@@ -118,8 +133,12 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             (presents_after != presents_before) || recently_presented;
         const auto since_pass =
             std::chrono::duration_cast<std::chrono::seconds>(now - last_pass);
-        if (!ShouldTrimZeroPages(mapping_active, guest_presenting, since_pass, memory_pressure,
-                                 trim_escape)) {
+        // A slice left pages behind: keep going at the slice cadence instead of waiting for the
+        // escape interval again. The 2 s window covers the mapping poll between two slices.
+        const bool slicing = last_slice != std::chrono::steady_clock::time_point{} &&
+                             (now - last_slice) < 2s;
+        if (!slicing && !ShouldTrimZeroPages(mapping_active, guest_presenting, since_pass,
+                                             memory_pressure, trim_escape)) {
             // Silent after the first time: a session that plays for an hour would otherwise log a
             // deferral per interval. The first one explains where the earlier freezes went.
             if (consecutive_presenting_deferrals++ == 0) {
@@ -136,19 +155,19 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             const u64 zero_now = Common::HostMemory::ZeroFilledBytes();
             if (usage.working_set < (host_ram_bytes / 3) &&
                 zero_now - last_zero_filled_bytes < (u64{512} << 20)) {
-                interval = (std::min)(interval * 2, std::chrono::seconds{300});
+                interval = (std::min)(interval * 2, 300000ms);
                 continue;
             }
             last_zero_filled_bytes = zero_now;
         }
         const auto start = std::chrono::steady_clock::now();
-        std::pair<size_t, size_t> result;
+        Common::HostMemory::ZeroTrimResult result;
         try {
-            result = buffer.TrimZeroPages();
+            result = buffer.TrimZeroPages(guest_presenting ? GuestTrimSliceBytes : 0);
         } catch (const std::bad_alloc&) {
             // A pass needs 32 MiB and more of scratch. When Windows runs out of commit, the
             // exception leaving this thread ended the emulator (#1346); the pass is only a saving.
-            interval = std::chrono::seconds{60};
+            interval = 60000ms;
             LOG_WARNING(HW_Memory,
                         "Skipped trimming all-zero guest pages: out of memory. Windows commit is "
                         "{} of {} MiB (this process {} MiB); the limit is RAM plus the page file",
@@ -156,20 +175,43 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
                         usage.commit >> 20);
             continue;
         }
-        const auto [resident, trimmed] = result;
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - start)
                             .count();
-        if (trimmed < min_useful_trim) {
-            interval = (std::min)(interval * 2, std::chrono::seconds{300});
+        const auto now_pass = std::chrono::steady_clock::now();
+        if (result.truncated && result.trimmed == 0) {
+            // Slices that keep finding nothing are not progress: back off instead of spinning over
+            // the same resident pages (VirtualUnlock does not always remove them at once).
+            last_slice = {};
+            interval = (std::min)(interval * 2, 300000ms);
             continue;
         }
-        interval = ample_host_ram ? 30s : 5s;
-        last_pass = std::chrono::steady_clock::now();
+        if (result.truncated) {
+            // A slice: bounded work, and the next one carries on past the pages it trimmed. One
+            // line for the first slice of a run and then every 16th, so a long trim stays legible.
+            last_slice = now_pass;
+            interval = ample_host_ram ? 1000ms : 250ms;
+            if (slices_since_pass++ % 16 == 0) {
+                LOG_INFO(HW_Memory,
+                         "Trimmed {} MiB of all-zero guest pages out of {} MiB resident in {} ms (a "
+                         "slice, {} this run; the guest kept running)",
+                         result.trimmed >> 20, result.resident >> 20, ms, slices_since_pass);
+            }
+            continue;
+        }
+        last_slice = {};
+        slices_since_pass = 0;
+        if (result.trimmed < min_useful_trim) {
+            interval = (std::min)(interval * 2, 300000ms);
+            continue;
+        }
+        interval = ample_host_ram ? 30000ms : 5000ms;
+        last_pass = now_pass;
         LOG_INFO(HW_Memory,
                  "Trimmed {} MiB of all-zero guest pages out of {} MiB resident in {} ms; the kernel "
                  "zero-filled {} MiB so far",
-                 trimmed >> 20, resident >> 20, ms, Common::HostMemory::ZeroFilledBytes() >> 20);
+                 result.trimmed >> 20, result.resident >> 20, ms,
+                 Common::HostMemory::ZeroFilledBytes() >> 20);
     }
 }
 #endif

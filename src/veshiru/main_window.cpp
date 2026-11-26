@@ -1715,7 +1715,6 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Grid_View, &MainWindow::SetGridView);
     connect_menu(ui->action_Tree_View, &MainWindow::SetTreeView);
     connect_menu(ui->action_Carousel_View, &MainWindow::SetCarouselView);
-    connect_menu(ui->action_Versioned_List_View, &MainWindow::SetVersionedListView);
 
     game_size_actions = new QActionGroup(this);
     game_size_actions->setExclusive(true);
@@ -4057,11 +4056,9 @@ void MainWindow::SetGameListMode(Settings::GameListMode mode) {
     ui->action_Grid_View->setChecked(mode == Settings::GameListMode::GridView);
     ui->action_Tree_View->setChecked(mode == Settings::GameListMode::TreeView);
     ui->action_Carousel_View->setChecked(mode == Settings::GameListMode::CarouselView);
-    ui->action_Versioned_List_View->setChecked(mode == Settings::GameListMode::VersionListView);
 
     UISettings::values.game_list_mode = mode;
-    ui->action_Show_Game_Name->setEnabled(mode != Settings::GameListMode::TreeView &&
-                                          mode != Settings::GameListMode::VersionListView);
+    ui->action_Show_Game_Name->setEnabled(mode != Settings::GameListMode::TreeView);
 
     CheckIconSize();
     game_list->ResetViewMode();
@@ -4077,10 +4074,6 @@ void MainWindow::SetTreeView() {
 
 void MainWindow::SetCarouselView() {
     SetGameListMode(Settings::GameListMode::CarouselView);
-}
-
-void MainWindow::SetVersionedListView() {
-    SetGameListMode(Settings::GameListMode::VersionListView);
 }
 
 void MainWindow::CheckIconSize() {
