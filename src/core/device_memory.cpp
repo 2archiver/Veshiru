@@ -66,7 +66,8 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     const u64 active_map_threshold = ample_host_ram ? (u64{8} << 20) : (u64{16} << 20);
     std::mutex mutex;
     std::condition_variable_any wake;
-    std::chrono::seconds interval = ample_host_ram ? 30s : 5s;
+    // Milliseconds: a resumed slice waits 250 ms, not a whole second.
+    std::chrono::milliseconds interval = ample_host_ram ? 30000ms : 5000ms;
     u64 last_zero_filled_bytes = 0;
     u32 consecutive_busy_deferrals = 0;
     u32 consecutive_presenting_deferrals = 0;
@@ -154,7 +155,7 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             const u64 zero_now = Common::HostMemory::ZeroFilledBytes();
             if (usage.working_set < (host_ram_bytes / 3) &&
                 zero_now - last_zero_filled_bytes < (u64{512} << 20)) {
-                interval = (std::min)(interval * 2, std::chrono::seconds{300});
+                interval = (std::min)(interval * 2, 300000ms);
                 continue;
             }
             last_zero_filled_bytes = zero_now;
@@ -166,7 +167,7 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         } catch (const std::bad_alloc&) {
             // A pass needs 32 MiB and more of scratch. When Windows runs out of commit, the
             // exception leaving this thread ended the emulator (#1346); the pass is only a saving.
-            interval = std::chrono::seconds{60};
+            interval = 60000ms;
             LOG_WARNING(HW_Memory,
                         "Skipped trimming all-zero guest pages: out of memory. Windows commit is "
                         "{} of {} MiB (this process {} MiB); the limit is RAM plus the page file",
@@ -182,14 +183,14 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
             // Slices that keep finding nothing are not progress: back off instead of spinning over
             // the same resident pages (VirtualUnlock does not always remove them at once).
             last_slice = {};
-            interval = (std::min)(interval * 2, std::chrono::seconds{300});
+            interval = (std::min)(interval * 2, 300000ms);
             continue;
         }
         if (result.truncated) {
             // A slice: bounded work, and the next one carries on past the pages it trimmed. One
             // line for the first slice of a run and then every 16th, so a long trim stays legible.
             last_slice = now_pass;
-            interval = ample_host_ram ? 1s : 250ms;
+            interval = ample_host_ram ? 1000ms : 250ms;
             if (slices_since_pass++ % 16 == 0) {
                 LOG_INFO(HW_Memory,
                          "Trimmed {} MiB of all-zero guest pages out of {} MiB resident in {} ms (a "
@@ -201,10 +202,10 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         last_slice = {};
         slices_since_pass = 0;
         if (result.trimmed < min_useful_trim) {
-            interval = (std::min)(interval * 2, std::chrono::seconds{300});
+            interval = (std::min)(interval * 2, 300000ms);
             continue;
         }
-        interval = ample_host_ram ? 30s : 5s;
+        interval = ample_host_ram ? 30000ms : 5000ms;
         last_pass = now_pass;
         LOG_INFO(HW_Memory,
                  "Trimmed {} MiB of all-zero guest pages out of {} MiB resident in {} ms; the kernel "
