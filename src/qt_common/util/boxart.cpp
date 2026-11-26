@@ -10,7 +10,6 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
-#include <optional>
 #include <stop_token>
 #include <string_view>
 #include <thread>
@@ -28,8 +27,6 @@
 #include <fmt/format.h>
 #include <zstd.h>
 
-#include "common/fs/fs.h"
-#include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/thread.h"
