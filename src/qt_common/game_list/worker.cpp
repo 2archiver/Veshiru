@@ -387,13 +387,24 @@ GameListWorker::GameListWorker(FileSys::VirtualFilesystem vfs_,
 
 QList<QStandardItem*> GameListWorker::BuildRow(const GameListParseCache::EntryData& data,
                                                u64 play_time) {
+    // A cached row can predate the cover it waits for, and its download already happened this
+    // session, so look in the pack again; only a row still without a cover keeps the slug.
+    std::vector<u8> icon = data.icon;
+    QString cover_slug = QString::fromStdString(data.cover_slug);
+    if (icon.empty() && !cover_slug.isEmpty()) {
+        icon = QtCommon::Boxart::FindCover(data.program_id, data.cover_slug);
+        if (icon.empty()) {
+            QtCommon::Boxart::Prefetch(data.program_id, data.cover_slug);
+        } else {
+            cover_slug.clear();
+        }
+    }
     auto* const name_item = new GameListItemPath(
-        FormatGameName(data.path), data.icon, QString::fromStdString(data.name),
+        FormatGameName(data.path), icon, QString::fromStdString(data.name),
         QString::fromStdString(data.file_type_string), data.program_id, play_time,
         QString::fromStdString(data.patch_versions), QString::fromStdString(data.game_version));
-    if (!data.cover_slug.empty()) {
-        name_item->setData(QString::fromStdString(data.cover_slug),
-                           GameListItemPath::CoverSlugRole);
+    if (!cover_slug.isEmpty()) {
+        name_item->setData(cover_slug, GameListItemPath::CoverSlugRole);
     }
     QList<QStandardItem*> entry{
         name_item,
