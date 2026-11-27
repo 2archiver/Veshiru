@@ -14,6 +14,11 @@ namespace VideoCommon {
 
 // The last field used is the previous view-projection matrix at 0x180, ending at 0x1c0.
 inline constexpr size_t OcarinaCameraBytes = 0x1c0;
+inline constexpr size_t OcarinaCameraBufferIndex = 3;
+inline constexpr size_t OcarinaCameraViewProjectionOffset = 0x30;
+inline constexpr size_t OcarinaCameraProjectionOffset = 0x90;
+inline constexpr size_t OcarinaCameraResolutionOffset = 0x120;
+inline constexpr size_t OcarinaCameraPreviousViewProjectionOffset = 0x180;
 using OcarinaCameraBuffer = std::array<f32, OcarinaCameraBytes / sizeof(f32)>;
 
 enum class OcarinaCameraIssue { None, ShortBuffer, Extent, Projection };
@@ -30,8 +35,9 @@ inline OcarinaCamera DecodeOcarinaCamera(std::span<const f32> values, u32 target
     if (values.size_bytes() < OcarinaCameraBytes) {
         return camera;
     }
-    const f32 width = values[0x120 / sizeof(f32)];
-    const f32 height = values[0x124 / sizeof(f32)];
+    const size_t resolution_offset = OcarinaCameraResolutionOffset / sizeof(f32);
+    const f32 width = values[resolution_offset];
+    const f32 height = values[resolution_offset + 1];
     camera.issue = OcarinaCameraIssue::Extent;
     if (!std::isfinite(width) || !std::isfinite(height) || width < 640.0f || height < 360.0f ||
         static_cast<f64>(width) > target_width || static_cast<f64>(height) > target_height) {
@@ -47,11 +53,14 @@ inline OcarinaCamera DecodeOcarinaCamera(std::span<const f32> values, u32 target
         return camera;
     }
     camera.issue = OcarinaCameraIssue::Projection;
-    if (values[0xa8 / sizeof(f32)] != -1.0f || values[0xac / sizeof(f32)] != 0.0f) {
+    const size_t projection_offset = OcarinaCameraProjectionOffset / sizeof(f32);
+    if (values[projection_offset + 6] != -1.0f || values[projection_offset + 7] != 0.0f) {
         return camera;
     }
-    std::copy_n(values.begin() + 0x30 / sizeof(f32), 16, camera.current.begin());
-    std::copy_n(values.begin() + 0x180 / sizeof(f32), 16, camera.previous.begin());
+    std::copy_n(values.begin() + OcarinaCameraViewProjectionOffset / sizeof(f32), 16,
+                camera.current.begin());
+    std::copy_n(values.begin() + OcarinaCameraPreviousViewProjectionOffset / sizeof(f32), 16,
+                camera.previous.begin());
     camera.issue = OcarinaCameraIssue::None;
     return camera;
 }

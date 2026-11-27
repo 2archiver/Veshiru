@@ -1731,13 +1731,7 @@ static void ReadPipelines(
     u32 cache_version;
     file.read(magic_number.data(), magic_number.size())
         .read(reinterpret_cast<char*>(&cache_version), sizeof(cache_version));
-    const bool upgrading = upgrade != nullptr && magic_number == MAGIC_NUMBER &&
-                           cache_version >= min_compatible_version &&
-                           cache_version < expected_cache_version;
-    if (upgrading) {
-        upgrade->from_version = cache_version;
-    }
-    if (!upgrading && (magic_number != MAGIC_NUMBER || cache_version != expected_cache_version)) {
+    if (magic_number != MAGIC_NUMBER || cache_version != expected_cache_version) {
         file.close();
         if (cache_version != expected_cache_version && magic_number == MAGIC_NUMBER) {
             std::filesystem::path backup = filename;
@@ -1804,10 +1798,6 @@ static void ReadPipelines(
 
 } catch (const std::ios_base::failure& e) {
     LOG_ERROR(Common_Filesystem, "{}", e.what());
-    if (upgrade != nullptr && upgrade->from_version != 0) {
-        // The records read so far are written again under the current version.
-        return;
-    }
     if (!Common::FS::RemoveFile(filename)) {
         LOG_ERROR(Common_Filesystem, "Failed to delete pipeline cache file {}",
                   Common::FS::PathToUTF8String(filename));
