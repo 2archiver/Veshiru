@@ -1532,11 +1532,6 @@ bool CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, 
                 if (IsGlobalMemoryWrite(inst)) {
                     info.writes.insert(*storage_buffer);
                 }
-                if (candidate.indirect != ~0U) {
-                    // The backend reads the pointer through the buffer that holds it.
-                    info.set.insert(StorageBufferAddr{.index = candidate.index,
-                                                      .offset = candidate.offset});
-                }
                 accepted = true;
             }
             for (const StorageBufferAddr& candidate : candidates) {
