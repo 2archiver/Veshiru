@@ -254,9 +254,6 @@ public:
     VectorTypes F16;
     VectorTypes F64;
 
-    ::Common::unordered_map<u32, Id> u32_constants;
-    ::Common::unordered_map<u32, Id> f32_constants;
-
     Id true_value{};
     Id false_value{};
     Id u32_zero_value{};
