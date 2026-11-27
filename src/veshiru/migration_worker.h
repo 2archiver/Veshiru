@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -34,6 +37,7 @@ static constexpr std::array<Emulator, 8> legacy_emus = {
     STRUCT_EMU(QT_TR_NOOP("Sudachi"), Sudachi),
     STRUCT_EMU(QT_TR_NOOP("Suyu"), Suyu),
     STRUCT_EMU(QT_TR_NOOP("Yuzu"), Yuzu),
+    STRUCT_EMU(QT_TR_NOOP("LegacyEden"), LegacyEden),
 };
 
 class MigrationWorker : public QObject {

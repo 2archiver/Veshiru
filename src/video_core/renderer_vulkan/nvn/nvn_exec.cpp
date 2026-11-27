@@ -26,7 +26,6 @@
 #include "core/perf_stats.h"
 #include "video_core/game_frame_size.h"
 #include "video_core/nvn/timestamp_mode.h"
-#include "video_core/nvn_draw_probe.h"
 #include "video_core/nx2.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_vulkan/nvn/nvn_condition_prefetch.h"
@@ -5723,7 +5722,6 @@ GpuProf::Tag Recorder::ProfTexture(GpuProf::Kind kind, u64 serial, u32 count) co
 
 bool Recorder::RecordPresent(Texture& texture, Frame& frame, std::vector<Frame*>& generated,
                              const VideoCommon::Nvn::PresentCrop& window_crop) {
-    VideoCommon::NvnDrawProbe::OnPresent();
     if (impl.vtxcov_diag) {
         impl.VtxCovOnPresent();
     }

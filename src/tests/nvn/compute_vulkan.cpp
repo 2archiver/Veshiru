@@ -26,7 +26,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
-#include "common/diag_request.h"
+#include "common/nx2_try_switch.h"
 #include "common/game_presets.h"
 #include "common/literals.h"
 #include "common/settings.h"
@@ -1304,14 +1304,14 @@ TEST_CASE("NVN pool mirror: raw-global draws keep the mirror entries live (TRY_R
         SKIP("raw-global memory is unsupported on this Vulkan device");
     }
     // Written for TRY_STORAGE_RAW_WRITE_THROUGH off (now on by default): pin it for this test.
-    namespace D = Common::DiagRequest;
+    namespace D = Common::Nx2TrySwitch;
     struct SwitchGuard {
-        bool initial = D::TrySwitchEnabled("TRY_STORAGE_RAW_WRITE_THROUGH");
+        bool initial = D::Enabled("TRY_STORAGE_RAW_WRITE_THROUGH");
         SwitchGuard() {
-            REQUIRE(D::SetTrySwitch("TRY_STORAGE_RAW_WRITE_THROUGH", false));
+            REQUIRE(D::Set("TRY_STORAGE_RAW_WRITE_THROUGH", false));
         }
         ~SwitchGuard() {
-            static_cast<void>(D::SetTrySwitch("TRY_STORAGE_RAW_WRITE_THROUGH", initial));
+            static_cast<void>(D::Set("TRY_STORAGE_RAW_WRITE_THROUGH", initial));
         }
     } guard;
     constexpr u64 TARGET = POOL_VA + 0x4000;
@@ -1380,16 +1380,16 @@ TEST_CASE("NVN storage mirror: raw writes reach guest memory without whole-pool 
         !vulkan->device->IsDescriptorAliasingSupported()) {
         SKIP("raw-global memory is unsupported on this Vulkan device");
     }
-    namespace D = Common::DiagRequest;
-    const bool initial = D::TrySwitchEnabled("TRY_STORAGE_RAW_WRITE_THROUGH");
+    namespace D = Common::Nx2TrySwitch;
+    const bool initial = D::Enabled("TRY_STORAGE_RAW_WRITE_THROUGH");
     struct SwitchReset {
         bool initial;
         ~SwitchReset() {
-            static_cast<void>(D::SetTrySwitch("TRY_STORAGE_RAW_WRITE_THROUGH", initial));
+            static_cast<void>(D::Set("TRY_STORAGE_RAW_WRITE_THROUGH", initial));
         }
     } reset{initial};
     for (const bool write_through : {false, true}) {
-        REQUIRE(D::SetTrySwitch("TRY_STORAGE_RAW_WRITE_THROUGH", write_through));
+        REQUIRE(D::Set("TRY_STORAGE_RAW_WRITE_THROUGH", write_through));
         ShadowRig rig(*vulkan, Vulkan::Nvn::ContextOptions{.pool_mirror = 1u,
                                                           .raw_keep_entries = true});
         std::vector<u64> list;
@@ -4161,14 +4161,14 @@ TEST_CASE("NVN vertex mirror: a raw global store makes the read-only mirror stal
         SKIP("raw-global memory is unsupported on this Vulkan device");
     }
     // Written for TRY_RO_MIRROR_EXACT off (now on by default): pin it for this test.
-    namespace D = Common::DiagRequest;
+    namespace D = Common::Nx2TrySwitch;
     struct SwitchGuard {
-        bool initial = D::TrySwitchEnabled("TRY_RO_MIRROR_EXACT");
+        bool initial = D::Enabled("TRY_RO_MIRROR_EXACT");
         SwitchGuard() {
-            REQUIRE(D::SetTrySwitch("TRY_RO_MIRROR_EXACT", false));
+            REQUIRE(D::Set("TRY_RO_MIRROR_EXACT", false));
         }
         ~SwitchGuard() {
-            static_cast<void>(D::SetTrySwitch("TRY_RO_MIRROR_EXACT", initial));
+            static_cast<void>(D::Set("TRY_RO_MIRROR_EXACT", initial));
         }
     } guard;
     VertexMirrorRig rig(*vulkan, true, false);
@@ -4204,15 +4204,15 @@ TEST_CASE("NVN vertex mirror: a written-through raw store keeps the read-only mi
         !vulkan->device->IsDescriptorAliasingSupported()) {
         SKIP("raw-global memory is unsupported on this Vulkan device");
     }
-    namespace D = Common::DiagRequest;
+    namespace D = Common::Nx2TrySwitch;
     // The programs are translated with the switch (it is read at translation).
     struct SwitchGuard {
-        bool initial = D::TrySwitchEnabled("TRY_RO_MIRROR_EXACT");
+        bool initial = D::Enabled("TRY_RO_MIRROR_EXACT");
         SwitchGuard() {
-            REQUIRE(D::SetTrySwitch("TRY_RO_MIRROR_EXACT", true));
+            REQUIRE(D::Set("TRY_RO_MIRROR_EXACT", true));
         }
         ~SwitchGuard() {
-            static_cast<void>(D::SetTrySwitch("TRY_RO_MIRROR_EXACT", initial));
+            static_cast<void>(D::Set("TRY_RO_MIRROR_EXACT", initial));
         }
     } guard;
     VertexMirrorRig rig(*vulkan, true, false);
@@ -4267,15 +4267,15 @@ TEST_CASE("NVN vertex mirror: a raw atomic is written through to the read-only m
         !vulkan->device->IsDescriptorAliasingSupported()) {
         SKIP("raw-global memory is unsupported on this Vulkan device");
     }
-    namespace D = Common::DiagRequest;
+    namespace D = Common::Nx2TrySwitch;
     // The programs are translated with the switch (it is read at translation).
     struct SwitchGuard {
-        bool initial = D::TrySwitchEnabled("TRY_RO_MIRROR_EXACT");
+        bool initial = D::Enabled("TRY_RO_MIRROR_EXACT");
         SwitchGuard() {
-            REQUIRE(D::SetTrySwitch("TRY_RO_MIRROR_EXACT", true));
+            REQUIRE(D::Set("TRY_RO_MIRROR_EXACT", true));
         }
         ~SwitchGuard() {
-            static_cast<void>(D::SetTrySwitch("TRY_RO_MIRROR_EXACT", initial));
+            static_cast<void>(D::Set("TRY_RO_MIRROR_EXACT", initial));
         }
     } guard;
     VertexMirrorRig rig(*vulkan, true, false);
@@ -4312,16 +4312,16 @@ TEST_CASE("NVN storage mirror: a raw atomic writes through to imported guest mem
         !vulkan->device->IsDescriptorAliasingSupported()) {
         SKIP("raw-global memory is unsupported on this Vulkan device");
     }
-    namespace D = Common::DiagRequest;
-    const bool initial = D::TrySwitchEnabled("TRY_STORAGE_RAW_WRITE_THROUGH");
+    namespace D = Common::Nx2TrySwitch;
+    const bool initial = D::Enabled("TRY_STORAGE_RAW_WRITE_THROUGH");
     struct SwitchReset {
         bool initial;
         ~SwitchReset() {
             static_cast<void>(
-                Common::DiagRequest::SetTrySwitch("TRY_STORAGE_RAW_WRITE_THROUGH", initial));
+                Common::Nx2TrySwitch::Set("TRY_STORAGE_RAW_WRITE_THROUGH", initial));
         }
     } reset{initial};
-    REQUIRE(D::SetTrySwitch("TRY_STORAGE_RAW_WRITE_THROUGH", true));
+    REQUIRE(D::Set("TRY_STORAGE_RAW_WRITE_THROUGH", true));
     VertexMirrorRig rig(*vulkan, true, false);
     for (u32 i = 0; i < 3; ++i) {
         rig.SetVertex(i, F32_ONE_64TH);

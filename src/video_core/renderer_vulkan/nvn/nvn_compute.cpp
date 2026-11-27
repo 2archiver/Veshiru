@@ -33,7 +33,6 @@
 #include "video_core/nvn/shader/nvn_compute_bank.h"
 #include "video_core/nvn/shader/nvn_driver_layout.h"
 #include "video_core/nvn/timestamp_mode.h"
-#include "video_core/nvn_draw_probe.h"
 #include "video_core/renderer_vulkan/nvn/nvn_draw.h"
 #include "video_core/renderer_vulkan/nvn/nvn_backing_log.h"
 
@@ -348,22 +347,6 @@ void DrawContext::Dispatch(const VC::DispatchPayload& p) {
         host->HostFlight().keepalive.push_back(compute);
         last_compute_kept = compute.get();
     }
-    // nvn_draws / nvn_draw_skip (video_core/nvn_draw_probe.h): a skipped direct dispatch is
-    // recorded with zero groups below, a skipped indirect one is not recorded.
-    bool probe_skip = false;
-    const bool probe_active = VideoCommon::NvnDrawProbe::Active();
-    const VideoCommon::NvnDrawProbe::DispatchInfo probe_info{
-        .hash = program_hash,
-        .groups = indirect ? std::array<u32, 3>{} : std::array<u32, 3>{p.x, p.y, p.z},
-        .indirect = indirect};
-    if (probe_active) [[unlikely]] {
-        probe_skip = VideoCommon::NvnDrawProbe::OnDispatch(probe_info);
-        if (probe_skip && indirect) {
-            skipped();
-            return;
-        }
-    }
-
     // Indirect group counts are read by the GPU: resolve them first, so a dispatch that is
     // skipped here never marks the storage ranges it would have written.
     BufferRef arguments;
@@ -504,15 +487,6 @@ void DrawContext::Dispatch(const VC::DispatchPayload& p) {
         skipped();
         return;
     }
-    // nvn_draw_dump: claimed only now, so every claimed section is written.
-    std::string probe_prefix; // nvn_draw_dump: path prefix of the image read-backs after the dispatch
-    if (probe_active) [[unlikely]] {
-        if (const auto ticket = VideoCommon::NvnDrawProbe::DumpRequested(probe_info)) {
-            ProbeDispatchDump(*ticket, *compute, *control, p, indirect ? &arguments : nullptr,
-                              program_hash, probe_skip);
-            probe_prefix = fmt::format("{}-{}", ticket->path, ticket->index + 1);
-        }
-    }
     const Debug::Config& backing_config = Debug::Get();
     if (backing_config.log_backing_program == hash_it->second[STAGE_COMPUTE] &&
         log_backing_dispatches < backing_config.log_backing_max) {
@@ -597,10 +571,7 @@ void DrawContext::Dispatch(const VC::DispatchPayload& p) {
              : GpuProf::Tag{},
         0, cs_mode != CostSplit::Mode::Count ? 1u : 0u};
     cmd.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *compute->pipeline);
-    if (probe_skip) [[unlikely]] {
-        // As the cost split's nogroups: the barriers and bookkeeping stay, the work vanishes.
-        cmd.Dispatch(0, 0, 0);
-    } else if (cs_mode == CostSplit::Mode::NoGroups || cs_mode == CostSplit::Mode::OneGroup)
+    if (cs_mode == CostSplit::Mode::NoGroups || cs_mode == CostSplit::Mode::OneGroup)
         [[unlikely]] {
         // Direct or indirect, the mode's groups.
         const std::array<u32, 3> groups = CostSplit::Groups(cs_mode, {p.x, p.y, p.z});
@@ -616,11 +587,6 @@ void DrawContext::Dispatch(const VC::DispatchPayload& p) {
     // The shader may have written buffers and images: later commands order after them (a later
     // dispatch only behind a game barrier with dispatch ordering by barriers, as on NVN).
     host->HostMarkDispatchWritten();
-    if (!probe_prefix.empty()) [[unlikely]] {
-        // What the dumped dispatch bound, as the GPU has it after the dispatch.
-        ProbeNoteImages(probe_prefix, u64{2048} * 2048);
-        ProbeFlushImages();
-    }
     if (pathdiff) [[unlikely]] {
         PathDiffEnd(std::move(*pathdiff));
     }

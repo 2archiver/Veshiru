@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -11,6 +14,8 @@
 #include "common/scm_rev.h"
 #include "net.h"
 
+#include "common/fs/fs_util.h"
+#include "common/fs/path_util.h"
 #include "common/logging.h"
 
 #include "common/httplib.h"
@@ -105,6 +110,9 @@ std::optional<Release> Release::FromJson(const nlohmann::json& json, const std::
     Release rel;
     if (!json.is_object())
         return std::nullopt;
+    if (json.value("draft", false))
+        return std::nullopt;
+
     if (json.value("draft", false))
         return std::nullopt;
 

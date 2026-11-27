@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -1103,6 +1106,10 @@ FN_MAX_LIMIT_LIST
     bool IsSharedInt64AtomicsSupported() const {
         return extensions.shader_atomic_int64 &&
                features.shader_atomic_int64.shaderSharedInt64Atomics;
+    }
+
+    bool IsExtExternalMemoryHost() const {
+        return extensions.external_memory_host;
     }
 
     bool IsExtConditionalRendering() const {

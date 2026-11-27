@@ -12,6 +12,19 @@
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 
+namespace Nx2Switches {
+
+/// The shared NX2 switches file edited by the Performance settings page.
+inline std::filesystem::path UserFilePath() {
+#ifdef _WIN32
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "nx2_switches.txt";
+#else
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "nx2_switches.txt";
+#endif
+}
+
+} // namespace Nx2Switches
+
 // The NX2 switches are read from the environment (EDEN_NX2_*), which a GUI launch has no way to
 // set. nx2_switches.txt holds "NAME=VALUE" lines, one per line, '#' comments. A variable already
 // in the real environment always wins, so a launcher script can still override one run; between

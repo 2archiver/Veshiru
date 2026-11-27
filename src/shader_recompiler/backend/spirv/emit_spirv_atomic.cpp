@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -106,6 +109,7 @@ Id StorageAtomicU32x2(EmitContext& ctx, const IR::Value& binding, const IR::Valu
     ctx.OpStore(pointer, result);
     return original_value;
 }
+
 } // Anonymous namespace
 
 Id EmitSharedAtomicIAdd32(EmitContext& ctx, Id offset, Id value) {

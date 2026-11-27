@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -160,6 +163,7 @@ add_library(shader_recompiler STATIC
     frontend/maxwell/translate/impl/texture_gradient.cpp
     frontend/maxwell/translate/impl/texture_load.cpp
     frontend/maxwell/translate/impl/texture_load_swizzled.cpp
+    frontend/maxwell/translate/impl/tensor_mul_add.cpp
     frontend/maxwell/translate/impl/texture_mipmap_level.cpp
     frontend/maxwell/translate/impl/texture_query.cpp
     frontend/maxwell/translate/impl/video_helper.cpp

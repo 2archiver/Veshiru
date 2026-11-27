@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -105,6 +108,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, cpu_ticks, tr("Custom CPU Ticks"),
            tr("Set a custom value of CPU ticks. Higher values can increase performance, but may "
               "cause deadlocks. A range of 77-21000 is recommended."));
+    INSERT(Settings, prefer_3d_vcache, tr("Pin Emulation Threads to 3D V-Cache CCD"),
+           tr("On dual-CCD processors with asymmetric L3 cache (such as AMD Ryzen 9 X3D), pins "
+              "emulated CPU and GPU threads to the 3D V-Cache CCD and offloads background "
+              "shader/worker threads to the secondary CCD to prevent cross-CCD latency and "
+              "cache thrashing."));
     INSERT(Settings, cpu_backend, tr("Backend:"), QString());
 
     // Cpu Debug
@@ -439,6 +447,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "physical performance cores.\n"
               "Windows and Linux only. Takes effect when a game starts."));
 
+    INSERT(Settings, use_mesh_shaders, tr("Use mesh shaders"),
+           tr("Draws the task and mesh shader geometry of Switch 2 games with the GPU's own mesh "
+              "shaders (VK_EXT_mesh_shader).\nTurn it off to use the slower compute fallback, "
+              "for example if a driver draws that geometry wrong or crashes.\n"
+              "Takes effect when a game starts."));
     INSERT(Settings, use_vulkan_driver_pipeline_cache, tr("Use Vulkan pipeline cache"),
            tr("Enables GPU vendor-specific pipeline cache.\nThis option can improve shader loading "
               "time significantly in cases where the Vulkan driver does not store pipeline cache "
@@ -566,6 +579,9 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Hides the mouse after 2.5s of inactivity."));
     INSERT(UISettings, check_for_updates, tr("Check for updates"),
            tr("Whether or not to check for updates upon startup."));
+    INSERT(UISettings, update_channel, tr("Update channel"),
+           tr("Stable only offers finished releases.\nRelease candidate also offers release "
+              "candidates of upcoming versions.\nDaily offers the automatic daily builds."));
 
     // Linux
     INSERT(UISettings, enable_gamemode, tr("Enable Gamemode"), QString());
@@ -643,6 +659,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(FramePacingMode, Target_60, tr("60 FPS")),
                               PAIR(FramePacingMode, Target_90, tr("90 FPS")),
                               PAIR(FramePacingMode, Target_120, tr("120 FPS")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::ColdHintMode>::Index(),
+                          {
+                              PAIR(ColdHintMode, Off, tr("Off")),
+                              PAIR(ColdHintMode, WhenRamIsLow, tr("When RAM is low")),
+                              PAIR(ColdHintMode, Always, tr("Always")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::VramUsageMode>::Index(),
                           {
@@ -927,6 +949,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
              PAIR(ConfirmStop, Ask_Based_On_Game, tr("Only if game specifies not to stop")),
              PAIR(ConfirmStop, Ask_Never, tr("Never ask")),
          }});
+    translations->insert({Settings::EnumMetadata<Settings::UpdateChannel>::Index(),
+                          {
+                              PAIR(UpdateChannel, Stable, tr("Stable")),
+                              PAIR(UpdateChannel, ReleaseCandidate, tr("Release candidate")),
+                              PAIR(UpdateChannel, Daily, tr("Daily")),
+                          }});
     translations->insert({Settings::EnumMetadata<Settings::GpuClock>::Index(),
                           {
                               PAIR(GpuClock, Normal, tr("Normal")),

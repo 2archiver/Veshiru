@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -27,7 +30,6 @@ add_executable(tests
     video_core/unswizzle_workers.cpp
     video_core/block_linear_swizzle.cpp
     video_core/aftermath_dump.cpp
-    video_core/frame_dump_schedule.cpp
     video_core/nx2_stutter_trace.cpp
     video_core/back_idle_trace.cpp
     video_core/list_macro_trace.cpp
@@ -39,7 +41,6 @@ add_executable(tests
     core/nx2_gpu_only_regions.cpp
     core/nx2_video_ready.cpp
     core/nx2_thread_stats.cpp
-    core/nx2_debug_server.cpp
     core/nx2_present_pacer.cpp
     core/device_memory_trim.cpp
     core/nx2_frame_interval.cpp
@@ -152,6 +153,8 @@ add_executable(tests
     video_core/command_snapshot_suspensions.cpp
     video_core/pending_maps.cpp
     video_core/maxwell_fast_method.cpp
+    video_core/macro_dma_forward.cpp
+    video_core/split_write_tracker.cpp
     hid_core/sensor_info.cpp
     common/paged_scalar.cpp
     common/queue_lifetime.cpp
@@ -215,9 +218,11 @@ add_executable(tests
     common/multi_level_page_table.cpp
     common/nextendo.cpp
     common/page_table.cpp
+    common/progress_counter.cpp
     common/param_package.cpp
     common/poll_window.cpp
     common/range_map.cpp
+    common/range_set_subtract.cpp
     common/ring_buffer.cpp
     common/scratch_buffer.cpp
     common/slot_vector.cpp
@@ -243,17 +248,25 @@ add_executable(tests
     core/internal_network/socket_proxy.cpp
     core/priority_queue.cpp
     core/internal_network/network.cpp
+    video_core/framebuffer_limits.cpp
     video_core/memory_tracker.cpp
     video_core/invalidation_accumulator.cpp
     video_core/memory_manager_runs.cpp
+    video_core/nx2_perf.cpp
     video_core/nx2_perf_draw_binds.cpp
+    video_core/nx2_perf_native_qmd.cpp
+    video_core/nx2_perf_query_callback.cpp
+    video_core/nx2_perf_switches.cpp
     video_core/nx2_perf_texture_writes.cpp
     video_core/texture_cache_memory_limits.cpp
     video_core/h264_packet.cpp
     video_core/vp9_range_encoder.cpp
     video_core/nx2_gpu_mapping.cpp
     video_core/vertex_repack.cpp
+    video_core/virtual_range_cache.cpp
+    video_core/query_copy.cpp
     video_core/ampere_lowering.cpp
+    video_core/spirv_software_matrix.cpp
     video_core/ampere_geometry.cpp
     video_core/ampere_i2f.cpp
     video_core/ampere_gradient.cpp
@@ -487,7 +500,7 @@ if (NOT ANDROID)
 endif()
 
 # needed for vma
-if (NOT MSVC)
+if(NOT MSVC)
     target_compile_options(tests PRIVATE
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-conversion>
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-unused-variable>

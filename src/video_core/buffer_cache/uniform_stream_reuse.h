@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -12,6 +15,7 @@
 #include <type_traits>
 
 #include "common/common_types.h"
+#include "video_core/nx2_draw_stats.h"
 
 namespace VideoCommon {
 
@@ -70,9 +74,14 @@ public:
                 slot.direct = 0;
             }
         }
+        for (Slot& slot : compute_slots) {
+            slot.size = 0;
+            slot.tick = 0;
+        }
     }
 
     std::array<std::array<Slot, NumSlots>, NumStages> slots{};
+    std::array<Slot, NumSlots> compute_slots{};
     std::array<u8, MaxBytes> scratch{};
 };
 

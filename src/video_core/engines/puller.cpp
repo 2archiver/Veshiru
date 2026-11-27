@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -5,11 +8,14 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <optional>
+#include <unordered_map>
 
 #include "common/assert.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/dma_pusher.h"
@@ -55,16 +61,17 @@ u32 ReadSemaphoreWord(DmaPusher& dma_pusher, GPUVAddr address) {
 // With the GPU thread split (gpu_split.h) the rasterizer belongs to the back thread: work that
 // only feeds it runs there in order; reads of what it wrote first wait for it (DrainBack).
 template <typename Func>
-void OnBack(const Func& func) {
+void OnBack(const Func& func,
+            VideoCommon::GpuSplit::Effect effect = VideoCommon::GpuSplit::Effect::Unknown) {
     if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
-        split.Defer(func);
+        split.Defer(func, effect);
     } else {
         func();
     }
 }
 
-void DrainBack() {
-    VideoCommon::GpuSplit::Get().Drain(VideoCommon::DrainSite::Acquire);
+void DrainBack(VideoCommon::DrainSite site = VideoCommon::DrainSite::Acquire) {
+    VideoCommon::GpuSplit::Get().Drain(site);
 }
 
 // The fence manager records into the scheduler and downloads the CPU's writes over GPU data:
@@ -245,7 +252,7 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     VideoCommon::Count(stats.drained);
     // The release may still be queued for the split GPU thread's back half (and the caches
     // ReadSemaphoreWord asks are its state).
-    DrainBack();
+    DrainBack(VideoCommon::DrainSite::AcquirePoll);
     const u32 current = ReadSemaphoreWord(dma_pusher, pending_acquire->address);
     if (Nx2SemaphoreWaiters::Get().Latched(this)) {
         if (static std::atomic<u32> rescued{};
@@ -372,9 +379,12 @@ void Puller::ProcessFenceActionMethod(DmaPusher& dma_pusher) {
         VideoCommon::Nx2FastDraw::NoteSync();
         break;
     case Puller::FenceOperation::Increment:
-        OnBack([rasterizer = dma_pusher.rasterizer, id = static_cast<u32>(regs.fence_action.syncpoint_id.Value())] {
-            rasterizer->SignalSyncPoint(id);
-        });
+        OnBack(
+            [rasterizer = dma_pusher.rasterizer,
+             id = static_cast<u32>(regs.fence_action.syncpoint_id.Value())] {
+                rasterizer->SignalSyncPoint(id);
+            },
+            VideoCommon::GpuSplit::Effect::None);
         break;
     default:
         UNIMPLEMENTED_MSG("Unimplemented operation {}", regs.fence_action.op.Value());
@@ -409,6 +419,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         const GPUVAddr mirror = g_nx2_ampere ? Nx2SemaphoreMirror(sequence_address) : 0;
         if (mirror != 0) {
             LOG_DEBUG(HW_GPU, "Switch 2 semaphore {:#x}={:#x} mirrored to {:#x}", sequence_address, payload, mirror);
+            VideoCommon::GpuSplit::Get().NoteWrite(dma_pusher.memory_manager, mirror, 16);
         }
         OnBack([rasterizer = dma_pusher.rasterizer, sequence_address, mirror, properties, payload] {
             rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload, properties, payload, 0);
@@ -570,6 +581,13 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
         return;
     }
     // Acquires: check once after flushing pending fences; never block the GPU thread on them.
+    // The check only feeds the warning below: drain for it during the first checks only.
+    static std::atomic<u32> reported{};
+    static std::atomic<u32> checks{};
+    if (reported.load(std::memory_order_relaxed) >= 8 ||
+        checks.fetch_add(1, std::memory_order_relaxed) >= 256) {
+        return;
+    }
     DrainBack();
     VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::Fence);
     ReleaseFences(dma_pusher);
@@ -584,7 +602,6 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
                        : operation == 5 ? (word & payload) == 0
                                         : true;
     if (!ready) {
-        static std::atomic<u32> reported{};
         if (reported.fetch_add(1) < 8) {
             LOG_WARNING(HW_GPU, "SEM_EXECUTE op {} at {:#x}: {:#x} vs {:#x} not met, continuing",
                         operation, address, word, payload);
@@ -615,7 +632,8 @@ void Puller::CallPullerMethod(DmaPusher& dma_pusher, const MethodCall& method_ca
     case BufferMethods::WrcacheFlush:
         break;
     case BufferMethods::RefCnt:
-        OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->SignalReference(); });
+        OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->SignalReference(); },
+               VideoCommon::GpuSplit::Effect::None);
         break;
     case BufferMethods::SyncpointOperation:
         ProcessFenceActionMethod(dma_pusher);
@@ -638,7 +656,8 @@ void Puller::CallPullerMethod(DmaPusher& dma_pusher, const MethodCall& method_ca
     }
     case BufferMethods::MemOpB: {
         // Implement this better.
-        OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->InvalidateGPUCache(); });
+        OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->InvalidateGPUCache(); },
+               VideoCommon::GpuSplit::Effect::None);
         break;
     }
     case BufferMethods::MemOpC:

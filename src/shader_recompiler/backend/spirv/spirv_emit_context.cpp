@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -17,6 +20,7 @@
 
 #include "common/common_types.h"
 #include "common/div_ceil.h"
+#include "common/env_gate.h"
 #include "shader_recompiler/backend/nvn_storage_descriptor.h"
 #include "shader_recompiler/bindless_table.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -381,6 +385,13 @@ Id CasFunction(EmitContext& ctx, Operation operation, Id value_type) {
     return func;
 }
 
+// A/B gate: with EGLANTINE_CAS_RETRY_FIX=0 each retry reloads the word instead of reusing the
+// compare-exchange result.
+bool CasRetryFix() {
+    static const bool enabled{Common::EnvGate("EGLANTINE_CAS_RETRY_FIX")};
+    return enabled;
+}
+
 Id CasLoop(EmitContext& ctx, Operation operation, Id array_pointer, Id element_pointer,
            Id value_type, spv::Scope scope) {
     const bool is_shared{scope == spv::Scope::Workgroup};
@@ -431,7 +442,8 @@ Id CasLoop(EmitContext& ctx, Operation operation, Id array_pointer, Id element_p
                                   : ctx.OpBitcast(ctx.U32[1], new_value)};
     const Id atomic_res{ctx.OpAtomicCompareExchange(ctx.U32[1], word_pointer, scope_id, zero, zero,
                                                     new_word, expected)};
-    ctx.OpStore(expected_var, atomic_res);
+    const Id retry_value{CasRetryFix() ? atomic_res : ctx.OpLoad(ctx.U32[1], word_pointer)};
+    ctx.OpStore(expected_var, retry_value);
     const Id success{ctx.OpIEqual(ctx.U1, atomic_res, expected)};
     ctx.OpBranchConditional(success, merge_block, loop_header);
 

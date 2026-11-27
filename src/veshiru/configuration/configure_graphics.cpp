@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -268,6 +271,9 @@ void ConfigureGraphics::Setup(const ConfigurationShared::Builder& builder) {
 #endif
 
     for (const auto setting : Settings::values.linkage.by_category[Settings::Category::Renderer]) {
+        if (ConfigureFrameGeneration::IsFrameGenerationSetting(setting->Id())) {
+            continue;
+        }
 #ifndef HAS_RESHADE
         if (setting->Id() == Settings::values.post_shader_enabled.Id()) {
             continue;
@@ -488,19 +494,45 @@ void ConfigureGraphics::Setup(const ConfigurationShared::Builder& builder) {
         graphics_layout.addWidget(widget);
     }
 
-    // Hide rather than disable, a disabled widget would read as using the global value
-    if (frame_gen_checkbox != nullptr) {
-        for (const u32 id : {Settings::values.frame_gen_type.Id(),
-                             Settings::values.frame_gen_multiplier.Id(),
-                             Settings::values.frame_gen_target_rate.Id(),
-                             Settings::values.frame_gen_flow_scale_auto.Id(),
-                             Settings::values.frame_gen_flow_scale.Id(),
-                             Settings::values.frame_gen_queue_target.Id()}) {
-            if (const auto it = hold_graphics.find(id); it != hold_graphics.end()) {
-                it->second->setVisible(frame_gen_checkbox->isChecked());
-                connect(frame_gen_checkbox, &QCheckBox::toggled, it->second, &QWidget::setVisible);
+    if (dlss_checkbox != nullptr) {
+        const auto apply_dlss_lock = [this, scaling_filter_widget, anti_aliasing_widget,
+                                      dlss_quality_widget](bool checked) {
+            if (dlss_quality_widget != nullptr && dlss_quality_widget->combobox != nullptr) {
+                dlss_quality_widget->combobox->setEnabled(checked);
             }
-        }
+            if (scaling_filter_widget != nullptr && scaling_filter_widget->combobox != nullptr) {
+                if (checked) {
+                    const int bilinear_idx =
+                        FindIndex(Settings::EnumMetadata<Settings::ScalingFilter>::Index(),
+                                  static_cast<int>(Settings::ScalingFilter::Bilinear));
+                    if (bilinear_idx >= 0) {
+                        scaling_filter_widget->combobox->setCurrentIndex(bilinear_idx);
+                    }
+                    if (scaling_filter_widget->restore_button != nullptr) {
+                        scaling_filter_widget->restore_button->setEnabled(true);
+                        scaling_filter_widget->restore_button->setVisible(false);
+                    }
+                }
+                scaling_filter_widget->combobox->setEnabled(!checked);
+            }
+            if (anti_aliasing_widget != nullptr && anti_aliasing_widget->combobox != nullptr) {
+                if (checked) {
+                    const int none_idx =
+                        FindIndex(Settings::EnumMetadata<Settings::AntiAliasing>::Index(),
+                                  static_cast<int>(Settings::AntiAliasing::None));
+                    if (none_idx >= 0) {
+                        anti_aliasing_widget->combobox->setCurrentIndex(none_idx);
+                    }
+                    if (anti_aliasing_widget->restore_button != nullptr) {
+                        anti_aliasing_widget->restore_button->setEnabled(true);
+                        anti_aliasing_widget->restore_button->setVisible(false);
+                    }
+                }
+                anti_aliasing_widget->combobox->setEnabled(!checked);
+            }
+        };
+        apply_dlss_lock(dlss_checkbox->isChecked());
+        connect(dlss_checkbox, &QCheckBox::toggled, this, apply_dlss_lock);
     }
 
 #ifdef EGLANTINE_STREAMLINE

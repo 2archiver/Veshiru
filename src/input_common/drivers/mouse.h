@@ -93,10 +93,9 @@ public:
      */
     void MouseWheelChange(int x, int y);
 
-    /// Feeds relative mouse motion captured for Joy-Con 2 mouse mode. Unlike Move() this is not
-    /// tied to a cursor position; it also drives the optional right-stick fallback and the gyro
-    /// mapping for titles that only read motion.
-    void RelativeMove(int dx, int dy);
+    /// Feeds relative mouse motion captured for Joy-Con 2 mouse mode. Returns the scaled delta so
+    /// the HID mouse path and the optional stick/gyro fallbacks consume the same motion.
+    MouseMode::Delta RelativeMove(int dx, int dy);
 
     void ReleaseAllButtons();
 

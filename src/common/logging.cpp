@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -432,23 +435,6 @@ private:
 };
 #endif
 
-struct RingBackend {
-    void Write(std::string_view line) {
-        std::scoped_lock lock{mutex};
-        if (const auto limit = capacity.load(std::memory_order_relaxed); limit != 0) {
-            lines.push_back({next_sequence++, std::string{line}});
-            while (lines.size() > limit) {
-                lines.pop_front();
-            }
-        }
-    }
-
-    std::atomic<std::size_t> capacity{};
-    std::mutex mutex;
-    std::deque<RingLine> lines;
-    u64 next_sequence = 1;
-};
-
 struct Pending {
     Entry entry;
     std::string message;
@@ -638,9 +624,6 @@ struct Impl {
                 extra_backend->Write(line, flush, extend);
             }
 #endif
-            if (ring.capacity.load(std::memory_order_relaxed) != 0) {
-                ring.Write(std::string_view{line}.substr(0, line.size() - 1));
-            }
 #ifdef _WIN32
             if (IsDebuggerPresent()) {
                 ::OutputDebugStringW(UTF8ToUTF16W(line).c_str());
@@ -668,7 +651,6 @@ struct Impl {
     std::atomic_bool extended{};
     std::atomic_bool censor_username{true};
     std::array<std::atomic<Level>, std::size_t(Class::Count)> filter;
-    RingBackend ring;
 #ifndef __OPENORBIS__
     std::optional<FileBackend> file_backend;
     std::optional<FileBackend> extra_backend;
@@ -831,33 +813,6 @@ void SetColorConsoleBackendEnabled(bool enabled) {
     if (logging_instance) {
         logging_instance->console_enabled.store(enabled, std::memory_order_relaxed);
     }
-}
-
-void SetRingCapacity(std::size_t capacity) {
-    if (!logging_instance) {
-        return;
-    }
-    auto& ring = logging_instance->ring;
-    std::scoped_lock lock{ring.mutex};
-    ring.capacity.store(capacity, std::memory_order_relaxed);
-    while (ring.lines.size() > capacity) {
-        ring.lines.pop_front();
-    }
-}
-
-std::vector<RingLine> ReadRing(u64 after) {
-    std::vector<RingLine> result;
-    if (!logging_instance) {
-        return result;
-    }
-    auto& ring = logging_instance->ring;
-    std::scoped_lock lock{ring.mutex};
-    for (const RingLine& line : ring.lines) {
-        if (line.sequence > after) {
-            result.push_back(line);
-        }
-    }
-    return result;
 }
 
 bool IsLevelEnabled(Class log_class, Level log_level) {

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -12,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "common/assert.h"
 #include "common/scope_exit.h"
@@ -228,6 +232,7 @@ struct GPU::Impl {
         }
         std::unique_lock lck{sync_request_mutex};
         while (!sync_requests.empty()) {
+            DEBUG_ASSERT(has_sync_requests.load(std::memory_order_relaxed));
             auto request = std::move(sync_requests.front());
             sync_requests.pop_front();
             sync_request_mutex.unlock();
@@ -237,6 +242,7 @@ struct GPU::Impl {
             sync_request_mutex.lock();
             sync_request_cv.notify_all();
         }
+        has_sync_requests.store(false, std::memory_order_relaxed);
     }
 
     [[nodiscard]] u64 GetTicks() const {
@@ -586,6 +592,7 @@ struct GPU::Impl {
     std::condition_variable sync_cv;
 
     std::list<std::function<void()>> sync_requests;
+    std::atomic<bool> has_sync_requests{};
     std::atomic<u64> current_sync_fence{};
     std::atomic<u64> requested_sync_fence{}; ///< last_sync_fence, for TickWork without the mutex
     std::atomic<AmpereAnchor> ampere_anchor{};

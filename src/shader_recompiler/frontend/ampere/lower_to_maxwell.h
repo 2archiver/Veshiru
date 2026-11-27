@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #pragma GCC diagnostic ignored "-Wshadow"
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -595,6 +598,7 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             emit(0x5c40000000000000ULL | predicate | target | (u64{250} << 8) |
                  (u64{251} << 20) | (u64{1} << 41) | (u64{7} << 48));
         };
+
         switch (opcode) {
         case 0x304: { // F2F.F16.F32, scalar round-to-nearest conversion.
             if (insn.words[2] != 0x00200800 || insn.Bits(24, 8) ||
@@ -1111,6 +1115,12 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             if (target == 7 || insn.Bits(84, 3) != 7 ||
                 insn.Bits(16, 8) || insn.words[1])
                 return fail(index, "native predicate LUT mode");
+            if (target == 7 && second_target == 7) break;
+            if (second_target != 7) {
+                predicate_lut(lut, insn.Bits(87, 4), insn.Bits(77, 4), insn.Bits(68, 4), target,
+                              insn.Bits(67, 1) != 0, second_target, insn.Bits(16, 8));
+                break;
+            }
             if (!insn.Bits(67, 1) && (lut == 0xfe || lut == 0xa8)) {
                 emit(0x5090000000000000ULL | predicate | (u64{target} << 3) | 7 |
                      (u64{insn.Bits(87, 4)} << 12) | (u64{1} << 24) |
@@ -1713,7 +1723,8 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
                 shift_operand &&
                 (insn.words[2] & ~(0x000118ffU | (opcode == 0xc19 ? 0x08000000U : 0U))) == 0x00000600U) {
                 load_shift();
-                emit(base(0x5c28000000000000ULL) | (u64{low} << 8) | (u64{shift} << 20));
+                emit(base(0x5c28000000000000ULL) | (u64{low} << 8) | (u64{shift} << 20) |
+                     (u64{insn.Bits(75, 1)} << 39));
                 break;
             }
             if (!shift_operand || insn.Bits(73, 2) != 3 || shift == ~0U ||
@@ -3506,7 +3517,8 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
                      (u64{insn.Bits(60, 2) * 2} << 41));
                 break;
             }
-            // I2F.{U,S}8 Rd, Rs.B0-B3: the byte selector (bits 60-61) as Maxwell's (41-42).
+            // I2F.{U,S}8 Rd, Rs.B0-B3: the byte selector (bits 60-61) as Maxwell's (41-42), for a
+            // uniform source too (Ocarina of Time: I2F.U8 R0, UR17.B3).
             if ((insn.words[2] & ~0x400U) != (opcode == 0xd06 ? 0x08001000U : 0x1000U) ||
                 (insn.words[1] & 0xcfffff00U) || source == ~0U)
                 return fail(index, "native byte-to-float conversion mode");
@@ -3756,6 +3768,8 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
                 break;
             }
             // A carry out (bits 81-83) is the low half of a 64-bit address; IADD3.X adds it next.
+            // ULEA's carry can go to any UPn (Ocarina of Time: ULEA UR10, UP3, UR7, UR10, 0x2):
+            // it is computed in P(6-n) and merged into R239 like UISETP.
             const u32 carry_out = insn.Bits(81, 3);
             if (insn.Bits(72, 1) || insn.Bits(74, 1) || insn.Bits(80, 1) ||
                 (carry_out != 7 && ((opcode != 0x811 && insn.Bits(63, 1)) ||
@@ -3981,6 +3995,7 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             // Third source, optionally negated (bit 75; 63 and 72 negate b and a).
             if (insn.Bits(64, 8) != 255 && (insn.Bits(73, 4) & ~4U) == 0 && insn.Bits(77, 7) == 0x7f && insn.Bits(84, 7) == 0x7f) {
                 const u32 b = operand(1, false);
+                // Immediate bit 63 belongs to the literal, not the register-source negation.
                 emit(0x5c10000000000000ULL | predicate | 250 | (u64{insn.Bits(24, 8)} << 8) |
                     (u64{b} << 20) | (u64{negate_b} << 48) | (u64{insn.Bits(72, 1)} << 49));
                 emit(base(0x5c10000000000000ULL) | (u64{250} << 8) | (u64{insn.Bits(64, 8)} << 20) |
@@ -4096,7 +4111,8 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             // when its active threads are the mask in the uniform register at 24-31 (bit 91;
             // URZ without it). The compiler puts warp-synchronous fast paths behind them (shuffles
             // on a converged warp; the other path calls a WARPSYNC helper). Eden runs the warp's
-            // threads converged there: .CONV always branches and .DIV never does.
+            // threads converged there: .CONV always branches and .DIV never does. .U (1) only
+            // says the predicate is warp-uniform: a plain branch (Mario Kart World roads).
             const u32 mode = insn.Bits(32, 2);
             if ((mode <= 1 && insn.Bits(91, 1)) ||
                 (mode == 1 && (insn.Bits(82, 5) || insn.Bits(92, 13))))

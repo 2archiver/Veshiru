@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+# SPDX-License-Identifier: GPL-3.0-or-later
 # usage: release-notes.sh <output.md>
 # Env: KIND TAG SHA REPO BRANCH PREV_TAG MACOS_RUNNER ASSET_DIR (default release-assets).
 # The download tables include only assets that exist, so one-platform manual builds are supported.
@@ -12,7 +15,7 @@ sha="${SHA:?SHA is required}"
 kind="${KIND:?KIND is required}"
 base="https://github.com/${repo}/releases/download/${tag}"
 short="${sha:0:7}"
-macos_ver="${MACOS_RUNNER:-macos-15}"
+macos_ver="${MACOS_RUNNER:-macos-26}"
 macos_ver="${macos_ver#macos-}"
 
 link() { if [[ -e "$dir/$2" ]]; then printf '[%s](%s/%s)' "$1" "$base" "$2"; fi; return 0; }

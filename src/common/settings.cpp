@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -163,6 +166,7 @@ std::string GetTimeZoneString(TimeZone time_zone) {
     return location_name;
 }
 
+/// Logs every setting's value, modified ones first, hiding the token secrets.
 void LogSettings() {
     const std::array sensitive_setting_ids{
         values.eden_token.Id(), values.serial_unit.Id(), values.serial_battery.Id(),
@@ -392,6 +396,7 @@ const char* TranslateCategory(Category category) {
     case Category::RendererHacks:
     case Category::RendererDebug:
     case Category::RendererExtensions:
+    case Category::RendererMemory:
         return "Renderer";
     case Category::System:
     case Category::SystemAudio:

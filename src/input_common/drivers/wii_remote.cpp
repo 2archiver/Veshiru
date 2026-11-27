@@ -394,6 +394,9 @@ void WiiRemote::ReleaseController(Remote& remote) {
     for (int axis = 0; axis < Wii::AxisCount; ++axis) {
         SetAxis(remote.identifier, axis, 0.0f);
     }
+    SetMotion(remote.identifier, 0, BasicMotion{});
+    remote.pointer_seen = false;
+    remote.last_motion_us = 0;
     SetBattery(remote.identifier, Common::Input::BatteryLevel::None);
 }
 
@@ -448,17 +451,19 @@ void WiiRemote::Publish(Remote& remote, const Wii::InputReport& report) {
         set(Wii::Button::Down, buttons.down);
     }
 
-    if (report.has_nunchuk) {
+    if (Wii::HasNunchukData(remote.extension, report)) {
         set(Wii::Button::NunchukC, report.nunchuk.c);
         set(Wii::Button::NunchukZ, report.nunchuk.z);
         SetAxis(remote.identifier, Wii::NunchukStickX, report.nunchuk.stick_x);
         SetAxis(remote.identifier, Wii::NunchukStickY, report.nunchuk.stick_y);
-    } else if (remote.extension.nunchuk) {
-        // Keep the last stick position: reports without extension bytes arrive in modes that do
-        // not carry them, and zeroing here would make the stick flicker.
-    } else {
+    } else if (!remote.extension.nunchuk) {
+        // Keep extension bytes from another accessory (for example a Classic Controller) from
+        // being interpreted as Nunchuk state. Reports without Nunchuk data while a Nunchuk is
+        // connected intentionally retain the most recent stick and button state.
         set(Wii::Button::NunchukC, false);
         set(Wii::Button::NunchukZ, false);
+        SetAxis(remote.identifier, Wii::NunchukStickX, 0.0f);
+        SetAxis(remote.identifier, Wii::NunchukStickY, 0.0f);
     }
 
     if (report.has_accel) {

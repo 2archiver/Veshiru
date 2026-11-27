@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/device_memory_manager.h"
+#include "video_core/nx2_perf.h"
 
 namespace Core {
 

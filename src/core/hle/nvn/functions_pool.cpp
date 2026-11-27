@@ -15,7 +15,6 @@
 #include "common/boot_counter.h"
 #include "common/logging.h"
 #include "core/core.h"
-#include "core/debugger/mapped_range_hook.h"
 #include "core/hle/nvn/config.h"
 #include "core/hle/nvn/hle_call.h"
 #include "core/hle/nvn/hle_runtime.h"
@@ -441,9 +440,6 @@ void InvalidateMappedRange(Call& c, u64 address, u64 size) {
     }
     if (DiagMappedRanges()) {
         LogMappedRange(c, "invalidate", address, size, note);
-    }
-    if (const auto hook = Core::Trace::g_invalidate_hook.load(std::memory_order_acquire)) {
-        hook(address, size);
     }
 }
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-FileCopyrightText: Copyright 2026 Veshiru Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -8,6 +11,7 @@
 #include "core/hle/service/bcat/news/msgpack.h"
 #include "core/hle/service/bcat/news/news_images.h"
 #include "core/hle/service/bcat/news/news_storage.h"
+#include "frontend_common/update_checker.h"
 
 #include "common/fs/file.h"
 #include "common/fs/path_util.h"
@@ -23,7 +27,6 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <future>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -231,15 +234,12 @@ std::string FormatBody(std::string body, const std::string_view &title) {
 }
 
 void ImportReleases(const std::vector<Common::Net::Release> &releases) {
-    std::vector<u32> news_ids;
     for (const auto& rel : releases) {
-        const u32 news_id = u32(rel.id & 0x7FFFFFFF);
-        news_ids.push_back(news_id);
-    }
+        // Only tagged releases are news; daily and branch builds are not.
+        if (!UpdateChecker::ParseTag(rel.tag)) {
+            continue;
+        }
 
-    PreloadNewsImages(news_ids);
-
-    for (const auto& rel : releases) {
         const std::string title = rel.title;
         const std::string body = rel.body;
         const std::string html_url = rel.html_url;
@@ -399,7 +399,7 @@ void EnsureBuiltinNewsLoaded() {
     std::call_once(once, [] {
         if (const auto cached = ReadCachedJson()) {
             const std::string_view body = cached.value();
-            const auto releases = Common::Net::Release::ListFromJson(body, Common::g_build_auto_update_stable_api, Common::g_build_auto_update_stable_repo);
+            const auto releases = Common::Net::Release::ListFromJson(body, Common::g_build_auto_update_api, Common::g_build_auto_update_repo);
             ImportReleases(releases);
 
             LOG_INFO(Service_BCAT, "news: {} entries loaded from cache", NewsStorage::Instance().ListAll().size());
@@ -409,7 +409,7 @@ void EnsureBuiltinNewsLoaded() {
             if (const auto fresh = Common::Net::GetReleasesBody()) {
                 const std::string_view body = fresh.value();
                 WriteCachedJson(body);
-                const auto releases = Common::Net::Release::ListFromJson(body, Common::g_build_auto_update_stable_api, Common::g_build_auto_update_stable_repo);
+                const auto releases = Common::Net::Release::ListFromJson(body, Common::g_build_auto_update_api, Common::g_build_auto_update_repo);
                 ImportReleases(releases);
 
                 LOG_INFO(Service_BCAT, "news: {} entries updated from GitHub", NewsStorage::Instance().ListAll().size());

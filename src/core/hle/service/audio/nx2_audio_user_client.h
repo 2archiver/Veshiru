@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -13,15 +16,15 @@
 
 namespace Service::Audio {
 
-// Switch 2 "aud:u" (nn::audio::CreateUserClientSessionByHipc). The SDK reaches the Switch 1
-// audio interfaces through it: command 2 returns an object used exactly like
+// Switch 2 "aud:u", nn::audio::IUserClientSession (nn::audio::CreateUserClientSessionByHipc).
+// The SDK reaches the Switch 1 audio interfaces through it: command 2 returns an object used like
 // IAudioRendererManager (vtable slot 1 = GetWorkBufferSize with a Switch 1 parameter block), so
 // it is backed by Eden's audren:u implementation. Command 1 is nn::audio::OpenAudioOut's
 // manager, called like IAudioOutManager (slot 1 = OpenAudioOut), backed by audout:u. The nx2: name
 // keeps unknown commands auto-stubbed and logged.
-class INx2AudioUserClient final : public ServiceFramework<INx2AudioUserClient> {
+class IUserClientSession final : public ServiceFramework<IUserClientSession> {
 public:
-    explicit INx2AudioUserClient(Core::System& system_)
+    explicit IUserClientSession(Core::System& system_)
         : ServiceFramework{system_, "nx2:aud:u"} {
         // clang-format off
         static const FunctionInfo functions[] = {

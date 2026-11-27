@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -22,14 +25,15 @@
 #include "common/settings_enums.h"
 #include "common/shutdown_progress.h"
 #include "common/string_util.h"
+#include "common/thread.h"
 #include "core/arm/exclusive_monitor.h"
 #include "core/core.h"
 
 #include "launch_timestamp_cache.h"
+#include "core/arm/debug.h"
 #include "core/core_timing.h"
 #include "core/cpu_manager.h"
 #include "core/debugger/debugger.h"
-#include "core/debugger/nx2_debug_tools.h"
 #include "core/device_memory.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/content_archive.h"
@@ -47,6 +51,7 @@
 #include "core/hle/kernel/k_memory_manager.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_resource_limit.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_scheduler.h"
 #include "core/hle/kernel/k_system_control.h"
 #include "core/hle/kernel/kernel.h"
@@ -640,13 +645,11 @@ struct System::Impl {
             game_info.version = title_version;
             room_member->SendGameInfo(game_info);
         }
-        debug_service = Nx2Debug::MaybeStartService(system, name, params.program_id);
         Nx2Sampler::StartFromEnvironment();
         return SystemResultStatus::Success;
     }
 
     void ShutdownMainProcess() {
-        debug_service.reset();
         SetShuttingDown(true);
         Core::NvnHle::Bridge::Shutdown();
         Core::NvnHle::Hle::Runtime::Instance().Shutdown();
@@ -807,8 +810,6 @@ struct System::Impl {
     bool exit_locked : 1 = false;
     bool exit_requested : 1 = false;
     bool nvdec_active : 1 = false;
-    /// EDEN_NX2_DEBUG_SERVER; the last member, so it stops before anything it reads goes away.
-    std::unique_ptr<Nx2Debug::Service> debug_service;
 
     void EnsureGeneralChannelInitialized(System& system) {
         if (!general_channel_event) {
@@ -1330,6 +1331,7 @@ void System::NotifyApplicationChanged(u64 program_id) {
 
 void System::ApplySettings() {
     impl->RefreshTime(*this);
+    Common::RefreshThreadPolicies();
 
     if (IsPoweredOn()) {
         Renderer().RefreshBaseSettings();

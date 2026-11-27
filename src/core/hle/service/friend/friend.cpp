@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -586,8 +589,7 @@ public:
 // auto stub.
 class IChatSession final : public ServiceFramework<IChatSession> {
 public:
-    explicit IChatSession(Core::System& system_)
-        : ServiceFramework{system_, "nx2:chat:u::0"}, service_context{system_, "IChatSession"} {
+    explicit IChatSession(Core::System& system_) : ServiceFramework{system_, "nx2:chat:u::0"} {
         static const FunctionInfo functions[] = {
             {1, &IChatSession::GetEvent, "GetEvent (guessed)"},
             {2, &IChatSession::AttachToChangedEvent, "AttachToRoomInfoChangedEvent"},

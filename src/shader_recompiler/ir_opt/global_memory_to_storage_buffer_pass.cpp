@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -1529,6 +1532,7 @@ bool CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, 
                 if (IsGlobalMemoryWrite(inst)) {
                     info.writes.insert(*storage_buffer);
                 }
+                accepted = true;
             }
             for (const StorageBufferAddr& candidate : candidates) {
                 if (std::ranges::find(info.table_candidates, candidate) !=

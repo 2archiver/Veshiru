@@ -2,11 +2,42 @@
 
 #pragma once
 
+#include <set>
+#include <string>
+#include <utility>
 #include <vector>
 #include <QCoreApplication>
+#include <QWidget>
 #include "common/recommended_settings.h"
 
-class QWidget;
+class QCheckBox;
+class QGridLayout;
+
+namespace Settings {
+struct GamePreset;
+}
+
+/// Lists the recommended settings for one game beside their current values.
+class RecommendedSettingsList : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit RecommendedSettingsList(const Settings::GamePreset& preset, QWidget* parent = nullptr);
+    ~RecommendedSettingsList() override;
+
+    void Refresh();
+    std::set<std::string> SelectedKeys() const;
+    bool HasChanges() const;
+    void SetAllChecked(bool checked);
+
+signals:
+    void SelectionChanged();
+
+private:
+    const Settings::GamePreset& preset;
+    QGridLayout* grid = nullptr;
+    std::vector<std::pair<std::string, QCheckBox*>> rows;
+};
 
 /// The message boxes around the developer's recommended settings (common/recommended_settings.h).
 class RecommendedSettingsDialog {

@@ -61,6 +61,9 @@ private:
     std::map<u64, VirtualFile> loose_aoc;
 
     bool updatable;
+    /// The merged RomFS with LayeredFS mods applied (not updatable: NUP containers).
+    mutable VirtualFile layered_file;
+    mutable std::mutex layered_mutex;
 
     ContentProvider& content_provider;
     Service::FileSystem::FileSystemController& filesystem_controller;

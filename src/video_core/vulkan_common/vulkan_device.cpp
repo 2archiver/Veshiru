@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -819,6 +822,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
 #endif
     }
 
+    host_float16_supported = features.shader_float16_int8.shaderFloat16;
     if (is_nvidia) {
         const auto arch = GetNvidiaArch();
         if (arch >= NvidiaArchitecture::Arch_AmpereOrNewer) {
@@ -1087,6 +1091,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     }
 #endif
     logical = vk::Device::Create(physical, queue_cis, ExtensionListForVulkan(loaded_extensions), first_next, dld);
+    features.shader_float16_int8.shaderFloat16 = float16_math;
 
     graphics_queue = logical.GetQueue(graphics_family);
     present_queue = logical.GetQueue(present_family);
@@ -2021,8 +2026,10 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.depth_clip_control, features.depth_clip_control,
                                        VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
 
-    // VK_EXT_descriptor_buffer
-    extensions.descriptor_buffer = features.descriptor_buffer.descriptorBuffer;
+    // VK_EXT_descriptor_buffer (EDEN_NX2_NO_DESCRIPTOR_BUFFER=1 falls back to descriptor sets, for A/B
+    // tests of GPU faults)
+    extensions.descriptor_buffer = features.descriptor_buffer.descriptorBuffer &&
+                                   std::getenv("EDEN_NX2_NO_DESCRIPTOR_BUFFER") == nullptr;
     RemoveExtensionFeatureIfUnsuitable(extensions.descriptor_buffer, features.descriptor_buffer,
                                        VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME);
 
