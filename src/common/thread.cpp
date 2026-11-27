@@ -12,6 +12,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -633,6 +635,174 @@ void SetCurrentThreadAffinity(const std::vector<u32>& cpus) {
 namespace Common {
 
 #ifdef _WIN32
+namespace {
+
+struct Win32CacheTopology {
+    DWORD_PTR process_mask{};
+    DWORD_PTR performance_mask{};
+    DWORD_PTR efficiency_mask{};
+    bool asymmetric{};
+};
+
+const Win32CacheTopology& GetWin32CacheTopology() {
+    static const Win32CacheTopology topology = [] {
+        Win32CacheTopology result{};
+        DWORD_PTR system_mask{};
+        if (!GetProcessAffinityMask(GetCurrentProcess(), &result.process_mask, &system_mask) ||
+            result.process_mask == 0) {
+            return result;
+        }
+        DWORD length{};
+        GetLogicalProcessorInformationEx(RelationCache, nullptr, &length);
+        if (length == 0) {
+            return result;
+        }
+        std::vector<u8> buffer(length);
+        auto* info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data());
+        if (!GetLogicalProcessorInformationEx(RelationCache, info, &length)) {
+            return result;
+        }
+        DWORD max_l3_size{};
+        DWORD min_l3_size = (std::numeric_limits<DWORD>::max)();
+        struct L3Domain {
+            DWORD size;
+            DWORD_PTR mask;
+        };
+        std::vector<L3Domain> domains;
+        for (DWORD offset = 0; offset < length;) {
+            const auto* entry = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(
+                buffer.data() + offset);
+            if (entry->Size == 0 || entry->Size > length - offset) {
+                break;
+            }
+            if (entry->Relationship == RelationCache && entry->Cache.Level == 3 &&
+                (entry->Cache.Type == CacheUnified || entry->Cache.Type == CacheData)) {
+                DWORD_PTR domain_mask{};
+                const WORD group_count = entry->Cache.GroupCount > 0 ? entry->Cache.GroupCount : 1;
+                for (WORD group = 0; group < group_count; ++group) {
+                    if (entry->Cache.GroupMasks[group].Group == 0) {
+                        domain_mask |= entry->Cache.GroupMasks[group].Mask & result.process_mask;
+                    }
+                }
+                if (domain_mask != 0 && entry->Cache.CacheSize > 0) {
+                    max_l3_size = (std::max)(max_l3_size, entry->Cache.CacheSize);
+                    min_l3_size = (std::min)(min_l3_size, entry->Cache.CacheSize);
+                    domains.push_back({entry->Cache.CacheSize, domain_mask});
+                }
+            }
+            offset += entry->Size;
+        }
+        if (domains.size() >= 2 && max_l3_size > min_l3_size) {
+            for (const auto& domain : domains) {
+                if (domain.size == max_l3_size) {
+                    result.performance_mask |= domain.mask;
+                } else {
+                    result.efficiency_mask |= domain.mask;
+                }
+            }
+            result.efficiency_mask &= ~result.performance_mask;
+            result.asymmetric = result.performance_mask != 0 && result.efficiency_mask != 0;
+            if (result.asymmetric) {
+                LOG_INFO(Common,
+                         "Detected asymmetric L3 cache ({} MiB vs {} MiB): 3D V-Cache mask={:#x}, "
+                         "secondary CCD mask={:#x}",
+                         max_l3_size >> 20, min_l3_size >> 20, result.performance_mask,
+                         result.efficiency_mask);
+            }
+        }
+        return result;
+    }();
+    return topology;
+}
+
+bool IsVCachePinningEnabled() {
+    static const int env_override = [] {
+        if (const char* env = std::getenv("EDEN_NX2_VCACHE")) {
+            return env[0] == '0' ? 0 : 1;
+        }
+        return -1;
+    }();
+    return env_override >= 0 ? env_override != 0
+                             : Settings::values.prefer_3d_vcache.GetValue();
+}
+
+enum class Win32CoreGroup {
+    Unrestricted,
+    Performance,
+    Efficiency,
+};
+
+struct Win32ThreadPolicy {
+    DWORD tid;
+    HANDLE handle;
+    Win32CoreGroup group;
+};
+
+struct Win32PolicyState {
+    std::mutex mutex;
+    std::vector<Win32ThreadPolicy> policies;
+};
+
+Win32PolicyState& GetWin32PolicyState() {
+    static Win32PolicyState* const state = new Win32PolicyState();
+    return *state;
+}
+
+DWORD_PTR MaskForWin32Group(const Win32CacheTopology& topology, Win32CoreGroup group,
+                            bool vcache_enabled) {
+    if (!vcache_enabled || group == Win32CoreGroup::Unrestricted) {
+        return topology.process_mask;
+    }
+    return group == Win32CoreGroup::Performance ? topology.performance_mask
+                                                : topology.efficiency_mask;
+}
+
+struct Win32PolicyRegistration {
+    ~Win32PolicyRegistration() {
+        const DWORD tid = GetCurrentThreadId();
+        Win32PolicyState& state = GetWin32PolicyState();
+        std::scoped_lock lock{state.mutex};
+        for (auto it = state.policies.begin(); it != state.policies.end(); ++it) {
+            if (it->tid == tid) {
+                if (it->handle != nullptr) {
+                    CloseHandle(it->handle);
+                }
+                state.policies.erase(it);
+                break;
+            }
+        }
+    }
+};
+
+thread_local Win32PolicyRegistration t_win32_policy_registration;
+
+void SetCurrentThreadWin32Group(Win32CoreGroup group) {
+    const auto& topology = GetWin32CacheTopology();
+    if (!topology.asymmetric) {
+        return;
+    }
+    (void)&t_win32_policy_registration;
+    const DWORD tid = GetCurrentThreadId();
+    SetThreadAffinityMask(GetCurrentThread(),
+                          MaskForWin32Group(topology, group, IsVCachePinningEnabled()));
+
+    Win32PolicyState& state = GetWin32PolicyState();
+    std::scoped_lock lock{state.mutex};
+    for (auto& policy : state.policies) {
+        if (policy.tid == tid) {
+            policy.group = group;
+            return;
+        }
+    }
+    HANDLE duplicate{};
+    if (DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &duplicate,
+                        THREAD_SET_INFORMATION | THREAD_QUERY_INFORMATION, FALSE, 0)) {
+        state.policies.push_back(Win32ThreadPolicy{tid, duplicate, group});
+    }
+}
+
+} // Anonymous namespace
+
 static int WindowsThreadPriority(ThreadPriority priority) {
     switch (priority) {
     case ThreadPriority::Low: return THREAD_PRIORITY_BELOW_NORMAL;
@@ -747,6 +917,7 @@ void SetCurrentThreadToPerformanceCores() {
     }
     SetCurrentThreadCoreGroup(CoreGroup::Performance);
 #elif defined(_WIN32)
+    SetCurrentThreadWin32Group(Win32CoreGroup::Performance);
     if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets(sets.performance);
     }
@@ -832,6 +1003,7 @@ void SetCurrentThreadToEfficiencyCores() {
     }
     SetCurrentThreadCoreGroup(CoreGroup::Efficiency);
 #elif defined(_WIN32)
+    SetCurrentThreadWin32Group(Win32CoreGroup::Efficiency);
     if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets(sets.efficiency);
     }
@@ -843,6 +1015,7 @@ void SetCurrentThreadToBackgroundWork() {
     ADPF::AddCurrentThread(ADPF::Session::Background);
     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
 #elif defined(_WIN32)
+    SetCurrentThreadWin32Group(Win32CoreGroup::Efficiency);
     if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets({});
     }
@@ -854,6 +1027,7 @@ void SetCurrentThreadToAllCores() {
     ADPF::RemoveCurrentThread();
     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
 #elif defined(_WIN32)
+    SetCurrentThreadWin32Group(Win32CoreGroup::Unrestricted);
     if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets({});
     }
@@ -893,18 +1067,6 @@ void RefreshThreadPolicies() {
             SetThreadAffinityMask(policy.handle,
                                   MaskForWin32Group(topology, policy.group, vcache_enabled));
         }
-    }
-#elif defined(__linux__)
-    const auto& topology = GetLinuxCacheTopology();
-    if (!topology.asymmetric) {
-        return;
-    }
-    const bool vcache_enabled = IsVCachePinningEnabled();
-    LinuxPolicyState& state = GetLinuxPolicyState();
-    std::scoped_lock lock{state.mutex};
-    for (const auto& policy : state.policies) {
-        const auto& mask = MaskForLinuxGroup(topology, policy.group, vcache_enabled);
-        sched_setaffinity(policy.tid, sizeof(mask), &mask);
     }
 #endif
 }
