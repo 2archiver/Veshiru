@@ -3940,7 +3940,7 @@ void BufferCache<P>::UpdateIndexBuffer() {
         return;
     }
     auto& current = channel_state->index_buffer;
-    const u64 map_serial = gpu_memory->GetMapSerial();
+    const u64 map_serial = gpu_memory->MapSerial();
     const std::optional<DAddr> device_addr =
         (current.gpu_addr == gpu_addr_begin && current.map_serial == map_serial &&
          current.device_addr != 0)
@@ -4015,7 +4015,7 @@ void BufferCache<P>::UpdateVertexBuffer(u32 index) {
         return;
     }
     auto& current = channel_state->vertex_buffers[index];
-    const u64 map_serial = gpu_memory->GetMapSerial();
+    const u64 map_serial = gpu_memory->MapSerial();
     if (!channel_state->has_deleted_buffers && current.buffer_id &&
         current.buffer_id != NULL_BUFFER_ID && current.gpu_addr == gpu_addr_begin &&
         current.size == size && current.map_serial == map_serial && current.device_addr != 0 &&
@@ -4151,7 +4151,7 @@ void BufferCache<P>::UpdateTransformFeedbackBuffer(u32 index) {
 
 template <class P>
 void BufferCache<P>::UpdateComputeUniformBuffers() {
-    const u64 map_serial = gpu_memory->GetMapSerial();
+    const u64 map_serial = gpu_memory->MapSerial();
     ForEachEnabledBit(channel_state->enabled_compute_uniform_buffer_mask, [&](u32 index) {
         Binding& binding = channel_state->compute_uniform_buffers[index];
         const auto& launch_desc = kepler_compute->launch_description;

@@ -37,8 +37,12 @@
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/slot_vector.h"
+#include "common/spin_recursive_mutex.h"
 #include "shader_recompiler/shader_info.h"
 #include "video_core/buffer_cache/buffer_base.h"
+#include "video_core/buffer_cache/buffer_dependency_trace.h"
+#include "video_core/buffer_cache/list_copy_demand.h"
+#include "video_core/buffer_cache/list_writer_trace.h"
 #include "video_core/buffer_cache/read_trap_tracker.h"
 #include "video_core/buffer_cache/virtual_range_cache.h"
 #include "video_core/control/channel_state_cache.h"
@@ -161,7 +165,7 @@ public:
     Binding indirect_buffer_binding;
 
     std::array<Binding, NUM_COMPUTE_UNIFORM_BUFFERS> compute_uniform_buffers;
-    std::array<Binding, NUM_COMPUTE_STORAGE_BUFFERS> compute_storage_buffers;
+    std::array<Binding, NUM_STORAGE_BUFFERS> compute_storage_buffers;
     std::array<TextureBufferBinding, NUM_TEXTURE_BUFFERS> compute_texture_buffers;
 
     std::array<u32, NUM_STAGES> enabled_uniform_buffer_masks{};
@@ -378,7 +382,7 @@ public:
 
     void BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr gpu_addr, u32 size) {
         auto& current = channel_state->uniform_buffers[stage][index];
-        const u64 map_serial = gpu_memory->GetMapSerial();
+        const u64 map_serial = gpu_memory->MapSerial();
         if (!channel_state->has_deleted_buffers && current.buffer_id &&
             current.buffer_id != NULL_BUFFER_ID && current.gpu_addr == gpu_addr &&
             current.size == size && current.map_serial == map_serial && current.device_addr != 0)

@@ -28,6 +28,9 @@
 
 namespace VideoCommon {
 
+/// Advances once per frame; hot-page history is periodically cleared against this epoch.
+inline std::atomic<u32> g_hot_page_epoch{};
+
 constexpr u64 PAGES_PER_WORD = 64;
 constexpr u64 BYTES_PER_PAGE = Core::DEVICE_PAGESIZE;
 constexpr u64 BYTES_PER_WORD = PAGES_PER_WORD * BYTES_PER_PAGE;

@@ -462,7 +462,7 @@ void RasterizerVulkan::Nx2ProveNonWriterDraw(const GraphicsPipeline& pipeline) {
     // dropped or rewritten since moved the epoch on, and the proof is stale from the start.
     const u64 epoch = pipeline_cache.Nx2ResolvedEpoch();
     const u64 map = pipeline_cache.Nx2ResolvedMap();
-    if (epoch == 0 || map != gpu_memory->GetMapSerial()) {
+    if (epoch == 0 || map != gpu_memory->MapSerial()) {
         return;
     }
     Tegra::Nx2DrawPrograms programs;

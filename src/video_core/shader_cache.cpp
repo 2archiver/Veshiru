@@ -82,7 +82,7 @@ bool ShaderCache::RefreshStages(std::array<u64, 6>& unique_hashes) try {
     const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
     const bool mesh{native && maxwell3d->regs.IsMeshEnabled()};
     const size_t memory_id = gpu_memory->GetID();
-    const u64 map_serial = gpu_memory->GetMapSerial();
+    const u64 map_serial = gpu_memory->MapSerial();
     const u64 inv_serial = invalidation_serial.load(std::memory_order_acquire);
     // Read before anything is resolved: a program dropped meanwhile moved it on.
     const u64 code_epoch = Tegra::g_nx2_code_epoch.load(std::memory_order_acquire);
@@ -237,7 +237,7 @@ const ShaderInfo* ShaderCache::ComputeShader() {
     const auto& qmd{kepler_compute->launch_description};
     const GPUVAddr shader_addr{program_base + qmd.program_start};
     const size_t memory_id = gpu_memory->GetID();
-    const u64 map_serial = gpu_memory->GetMapSerial();
+    const u64 map_serial = gpu_memory->MapSerial();
     const u64 inv_serial = invalidation_serial.load(std::memory_order_acquire);
     std::optional<VAddr> cpu_shader_addr;
     if (const ShaderInfo* const shader =
