@@ -1305,7 +1305,7 @@ ColdHintAction HostMemory::HintCold(size_t physical_offset, size_t length,
     // also slows the threads touching nearby memory: work in pieces and pause between them.
     static constexpr size_t Piece = size_t{8} << 20;
     static constexpr auto Budget = std::chrono::milliseconds{2};
-    const auto hint = [page_out, length](u8* address) {
+    const auto hint = [page_out](u8* address, size_t length) {
         auto slice_start = std::chrono::steady_clock::now();
         for (size_t done = 0; done < length;) {
             const size_t size = std::min(Piece, length - done);
