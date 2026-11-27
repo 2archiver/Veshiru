@@ -442,7 +442,8 @@ Id CasLoop(EmitContext& ctx, Operation operation, Id array_pointer, Id element_p
                                   : ctx.OpBitcast(ctx.U32[1], new_value)};
     const Id atomic_res{ctx.OpAtomicCompareExchange(ctx.U32[1], word_pointer, scope_id, zero, zero,
                                                     new_word, expected)};
-    ctx.OpStore(expected_var, atomic_res);
+    const Id retry_value{CasRetryFix() ? atomic_res : ctx.OpLoad(ctx.U32[1], word_pointer)};
+    ctx.OpStore(expected_var, retry_value);
     const Id success{ctx.OpIEqual(ctx.U1, atomic_res, expected)};
     ctx.OpBranchConditional(success, merge_block, loop_header);
 
@@ -659,16 +660,6 @@ Id DescType(EmitContext& ctx, Id sampled_type, Id pointer_type, u32 count) {
     } else {
         return pointer_type;
     }
-}
-// EDEN_NX2_LEAN_SSBO=0 turns it off: the global memory helpers are kept as calls and route
-// with one switch. Inlined at each of their calls, a program with ~30 candidate buffers took
-// NVIDIA's compiler 2.4 s (Ocarina's foliage compute programs; 0.6 s this way, same accesses).
-bool LeanGlobalMemory() {
-    static const bool enabled = [] {
-        const char* value = std::getenv("EDEN_NX2_LEAN_SSBO");
-        return value == nullptr || value[0] != '0';
-    }();
-    return enabled;
 }
 } // Anonymous namespace
 
