@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -203,6 +206,8 @@ private:
     u64 hdr_metadata_generation{}; ///< DisplayHdrMonitor generation of the metadata sent
     bool storage_supported;
     bool use_present_thread;
+    bool presenting_frame{};
+    bool wake_present_hold{};
     std::atomic<std::size_t> image_count{};
     std::atomic<std::size_t> swapchain_image_count{};
     std::atomic<VkFormat> swapchain_image_format{};

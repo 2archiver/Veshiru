@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -552,11 +555,11 @@ void GRenderWindow::mouseMoveEvent(QMouseEvent* event) {
         const int dx = pos.x() - center.x();
         const int dy = pos.y() - center.y();
         if (dx != 0 || dy != 0) {
-            input_subsystem->GetMouse()->RelativeMove(dx, dy);
+            const auto delta = input_subsystem->GetMouse()->RelativeMove(dx, dy);
             if (QtCommon::system != nullptr) {
                 if (auto* devices = QtCommon::system->HIDCore().GetEmulatedDevices();
                     devices != nullptr) {
-                    devices->AddMouseDelta(static_cast<f32>(dx), static_cast<f32>(dy));
+                    devices->AddMouseDelta(delta.x, delta.y);
                 }
             }
             QCursor::setPos(mapToGlobal(center));

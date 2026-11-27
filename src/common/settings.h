@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -300,6 +303,14 @@ struct Values {
                                            true,
                                            true,
                                            &use_custom_cpu_ticks};
+
+    SwitchableSetting<bool> prefer_3d_vcache{linkage,
+                                             true,
+                                             "prefer_3d_vcache",
+                                             Category::Cpu,
+                                             Specialization::Default,
+                                             true,
+                                             true};
 
     Setting<bool> cpuopt_page_tables{linkage, true, "cpuopt_page_tables", Category::CpuDebug};
     Setting<bool> cpuopt_block_linking{linkage, true, "cpuopt_block_linking", Category::CpuDebug};
@@ -808,6 +819,9 @@ struct Values {
     SwitchableSetting<bool> mkw_30fps{linkage, false, "mkw_30fps", Category::RendererAdvanced};
     SwitchableSetting<bool> mkw_dynamic_fps{linkage, true, "mkw_dynamic_fps",
                                             Category::RendererAdvanced};
+    SwitchableSetting<bool> hyrule_dynamic_fps{linkage, false, "hyrule_dynamic_fps",
+                                               Category::RendererAdvanced};
+    SwitchableSetting<bool> hyrule_30fps{linkage, false, "hyrule_30fps", Category::RendererAdvanced};
 
     // Hyrule Warriors: Age of Imprisonment: 30 FPS at normal game speed while 60 can't be held,
     // or always (core/hle/service/nx2_frame_interval.h).
@@ -968,8 +982,8 @@ struct Values {
                                       false,   true, &custom_rtc_enabled};
     SwitchableSetting<s64, true> custom_rtc_offset{linkage,
                                                    0,
-                                                   (std::numeric_limits<s64>::min)(),
-                                                   (std::numeric_limits<s64>::max)(),
+                                                   (std::numeric_limits<int>::min)(),
+                                                   (std::numeric_limits<int>::max)(),
                                                    "custom_rtc_offset",
                                                    Category::System,
                                                    Specialization::Countable,
@@ -1265,7 +1279,7 @@ struct Values {
     // WebService
     Setting<std::string> web_api_url{linkage, "api.ynet-fun.xyz", "web_api_url",
                                      Category::WebService};
-    Setting<std::string> eden_username{linkage, "Eden", "eden_username",
+    Setting<std::string> eden_username{linkage, "Eglantine", "eden_username",
                                        Category::WebService};
     Setting<std::string> eden_token{linkage, "",
                                     "eden_token", Category::WebService};

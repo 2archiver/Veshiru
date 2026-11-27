@@ -29,7 +29,7 @@
 #include <vector>
 
 #include "common/cityhash.h"
-#include "common/diag_request.h"
+#include "common/nx2_try_switch.h"
 #include "common/thread.h"
 #include "common/thread_worker.h"
 #include "shader_recompiler/backend/bindings.h"
@@ -565,7 +565,7 @@ struct PipelineCache::Impl {
     // --- disk ---------------------------------------------------------------------------------
     [[nodiscard]] bool DiskEnabled() const noexcept {
         return !options.directory.empty() &&
-               try_generation_at_init == Common::DiagRequest::TrySwitchGeneration();
+               try_generation_at_init == Common::Nx2TrySwitch::Generation();
     }
     void PostShader(const StageArtifact& artifact);
     void PostGraphicsRecord(const Disk::GraphicsPipelineRecord& record);

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -22,7 +25,7 @@ AboutDialog::AboutDialog(QWidget* parent)
 
     ui->setupUi(this);
     // Try and request the icon from Qt theme (Linux?)
-    const QIcon veshiru_logo = QIcon::fromTheme(QStringLiteral("dev.veshiru.emulator"),
+    const QIcon veshiru_logo = QIcon::fromTheme(QStringLiteral("dev.eden_emu.eden"),
                                            QIcon(QStringLiteral(":/img/veshiru.ico")));
     if (!veshiru_logo.isNull()) {
         ui->labelLogo->setPixmap(veshiru_logo.pixmap(112));

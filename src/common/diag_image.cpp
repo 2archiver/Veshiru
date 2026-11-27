@@ -12,7 +12,7 @@
 #include "common/logging.h"
 #include "common/stb.h"
 
-namespace Common::DiagRequest {
+namespace Common::DiagImage {
 
 namespace {
 void AppendBytes(void* context, void* data, int size) {
@@ -86,4 +86,4 @@ std::string JsonEscape(std::string_view text) {
     return result;
 }
 
-} // namespace Common::DiagRequest
+} // namespace Common::DiagImage

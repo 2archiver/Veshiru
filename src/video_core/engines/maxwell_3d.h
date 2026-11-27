@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -36,6 +39,7 @@ class System;
 
 namespace Tegra {
 class MemoryManager;
+struct Nx2DrawPrograms;
 }
 
 namespace VideoCommon {
@@ -3117,6 +3121,9 @@ public:
         void SetInlineIndexBuffer(Maxwell3D& maxwell3d, u32 index);
         void SetInlineIndexBuffer(Maxwell3D& maxwell3d, u32 method, const u32* base_start, u32 amount);
         void DrawBegin(Maxwell3D& maxwell3d);
+        /// Nx2Perf draw_begin_coalesce: the effect of `repeats` more DrawBegin calls right after
+        /// one, with no write in between.
+        void AddInstances(Maxwell3D& maxwell3d, u32 repeats);
         void DrawEnd(Maxwell3D& maxwell3d, u32 instance_count = 1, bool force_draw = false);
         void DrawIndexSmall(Maxwell3D& maxwell3d, u32 argument);
         void DrawTexture(Maxwell3D& maxwell3d);
@@ -3202,6 +3209,8 @@ public:
 
     /// Write the value to the register identified by method.
     void CallMethod(Core::System& system, u32 method, u32 method_argument, bool is_last_call) override;
+
+    void CallStateMethod(Core::System& system, u32 method, u32 argument) override;
 
     /// Write multiple values to the register identified by method.
     void CallMultiMethod(Core::System& system, u32 method, const u32* base_start, u32 amount, u32 methods_pending) override;

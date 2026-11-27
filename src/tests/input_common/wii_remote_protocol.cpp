@@ -85,6 +85,26 @@ TEST_CASE("Wii Remote nunchuk decodes stick and active-low buttons", "[input_com
     CHECK(idle.stick_x == Catch::Approx(0.0f));
 }
 
+TEST_CASE("Wii Remote only treats recognized Nunchuk extension bytes as Nunchuk input",
+          "[input_common][wii]") {
+    const std::array<u8, 6> nunchuk_id{0x00, 0x00, 0xA4, 0x20, 0x00, 0x00};
+    const std::array<u8, 6> classic_id{0x00, 0x00, 0xA4, 0x20, 0x01, 0x01};
+    const auto nunchuk = Wii::ParseExtensionId(nunchuk_id);
+    const auto classic = Wii::ParseExtensionId(classic_id);
+    Wii::InputReport report{};
+    report.has_nunchuk = true;
+    report.nunchuk.connected = true;
+
+    CHECK(Wii::HasNunchukData(nunchuk, report));
+    CHECK_FALSE(Wii::HasNunchukData(classic, report));
+
+    report.nunchuk.connected = false;
+    CHECK_FALSE(Wii::HasNunchukData(nunchuk, report));
+    report.nunchuk.connected = true;
+    report.has_nunchuk = false;
+    CHECK_FALSE(Wii::HasNunchukData(nunchuk, report));
+}
+
 TEST_CASE("Wii Remote status reports battery, LEDs and extension presence", "[input_common][wii]") {
     const std::array<u8, 7> report{0x20, 0x00, 0x00, 0x1A, 0x00, 0x00, 0xC8};
     const auto parsed = Wii::ParseInputReport(report);

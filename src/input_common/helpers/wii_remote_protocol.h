@@ -160,6 +160,13 @@ struct InputReport {
     bool has_extension{};
 };
 
+/// Extension bytes are only Nunchuk data when the remote has identified a Nunchuk; other
+/// extensions also occupy six bytes in the same report slots.
+[[nodiscard]] inline bool HasNunchukData(const ExtensionId& extension,
+                                         const InputReport& report) noexcept {
+    return extension.valid && extension.nunchuk && report.has_nunchuk && report.nunchuk.connected;
+}
+
 /// The largest payload the remote can send, including the report ID.
 inline constexpr std::size_t MaxReportSize = 22;
 

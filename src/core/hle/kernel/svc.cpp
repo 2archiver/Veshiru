@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-License-Identifier: GPL-2.0-or-late
@@ -2499,6 +2502,7 @@ static void Call64(Core::System& system, u32 imm, std::span<uint64_t, 8> args) {
     default: UNREACHABLE_MSG("Unhandled SVC {:#x}!", imm);
     }
 }
+/// Dispatches SVC `imm` for the current thread.
 void Call(Core::System& system, u32 imm) {
     auto& kernel = system.Kernel();
     auto& process = GetCurrentProcess(kernel);
@@ -2509,37 +2513,6 @@ void Call(Core::System& system, u32 imm) {
     LOG_TRACE(Kernel_SVC, "{} [0]={:#x} [1]={:#x} [2]={:#x} [3]={:#x} [4]={:#x} [5]={:#x} [6]={:#x}",
         imm, GetArg64(args, 0), GetArg64(args, 1), GetArg64(args, 2),
         GetArg64(args, 3), GetArg64(args, 4), GetArg64(args, 5), GetArg64(args, 6));
-    // Set EDEN_NX2_SVC_TRACE=1 to log every SVC with its arguments and results, or
-    // EDEN_NX2_SVC_TRACE=<first>:<last> for presents first..last only (a frame-time profile).
-    static const std::pair<u64, u64> trace_range = [] {
-        const char* text = std::getenv("EDEN_NX2_SVC_TRACE");
-        if (text == nullptr) return std::pair<u64, u64>{1, 0};
-        const char* colon = std::strchr(text, ':');
-        if (colon == nullptr) return std::pair<u64, u64>{0, ~u64{}};
-        return std::pair<u64, u64>{std::strtoull(text, nullptr, 10), std::strtoull(colon + 1, nullptr, 10)};
-    }();
-    const u64 presents = Core::g_nx2_present_count.load(std::memory_order_relaxed);
-    const bool svc_trace = presents >= trace_range.first && presents <= trace_range.second;
-    if (svc_trace) {
-        LOG_INFO(Kernel_SVC, "svc {:#04x} in  t{} [0]={:#x} [1]={:#x} [2]={:#x} [3]={:#x}", imm,
-                 GetCurrentThread(kernel).GetThreadId(),
-                 GetArg64(args, 0), GetArg64(args, 1), GetArg64(args, 2), GetArg64(args, 3));
-        if (imm == 0x18) {
-            // WaitSynchronization: the handles, with the names services gave their events.
-            std::string list;
-            const s32 count = static_cast<s32>(GetArg64(args, 2));
-            for (s32 i = 0; i < std::min(count, 8); ++i) {
-                const u32 handle = process.GetMemory().Read32(GetArg64(args, 1) + 4 * i);
-                KScopedAutoObject event =
-                    process.GetHandleTable().GetObject<KReadableEvent>(kernel, handle);
-                list += fmt::format(" {:#x}{}", handle,
-                                    event.IsNotNull()
-                                        ? "=" + Service::KernelHelpers::DebugEventName(event.GetPointerUnsafe())
-                                        : std::string{});
-            }
-            LOG_INFO(Kernel_SVC, "svc 0x18 t{} waits on{}", GetCurrentThread(kernel).GetThreadId(), list);
-        }
-    }
     if (imm == 0x80) {
         // Switch 2 only: svcSetGpuMemoryAttribute(address, size, mask, attr). nn::gpu::sdk and
         // nn::gs native memory set the new "GPU accessible" attribute (0x20) before registering
@@ -2568,15 +2541,12 @@ void Call(Core::System& system, u32 imm) {
         LOG_DEBUG(Kernel_SVC, "Switch 2 svc 0x80 addr={:#x} size={:#x} mask={:#x} attr={:#x} -> {:#x}",
                   address, size, mask, attr, result.raw);
         args[0] = result.raw;
-    } else if (process.Is64Bit()) {
-        Call64(system, imm, args);
     } else {
-        Call32(system, imm, args);
-    }
-    if (svc_trace) {
-        LOG_INFO(Kernel_SVC, "svc {:#04x} out t{} [0]={:#x} [1]={:#x} [2]={:#x}", imm,
-                 GetCurrentThread(kernel).GetThreadId(), GetArg64(args, 0), GetArg64(args, 1),
-                 GetArg64(args, 2));
+        if (process.Is64Bit()) {
+            Call64(system, imm, args);
+        } else {
+            Call32(system, imm, args);
+        }
     }
     //kernel.ExitSVCProfile();
     kernel.CurrentPhysicalCore().LoadSvcArguments(process, args);

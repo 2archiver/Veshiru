@@ -35,7 +35,6 @@
 #include "video_core/macro.h"
 #include "video_core/memory_manager.h"
 #include "video_core/native_lowering.h"
-#include "video_core/nx2_debug_control.h"
 #include "video_core/renderer_null/null_rasterizer.h"
 #include "video_core/shader_cache_v2/cache.h"
 #include "video_core/shader_cache_v2/cache_file.h"
@@ -455,46 +454,26 @@ struct NativeComputeFixture {
     }
 };
 
-void SetEnvironment(const char* name, const std::string& value) {
-#ifdef _WIN32
-    _putenv_s(name, value.c_str());
-#else
-    setenv(name, value.c_str(), 1);
-#endif
-}
-
-} // Anonymous namespace
-
 TEST_CASE("Shader cache v2: compute environments take recorded programs with every check",
           "[video_core][shader_cache_v2]") {
     std::vector<TestProgram> programs = TestPrograms();
     TestProgram& traps = programs[6];
     TestProgram& texture = programs[8];
-    TestProgram rejected{"rejected", Shader::Stage::Compute, {{{0x00007918, 0, 0, 0}}, Exit}, {}};
-    // EDEN_NX2_REJECT_HASH is read at the first lowering in the process: no other test lowers
-    // in an environment.
-    SetEnvironment("EDEN_NX2_REJECT_HASH",
-                   fmt::format("{:016x}", Shader::Ampere::NativeProgramKey(rejected.native)));
-
     NativeComputeFixture fixture;
     traps.inputs.native_code_address = fixture.Place(0x1000, traps.native);
     texture.inputs.native_code_address = fixture.Place(0x2000, texture.native);
-    rejected.inputs.native_code_address = fixture.Place(0x3000, rejected.native);
     fixture.SetConstant(0, 5); // The trap program's guard holds.
 
     // A session without records: the environment lowers.
     auto lowered_traps = fixture.Environment(traps.inputs.native_code_address, nullptr);
     auto lowered_texture = fixture.Environment(texture.inputs.native_code_address, nullptr);
-    REQUIRE_THROWS_AS(fixture.Environment(rejected.inputs.native_code_address, nullptr),
-                      Shader::RuntimeError);
     RequireSameCode(*lowered_traps.LoweredNative(), *LowerFresh(traps));
     RequireSameCode(*lowered_texture.LoweredNative(), *LowerFresh(texture));
 
     TempDir temp;
     const auto file = temp.path / "cache.bin";
     const std::array records{RecordOf(traps, *lowered_traps.LoweredNative()),
-                             RecordOf(texture, *lowered_texture.LoweredNative()),
-                             RecordOf(rejected, *LowerFresh(rejected))};
+                             RecordOf(texture, *lowered_texture.LoweredNative())};
     WriteLog(file, records);
     const V2::LogFile log = V2::ReadLogFile(file);
     V2::Cache cache{file};
@@ -524,20 +503,4 @@ TEST_CASE("Shader cache v2: compute environments take recorded programs with eve
                       Shader::Ampere::TrapGuardError);
     fixture.SetConstant(0, 5);
 
-    // Rejections by native key and by lowered hash still apply.
-    REQUIRE(loaded(rejected) != nullptr);
-    REQUIRE_THROWS_AS(fixture.Environment(rejected.inputs.native_code_address, &cache),
-                      Shader::RuntimeError);
-    const auto texture_code = loaded(texture);
-    for (const u64 hash : {texture_code->native_program_key,
-                           VideoCommon::NativeShaderHash(texture_code->code)}) {
-        const std::array hashes{hash};
-        (void)VideoCore::Nx2Debug::SetRejected(hashes, true);
-        REQUIRE_THROWS_AS(fixture.Environment(texture.inputs.native_code_address, &cache),
-                          Shader::RuntimeError);
-        (void)VideoCore::Nx2Debug::SetRejected(hashes, false);
-    }
-    REQUIRE_FALSE(VideoCore::Nx2Debug::AnyRejected());
-    REQUIRE(fixture.Environment(texture.inputs.native_code_address, &cache).LoweredNative() ==
-            texture_code);
 }

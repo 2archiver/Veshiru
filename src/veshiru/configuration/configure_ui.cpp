@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -12,6 +15,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDir>
 #include <QDirIterator>
 #include <QFileDialog>
 #include <QLocale>
@@ -27,6 +31,7 @@
 #include "core/core.h"
 #include "core/frontend/framebuffer_layout.h"
 #include "ui_configure_ui.h"
+#include "veshiru/util/util.h"
 
 #include "qt_common/config/uisettings.h"
 #include "qt_common/qt_compat.h"

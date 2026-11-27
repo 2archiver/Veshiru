@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -79,6 +82,20 @@ public:
     /// Whether everything up to tick has been handed to the worker for submission.
     [[nodiscard]] bool IsSubmitted(u64 tick) const noexcept {
         return tick < master_semaphore->CurrentTick();
+    }
+
+    /// Nx2Perf submit_while_waited: the rasterizer calls this after recording a guest draw; only
+    /// a submission (Flush, Finish) resets the count, not a deferred FlushCommands.
+    void NoteDraw() noexcept {
+        ++draws_since_submit;
+    }
+    [[nodiscard]] u32 DrawsSinceSubmit() const noexcept {
+        return draws_since_submit;
+    }
+    /// Whether the host GPU has finished everything submitted so far (reads the semaphore).
+    [[nodiscard]] bool GpuCaughtUp() {
+        master_semaphore->Refresh();
+        return master_semaphore->KnownGpuTick() + 1 >= master_semaphore->CurrentTick();
     }
 
     /// Waits for the worker thread to finish executing everything. After this function returns it's
@@ -206,7 +223,12 @@ public:
     }
 
     /// Update the pipeline to the current execution context.
-    bool UpdateGraphicsPipeline(GraphicsPipeline* pipeline);
+    bool UpdateGraphicsPipeline(GraphicsPipeline* pipeline) {
+        if (state.graphics_pipeline == pipeline && !state.needs_state_enable_refresh) [[likely]] {
+            return false;
+        }
+        return UpdateGraphicsPipelineImpl(pipeline);
+    }
 
     /// Worker thread only: whether the bound graphics pipeline failed to build, so the draws
     /// recorded after it must be dropped instead of reaching the driver without a pipeline.
@@ -221,7 +243,22 @@ public:
     bool UpdateRescaling(bool is_rescaling, bool mesh_layout);
 
     /// Returns true when the descriptor buffer chunk has to be bound into the command buffer.
-    bool UpdateDescriptorBufferChunk(u32 descriptor_chunk);
+    bool UpdateDescriptorBufferChunk(u32 descriptor_chunk) {
+        if (state.descriptor_buffer_bound && descriptor_chunk == state.descriptor_buffer_chunk)
+            [[likely]] {
+            return false;
+        }
+        state.descriptor_buffer_bound = true;
+        state.descriptor_buffer_chunk = descriptor_chunk;
+        return true;
+    }
+
+    /// Marks the descriptor buffer as unbound (e.g. after vkCmdBindDescriptorSets on any bind
+    /// point, which Vulkan specifies unbinds all descriptor buffers across all bind points).
+    void InvalidateDescriptorBuffer() {
+        state.descriptor_buffer_bound = false;
+        state.rescaling_defined = false;
+    }
 
     /// Invalidates current command buffer state except for render passes
     void InvalidateState();
@@ -498,6 +535,8 @@ private:
     void BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass renderpass,
                              const VkClearValue* clear_values, u32 clear_value_count);
 
+    bool UpdateGraphicsPipelineImpl(GraphicsPipeline* pipeline);
+
     /// If a deferred clear is pending.
     void RealizeDeferredClear();
 
@@ -542,11 +581,11 @@ private:
     bool render_pass_depth_written{};
     u64 render_pass_serial{};
     std::unique_ptr<CommandPool> command_pool;
-
     std::unique_ptr<UploadBatch> upload_batch;
     bool uploads_pending{};
     /// Records pending uploads before another command, worker handoff, or submission tick.
     void FlushUploads();
+    u32 draws_since_submit{};
 
     vk::QueryPool trace_query_pool;
     static constexpr u32 TraceMaxSubmissions = 512;

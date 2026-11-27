@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -8,6 +11,7 @@
 
 #include <memory>
 #include <optional>
+#include <set>
 
 #include <filesystem>
 #include <QElapsedTimer>
@@ -15,6 +19,9 @@
 #include <QPointer>
 #include <QMessageBox>
 #include <QFutureWatcher>
+#include <QMainWindow>
+#include <QPointer>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QTimer>
 #include <QTranslator>
@@ -169,9 +176,10 @@ private:
     constexpr static int MaxMultiplier = 8;
 };
 
+class QAction;
+class QMenu;
 class MainWindow : public QMainWindow {
     Q_OBJECT
-
     /// Max number of recently loaded items to keep track of
     static const int max_recent_files_item = 10;
 
@@ -293,7 +301,8 @@ private:
 
     bool LoadROM(const QString& filename, Service::AM::FrontendAppletParameters params);
     void BootGame(const QString& filename, Service::AM::FrontendAppletParameters params,
-                  StartGameType with_config = StartGameType::Normal);
+                  StartGameType with_config = StartGameType::Normal,
+                  bool allow_recommended_settings_prompt = true);
     void BootGameFromList(const QString& filename, StartGameType with_config);
     void ShutdownGame();
     void ExitIfEmulationThreadStuck();
@@ -396,6 +405,7 @@ private slots:
     void OnMenuInstallToNAND();
     void OnMenuRecentFile();
     void OnConfigure();
+    void OnConfigureProfiles();
     void OnConfigureTas();
     void OnDecreaseVolume();
     void OnIncreaseVolume();
@@ -473,6 +483,7 @@ private slots:
 
 #ifdef ENABLE_UPDATE_CHECKER
     void OnEmulatorUpdateAvailable();
+    void OnCheckForUpdates();
 #endif
     void KeepNextendoSessionAlive();
 
@@ -600,6 +611,7 @@ private:
     std::optional<CompatibilityReporting::Session> report_session;
     bool boot_in_progress = false;
     bool close_pending = false;
+
     // The path to the game currently running
     QString current_game_path;
     // Whether a user was set on the command line (skips UserSelector if it's forced to show up)

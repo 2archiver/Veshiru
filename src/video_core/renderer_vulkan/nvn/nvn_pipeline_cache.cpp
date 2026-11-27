@@ -29,7 +29,7 @@
 #include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
-#include "common/diag_request.h"
+#include "common/nx2_try_switch.h"
 #include "common/thread.h"
 #include "common/thread_worker.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -459,7 +459,7 @@ void PipelineCache::Impl::NoteCompileTime(std::string_view kind, u64 hash,
 PipelineCache::Impl::Impl(const Device& device_, PipelineCacheOptions options_)
     : device{device_}, options{std::move(options_)}, profile{MakeProfile(device_)},
       host_info{MakeHostInfo(device_, profile)} {
-    try_generation_at_init = Common::DiagRequest::TrySwitchGeneration();
+    try_generation_at_init = Common::Nx2TrySwitch::Generation();
     const VkPhysicalDeviceProperties props = device.GetPhysical().GetProperties();
     disk_header.revision = options.revision;
     disk_header.vendor_id = props.vendorID;
@@ -877,8 +877,8 @@ bool PipelineCache::Impl::Translate(const TranslateInput& in, TranslateOutput& o
     Shader::HostTranslateInfo current_host_info = host_info;
     current_host_info.raw_global_last_hit = VideoCommon::RawGlobalFastEnabled();
     current_host_info.raw_global_store_alias =
-        Common::DiagRequest::TrySwitchEnabled("TRY_RO_MIRROR_EXACT") ||
-        Common::DiagRequest::TrySwitchEnabled("TRY_STORAGE_RAW_WRITE_THROUGH");
+        Common::Nx2TrySwitch::Enabled("TRY_RO_MIRROR_EXACT") ||
+        Common::Nx2TrySwitch::Enabled("TRY_STORAGE_RAW_WRITE_THROUGH");
     const Shader::Profile& translation_profile = profile;
 
     boost::container::small_vector<u32, PIPELINE_ORDER.size()> order;

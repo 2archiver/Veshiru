@@ -477,6 +477,30 @@ std::string CleanTitle(std::string title) {
 
 } // namespace
 
+namespace {
+
+// Community-maintained names and covers, keyed by title ID: <TITLEID>.txt and <TITLEID>.png
+constexpr char COVERS_HOST[] = "raw.githubusercontent.com";
+constexpr char COVERS_PATH[] = "/mushymeow/eglantine-covers/main/";
+
+std::optional<std::string> FetchFromCovers(const std::string& file_name, bool want_body) {
+    httplib::SSLClient client(COVERS_HOST);
+    client.set_connection_timeout(3);
+    client.set_read_timeout(3);
+    client.set_follow_location(true);
+
+    Common::Net::ConfigureCaStore(client);
+
+    const std::string path = std::string{COVERS_PATH} + file_name;
+    const auto res = want_body ? client.Get(path) : client.Head(path);
+    if (!res || res->status != 200) {
+        return std::nullopt;
+    }
+    return res->body;
+}
+
+} // namespace
+
 DiscordImpl::DiscordImpl(Core::System& system_) : system{system_} {
     // Shipped with the build; the user has nothing to configure. A malformed constant leaves
     // presence off without a warning, exactly like a missing Discord client.

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/device_memory_manager.h"
+#include "video_core/nx2_perf.h"
 
 namespace Core {
 
@@ -153,6 +154,22 @@ private:
     void CountCollect() {
         if (count_collects) {
             collects.fetch_add(1, std::memory_order_release);
+        }
+    }
+
+    template <typename Func>
+    static void ForEachRun(const TransformAddress& transform, Func&& callback) {
+        size_t offset = 0;
+        u64 mask = transform.mask;
+        while (mask != 0) {
+            const size_t empty_bits = std::countr_zero(mask);
+            offset += empty_bits << align_bits;
+            mask = mask >> empty_bits;
+            const size_t continuous_bits = std::countr_one(mask);
+            callback((static_cast<PAddr>(transform.address) << page_bits) + offset,
+                     continuous_bits << align_bits);
+            mask = continuous_bits < align_size ? (mask >> continuous_bits) : 0;
+            offset += continuous_bits << align_bits;
         }
     }
 

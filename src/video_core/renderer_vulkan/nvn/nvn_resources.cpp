@@ -11,7 +11,7 @@
 
 #include <fmt/format.h>
 
-#include "common/diag_request.h"
+#include "common/nx2_try_switch.h"
 #include "common/settings.h"
 
 #include "common/frame_stats.h"
@@ -1573,8 +1573,8 @@ const Context::Impl::RawGlobalTable& Context::Impl::RawGlobalMemoryTable() {
 }
 
 const Context::Impl::RawWriteThroughTable& Context::Impl::RawStoreAliasTable() {
-    const bool read_only_enabled = Common::DiagRequest::TrySwitchEnabled("TRY_RO_MIRROR_EXACT");
-    const bool storage_enabled = Common::DiagRequest::TrySwitchEnabled("TRY_STORAGE_RAW_WRITE_THROUGH");
+    const bool read_only_enabled = Common::Nx2TrySwitch::Enabled("TRY_RO_MIRROR_EXACT");
+    const bool storage_enabled = Common::Nx2TrySwitch::Enabled("TRY_STORAGE_RAW_WRITE_THROUGH");
     const u64 current_split_gen = split_alias_generation.load(std::memory_order_acquire);
     if (raw_write_through_table.mirror_generation == ro_alias_generation &&
         raw_write_through_table.split_generation == current_split_gen &&

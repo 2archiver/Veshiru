@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -250,6 +253,9 @@ public:
     VectorTypes S32;
     VectorTypes F16;
     VectorTypes F64;
+
+    ::Common::unordered_map<u32, Id> u32_constants;
+    ::Common::unordered_map<u32, Id> f32_constants;
 
     Id true_value{};
     Id false_value{};

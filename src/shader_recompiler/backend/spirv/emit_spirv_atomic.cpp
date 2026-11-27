@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -105,6 +108,14 @@ Id StorageAtomicU32x2(EmitContext& ctx, const IR::Value& binding, const IR::Valu
     const Id result{(ctx.*non_atomic_func)(ctx.U32[2], value, original_value)};
     ctx.OpStore(pointer, result);
     return original_value;
+}
+
+Id GlobalAtomic(EmitContext& ctx, EmitContext::GlobalAtomic kind, Id type, Id address, Id value) {
+    const Id func{ctx.global_atomic_funcs[static_cast<size_t>(kind)]};
+    if (!Sirit::ValidId(func)) {
+        throw NotImplementedException("SPIR-V Instruction");
+    }
+    return ctx.OpFunctionCall(type, func, address, value);
 }
 } // Anonymous namespace
 

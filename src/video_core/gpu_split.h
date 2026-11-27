@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -7,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -166,11 +170,16 @@ public:
     [[nodiscard]] bool BackRunning() const {
         return back_running.load(std::memory_order_acquire);
     }
-    /// Any thread: has the back call the idle hook soon, between entries or at once if it sleeps.
+    /// Any thread: has the back call the idle hook soon, between entries or before it sleeps.
     void RequestIdleHook() {
         hook_requested.store(true, std::memory_order_seq_cst);
-        wake.fetch_add(1, std::memory_order_seq_cst);
-        wake.notify_one();
+    }
+    /// Any thread, a hint (relaxed loads): whether the front waits for the back now, for a ring
+    /// position (WaitFor), a drain or a submission (hook_requested), or asleep in Backoff.
+    [[nodiscard]] bool FrontWaitsForBack() const {
+        return wait_target.load(std::memory_order_relaxed) != ~u64{0} ||
+               hook_requested.load(std::memory_order_relaxed) ||
+               front_waiting.load(std::memory_order_relaxed);
     }
 
     /// Starts the back thread once the split is wanted (EDEN_NX2_SPLIT=1, a Switch 2 title,
@@ -187,6 +196,9 @@ public:
 
     /// An engine method write, executed as DmaPusher would (method sink, ConsumeSink, call).
     /// `segment`: the engine's current_dma_segment for the call, when the engine reads it.
+    /// `effect`: what the entry may write (SplitWriteTracker; unknown unless the caller knows).
+    using Effect = SplitWriteTracker::Effect;
+    using WriteKind = SplitWriteTracker::WriteKind;
     void Method(Tegra::Engines::EngineInterface* engine, u32 method, u32 argument, bool is_last,
                 const GPUVAddr* segment, Writes writes = Writes::Anywhere) {
         SelectEngine(engine);
@@ -296,6 +308,19 @@ public:
         Drain(site);
     }
 
+    /// Runs `func` on the back and waits for it: for work on back-owned state, such as a buffer
+    /// cache download that records into the Vulkan scheduler. A drained back still submits from
+    /// its idle hook, so the front never touches that state itself.
+    template <typename Func>
+    void Run(const Func& func, DrainSite site = DrainSite::Other) {
+        if (on_back_thread || !active) {
+            func();
+            return;
+        }
+        Defer(func);
+        Drain(site);
+    }
+
     /// EDEN_NX2_SPLIT_CHECK=1 (debug): reports, with its stack, a thread other than the back
     /// using back-owned state (the Vulkan scheduler) while the back runs entries.
     static inline bool check_owner{};
@@ -336,6 +361,9 @@ public:
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
         last_writer_position = write_position;
+        if (eager_publish) {
+            Publish(); // the fetch that waits for this entry usually follows within microseconds
+        }
     }
     /// Waits until the back executed the compute and copy work sent so far (not what came after).
     /// Returns whether any of it was still queued.
@@ -451,7 +479,7 @@ private:
         return ReserveSlow(words);
     }
     u64* ReserveSlow(size_t words);
-    void Commit(size_t words) {
+    void Commit(size_t words, Effect effect) {
         write_position += words;
         const u64 unpublished = write_position - published_local;
         if (unpublished >= publish_every) {
@@ -518,6 +546,8 @@ private:
     std::array<u64, size_t{1} << WriteSlotBits> write_positions{};
     u64 published_local{};
     u64 consumed_cache{};
+    /// RepeatableMethod: the ring position after the last entry it sent
+    u64 repeat_end{~u64{0}};
     /// Words between publishes: small right after a drain, while the back has nothing to do.
     size_t publish_every{PublishEvery};
     Tegra::Engines::EngineInterface* front_engine{};
@@ -557,6 +587,7 @@ private:
     /// A position the front waits for (WaitFor): the back stores `consumed` once past it.
     alignas(128) std::atomic<u64> wait_target{~u64{0}};
     alignas(128) std::atomic<bool> back_waiting{};
+    std::atomic<bool> back_idle{}; ///< The back is spinning or sleeping for work (EagerPublish)
     std::atomic<u32> wake{};
     /// The front sleeps in Backoff (#161: instead of yielding).
     alignas(128) std::atomic<bool> front_waiting{};

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -9,6 +12,7 @@
 #include <QFont>
 #include <QIcon>
 #include <QString>
+#include <QStringList>
 #include "common/uuid.h"
 
 /// Returns a QFont object appropriate to use as a monospace font for debugging widgets, etc.

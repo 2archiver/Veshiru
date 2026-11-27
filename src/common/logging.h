@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -176,16 +179,6 @@ void SetGlobalFilter(const Filter& filter);
 void SetColorConsoleBackendEnabled(bool enabled);
 
 [[nodiscard]] std::optional<Level> ParseLevel(std::string_view name);
-
-/// A line kept by the in-memory log ring (the debug server's log tail).
-struct RingLine {
-    u64 sequence;
-    std::string text;
-};
-/// Keeps the last `capacity` formatted lines in memory; 0 turns the ring off and empties it.
-void SetRingCapacity(std::size_t capacity);
-/// The kept lines numbered above `after`, oldest first.
-[[nodiscard]] std::vector<RingLine> ReadRing(u64 after);
 
 /// Redacts host paths and credential-like values for normal diagnostics.
 [[nodiscard]] std::string SanitizeLogMessage(std::string_view message);

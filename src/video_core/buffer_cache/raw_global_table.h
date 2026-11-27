@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "common/common_types.h"
-#include "common/diag_request.h"
+#include "common/nx2_try_switch.h"
 
 namespace VideoCommon {
 
@@ -154,7 +154,7 @@ inline u64 TranslateRawGlobalAddressLastHit(std::span<const RawGlobalRange> rang
 /// EDEN_NX2_TRY_RAWGLOBAL_FAST=1: shaders translate raw global addresses with the last-hit
 /// cache (HostTranslateInfo::raw_global_last_hit). Checked for every translation.
 [[nodiscard]] inline bool RawGlobalFastEnabled() {
-    return Common::DiagRequest::TrySwitchEnabled("TRY_RAWGLOBAL_FAST");
+    return Common::Nx2TrySwitch::Enabled("TRY_RAWGLOBAL_FAST");
 }
 
 /// Adds `fallback` ranges under `ranges` (both flattened, see FlattenRawGlobalRanges): bytes only a

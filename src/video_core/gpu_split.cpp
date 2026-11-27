@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -36,6 +39,7 @@
 #include "video_core/nx2_back_idle_trace.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_profile.h"
+#include "video_core/nx2_sampler.h"
 
 namespace VideoCommon {
 
@@ -152,6 +156,7 @@ void GpuSplit::MaybeStart(Core::System& system_) {
         const char* value = std::getenv("EDEN_NX2_SPLIT");
         return value != nullptr ? value[0] : '2';
     }();
+    VideoCommon::Nx2Sampler::Sampler::MaybeStart();
     const bool wanted = mode == '1' || mode == '2';
     if (!wanted || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         return;
@@ -180,6 +185,7 @@ void GpuSplit::MaybeStart(Core::System& system_) {
                          std::getenv("EDEN_NX2_ACQUIRE_STATS") != nullptr ||
                          std::getenv("EDEN_NX2_GUEST_THREAD_STATS") != nullptr;
     ring = std::make_unique<u64[]>(RingWords);
+    verify_repeats = Nx2Perf::Verify() && Nx2Perf::On(Nx2Perf::Opt::DrawBeginCoalesce);
     back_thread = std::jthread([this](std::stop_token stop_token) { BackLoop(stop_token); });
     active = true;
     ++starts;
@@ -214,6 +220,7 @@ void GpuSplit::Stop() {
     write_positions.fill(0);
     published_local = 0;
     consumed_cache = 0;
+    repeat_end = ~u64{0};
     publish_every = PublishEvery;
     front_engine = nullptr;
     state_engine = nullptr;
@@ -291,6 +298,7 @@ void GpuSplit::Drain(DrainSite site) {
         return;
     }
     Publish();
+    hook_requested.store(true, std::memory_order_release);
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
     const BackIdleTrace::FrontWait idle_trace{WaitState(site)};
     const CountedWait counted{site};
@@ -495,7 +503,7 @@ void GpuSplit::SwitchEngine(Tegra::Engines::EngineInterface* engine) {
     u64* const entry = Reserve(2);
     entry[0] = static_cast<u64>(Kind::Engine);
     entry[1] = reinterpret_cast<u64>(engine);
-    Commit(2);
+    Commit(2, Effect::None);
 }
 
 void GpuSplit::MultiMethod(Tegra::Engines::EngineInterface* engine, u32 method, const u32* words,
@@ -517,7 +525,7 @@ void GpuSplit::MultiMethod(Tegra::Engines::EngineInterface* engine, u32 method, 
         }
         entry[size - 1] = 0;
         std::memcpy(entry + head, words, size_t{piece} * sizeof(u32));
-        Commit(size);
+        Commit(size, effect);
         words += piece;
         amount -= piece;
         methods_pending -= piece;
@@ -533,10 +541,14 @@ void GpuSplit::DeferFunction(std::function<void()>&& func) {
         (*heap)();
         delete heap;
     });
+    last_function_position = write_position;
 }
 
 size_t GpuSplit::Execute(const u64* entry, size_t words) {
     const u64 head = entry[0];
+    if (verify_repeats) [[unlikely]] {
+        VerifyRepeat(head);
+    }
     switch (static_cast<Kind>(head & 0xf)) {
     case Kind::Wrap:
         return 0;
@@ -544,6 +556,10 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
         back_engine = reinterpret_cast<Tegra::Engines::EngineInterface*>(entry[1]);
         return 2;
     case Kind::Method: {
+        if ((head & RepeatMask) != 0) [[unlikely]] {
+            ExecuteRepeated(head);
+            return 1;
+        }
         const u32 method = static_cast<u32>((head >> 8) & 0xffff);
         const u32 argument = static_cast<u32>(head >> 32);
         auto* const engine = back_engine;
@@ -599,9 +615,19 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
             Nx2FastDraw::Break(Nx2FastDraw::Reason::OtherEngine);
         }
         if ((head & Direct) != 0) {
+            static const bool method_fast = [] {
+                const char* value = std::getenv("EDEN_NX2_METHOD_FAST");
+                return value == nullptr || value[0] != '0';
+            }();
             Nx2Profile::Scope method_scope{Nx2Profile::Zone::Method};
-            engine->ConsumeSink(*system);
-            engine->CallMethod(*system, method, argument, true);
+            if (!engine->method_sink.empty()) {
+                engine->ConsumeSink(*system);
+            }
+            if (method_fast && !engine->execution_mask[method]) {
+                engine->CallStateMethod(*system, method, argument);
+            } else {
+                engine->CallMethod(*system, method, argument, true);
+            }
         } else if (!engine->execution_mask[method]) {
             engine->method_sink.emplace_back(method, argument);
         } else {
@@ -650,6 +676,11 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
     }
     }
     return 1;
+}
+
+void GpuSplit::RunIdleHook() {
+    Nx2Profile::Scope scope{Nx2Profile::Zone::BackIdleHook};
+    idle_hook(idle_argument);
 }
 
 void GpuSplit::BackLoop(std::stop_token stop_token) {
@@ -722,9 +753,11 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                     Count(g_acquire_stats.back_sleeps);
                     wake.wait(seen, std::memory_order_seq_cst);
                 }
-                back_waiting.store(false, std::memory_order_relaxed);
+                back_waiting.store(false, std::memory_order_seq_cst);
+                back_idle.store(false, std::memory_order_relaxed);
                 continue;
             }
+            back_idle.store(false, std::memory_order_relaxed);
         }
         if (idle_since != 0) {
             BackIdleTrace::NoteBackIdle(idle_since, BackIdleTrace::Now());
@@ -741,7 +774,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             if (hook_requested.load(std::memory_order_relaxed) &&
                 idle_hook != nullptr) [[unlikely]] {
                 hook_requested.store(false, std::memory_order_seq_cst);
-                idle_hook(idle_argument);
+                RunIdleHook();
             }
             // Hand ring space back now and then while working through a long batch, and at once
             // when the front waits for this position (WaitForWriters).

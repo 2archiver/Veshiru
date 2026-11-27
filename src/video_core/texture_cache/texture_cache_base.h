@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -61,6 +64,10 @@ struct ChannelState;
 } // namespace Tegra
 
 namespace VideoCommon {
+
+/// Set around a 2D blit to read its source as this format instead of the surface's (for formats the
+/// 2D engine has no surface format for, e.g. E5B9G9R9 by the NX2 upscale stand-in). GPU thread only.
+inline thread_local std::optional<VideoCore::Surface::PixelFormat> g_blit_source_format;
 
 using Tegra::Texture::TICEntry;
 using Tegra::Texture::TSCEntry;
@@ -166,6 +173,8 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     u64 gc_deletes{};
     u64 gc_costly_deletes{};
     u64 gc_download_deletes{}; ///< Evictions that downloaded the image first (a full GPU wait)
+    u64 stale_deletes{}; ///< BadOverlap images collected early (TC_STALE_AGE)
+    u64 stale_upload_skips{}; ///< Render targets made without uploading stale bytes
     u64 async_decodes_queued{};
     u64 images_created{};
     u64 images_uploaded{};   ///< Image contents uploaded from guest memory (last 600 frames)
@@ -216,10 +225,17 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     [[nodiscard]] bool UploadsByLayer(const ImageBase& image) const noexcept;
 
     /// Records the layers a write of [cpu_addr, +size) touches.
-    void MarkLayersWritten(Image& image, DAddr cpu_addr, size_t size);
+    void MarkLayersWritten(Image& image, ImageId image_id, DAddr cpu_addr, size_t size);
+
+    /// Records the layers a GPU remap of [gpu_addr, +size) touches.
+    void MarkLayersRemapped(Image& image, GPUVAddr gpu_addr, size_t size);
 
     /// SparseTiles images: notes a written range, uploaded with the next refresh.
-    void MarkRangeWritten(Image& image, DAddr cpu_addr, size_t size);
+    void MarkRangeWritten(Image& image, ImageId image_id, DAddr cpu_addr, size_t size);
+
+    template <typename Func>
+    void ForEachWrittenRange(Image& image, ImageId image_id, DAddr cpu_addr, size_t size,
+                             Func&& func);
 
     /// What a CPU write of [cpu_addr, +size) does to an image over it.
     void MarkImageWritten(ImageId image_id, Image& image, DAddr cpu_addr, size_t size);
@@ -277,6 +293,21 @@ public:
 
     /// Return a constant reference to the given image view id
     [[nodiscard]] const ImageView& GetImageView(ImageViewId id) const noexcept;
+
+    /// Diagnostic state, not a complete producer history or an asynchronous-queue safety proof.
+    [[nodiscard]] std::pair<bool, bool> Nx2ViewWrittenState(ImageViewId id) const noexcept {
+        if (id == NULL_IMAGE_VIEW_ID) {
+            return {};
+        }
+        const auto& view = slot_image_views[id];
+        if (view.IsBuffer() || !view.image_id) {
+            return {};
+        }
+        const ImageBase& image = slot_images[view.image_id];
+        const bool gpu_modified = True(image.flags & ImageFlagBits::GpuModified);
+        return {gpu_modified,
+                gpu_modified && image.modification_tick > frame_start_modification_tick};
+    }
 
     /// Return a reference to the given image view id
     [[nodiscard]] ImageView& GetImageView(ImageViewId id) noexcept;
@@ -415,6 +446,17 @@ public:
                          const Tegra::Texture::TICEntry* depth, std::array<f32, 2> jitter,
                          std::array<f32, 2> motion_scale, bool use_history,
                          std::optional<std::array<u32, 2>> render_region = std::nullopt);
+
+    /// NVIDIA DLSS (DLAA or Super Resolution) on src into dst with the scene depth at
+    /// depth_address and motion from the camera (see the runtime's UpscaleWithCameraMotion).
+    /// render_size is the scene's size in host pixels. False when it can't run; the caller keeps
+    /// its native dispatch.
+    bool CameraMotionUpscale(const Tegra::Engines::Fermi2D::Surface& dst,
+                             const Tegra::Engines::Fermi2D::Surface& src,
+                             const ImageInfo& depth_info, GPUVAddr depth_address,
+                             std::array<u32, 2> render_size,
+                             const std::array<f32, 16>& reprojection, std::array<f32, 2> jitter,
+                             bool reset);
 
     /// Health check of a game's DLSS network output (dst) against its input (src); see the
     /// runtime's ProbeGameDlssOutput. Returns an earlier check's result when one is ready.
@@ -741,6 +783,7 @@ private:
     u64 minimum_memory;
     u64 expected_memory;
     u64 critical_memory;
+    u64 native_heap_budget{};
     size_t gpu_unswizzle_maxsize = 0;
     size_t swizzle_chunk_size = 0;
     u32 swizzle_slices_per_batch = 0;
@@ -809,6 +852,7 @@ private:
     Tegra::Texture::UnswizzleWorker unswizzle_worker;
 
     u64 modification_tick = 0;
+    u64 frame_start_modification_tick = 0;
     u64 frame_tick = 0;
     u64 sparse_tiles_refreshed = 0; ///< SparseTilesUnmapped images brought up to date
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -17,6 +20,7 @@
 
 #include "common/common_types.h"
 #include "common/div_ceil.h"
+#include "common/env_gate.h"
 #include "shader_recompiler/backend/nvn_storage_descriptor.h"
 #include "shader_recompiler/bindless_table.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -381,6 +385,13 @@ Id CasFunction(EmitContext& ctx, Operation operation, Id value_type) {
     return func;
 }
 
+// A/B gate: with EGLANTINE_CAS_RETRY_FIX=0 each retry reloads the word instead of reusing the
+// compare-exchange result.
+bool CasRetryFix() {
+    static const bool enabled{Common::EnvGate("EGLANTINE_CAS_RETRY_FIX")};
+    return enabled;
+}
+
 Id CasLoop(EmitContext& ctx, Operation operation, Id array_pointer, Id element_pointer,
            Id value_type, spv::Scope scope) {
     const bool is_shared{scope == spv::Scope::Workgroup};
@@ -648,6 +659,16 @@ Id DescType(EmitContext& ctx, Id sampled_type, Id pointer_type, u32 count) {
     } else {
         return pointer_type;
     }
+}
+// EDEN_NX2_LEAN_SSBO=0 turns it off: the global memory helpers are kept as calls and route
+// with one switch. Inlined at each of their calls, a program with ~30 candidate buffers took
+// NVIDIA's compiler 2.4 s (Ocarina's foliage compute programs; 0.6 s this way, same accesses).
+bool LeanGlobalMemory() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_LEAN_SSBO");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
 }
 } // Anonymous namespace
 

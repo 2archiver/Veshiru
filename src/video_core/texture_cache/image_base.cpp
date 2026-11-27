@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -87,6 +90,7 @@ std::optional<SubresourceBase> ImageBase::TryFindBase(GPUVAddr other_addr) const
         // This can happen when two CPU addresses are used for different GPU addresses
         return std::nullopt;
     }
+    const u64 diff = diff64;
     if (info.type != ImageType::e3D) {
         const auto [layer, mip_offset] = LayerMipOffset(diff, info.layer_stride);
         const auto end = mip_level_offsets.begin() + info.resources.levels;

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -5,6 +8,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <chrono>
 #include <deque>
 #include <memory>
@@ -14,6 +18,7 @@
 #include "video_core/texture_cache/texture_cache_base.h"
 
 #include "shader_recompiler/shader_info.h"
+#include "video_core/renderer_vulkan/vk_camera_motion_pass.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
 #include "video_core/renderer_vulkan/vk_dlss_network_probe.h"
 #include "video_core/renderer_vulkan/vk_fsr3_upscaler.h"
@@ -23,6 +28,7 @@
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/texture_cache/image_view_base.h"
+#include "video_core/texture_cache/image_allocation_pool.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -94,6 +100,11 @@ public:
 
     void TickFrame();
 
+    [[nodiscard]] vk::Image AcquireImageAllocation(const VideoCommon::ImageInfo& info);
+    void RecycleImage(Image& image, u64 completed_tick);
+    bool CanGpuUnswizzle(const Image& image) const;
+    bool UploadGpuUnswizzle(Image& image, std::span<const u8> source);
+
     void FlushDeferredClear();
 
     u64 GetDeviceLocalMemory() const;
@@ -152,6 +163,16 @@ public:
 
     /// True while TemporalUpscale would use NVIDIA DLSS (on, Streamline running, not failed).
     [[nodiscard]] bool UsesNvidiaDlss() const;
+
+    /// NVIDIA DLSS (DLAA or Super Resolution) on input_color (tonemapped, render_size on the host)
+    /// into dst, for a game that renders no jitter and no motion vectors (Ocarina of Time): the
+    /// host jittered the scene's draws, and the motion comes from the depth (standard, not
+    /// reversed) through reprojection, a column-major matrix from (pixel x, pixel y, device depth,
+    /// 1) to the previous frame's pixel. False when DLSS can't run; the caller keeps its own pass.
+    bool UpscaleWithCameraMotion(Framebuffer* dst_framebuffer, ImageView& input_color,
+                                 ImageView& depth, std::array<u32, 2> render_size,
+                                 const std::array<f32, 16>& reprojection,
+                                 std::array<f32, 2> jitter, bool reset);
 
     /// Records a health check of a game's DLSS network output against its input (both sampled in
     /// the GENERAL layout) and returns an earlier check's result once the GPU has finished it.
@@ -280,8 +301,12 @@ public:
                          ImageView& motion_vectors, ImageView& depth,
                          std::array<u32, 2> render_size, std::array<f32, 2> jitter,
                          std::array<f32, 2> motion_scale, bool reset);
+    /// The NVIDIA DLSS upscaler, created on first use; null when DLSS can't run.
+    StreamlineDlssUpscaler* DlssUpscaler();
     std::unique_ptr<StreamlineDlssUpscaler> dlss_upscaler;
     bool dlss_unsupported{};
+    /// UpscaleWithCameraMotion's motion vectors, created on first use.
+    std::unique_ptr<CameraMotionPass> camera_motion_pass;
 #endif
 
     /// TemporalUpscale's history: its previous result (images[current]) and the image the next
@@ -325,6 +350,22 @@ public:
     u64 transcode_use_counter{};
 
     std::optional<BlockLinearUnswizzle3DPass> bl3d_unswizzle_pass;
+    std::optional<PlainUnswizzlePass> plain_unswizzle_pass;
+    VkBuffer DispatchPlainUnswizzle(const VideoCommon::PlainUnswizzleParameters& parameters,
+                                   const StagingBufferRef& source, bool guarded);
+    bool CheckPlainUnswizzle(const VideoCommon::ImageInfo& info,
+                            const VideoCommon::PlainUnswizzleParameters& parameters,
+                            const StagingBufferRef& source, VkBuffer output);
+    StagingBufferRef QueuePlainUnswizzleReadback(
+        const VideoCommon::PlainUnswizzleParameters& parameters, VkBuffer output, bool deferred);
+    bool TestPlainUnswizzle();
+    bool plain_unswizzle_tested{};
+    bool plain_unswizzle_failed{};
+    u64 plain_unswizzle_frames{};
+    u64 plain_unswizzle_uploads{};
+    u64 plain_unswizzle_bytes{};
+    u32 plain_verified_early{};
+    u32 plain_verified_late{};
     const Settings::ResolutionScalingInfo& resolution;
     std::array<std::vector<VkFormat>, VideoCore::Surface::MaxPixelFormat> view_formats;
 
@@ -352,6 +393,19 @@ public:
     };
 
     std::vector<MsaaScratchImage> msaa_scratch_images;
+    /// EDEN_NX2_IMAGE_POOL_MIB / EDEN_NX2_IMAGE_POOL_ENTRIES: what the pool may hold (256, 128).
+    /// Ocarina of Time recreates ~15 render targets a frame while the view moves (up to 29 MiB
+    /// each): 256 MiB evicted about half of what it recycled.
+    static u64 PoolSetting(const char* name, u64 fallback) {
+        const char* value = std::getenv(name);
+        return value != nullptr ? std::strtoull(value, nullptr, 10) : fallback;
+    }
+    VideoCommon::ImageAllocationPool<vk::Image> image_allocation_pool{
+        PoolSetting("EDEN_NX2_IMAGE_POOL_MIB", 256) << 20,
+        static_cast<size_t>(PoolSetting("EDEN_NX2_IMAGE_POOL_ENTRIES", 128)), 3600};
+    u64 allocation_pool_frames{};
+    u32 allocation_pool_pressure_events{};
+    u32 allocation_pool_pressure_frames{};
     ::Common::unordered_map<VkImage, ResolveShadow> resolve_shadows;
     std::vector<std::pair<u64, ResolveShadow>> pending_resolve_shadows;
 
@@ -596,6 +650,7 @@ public:
     u64 allocation_tick;
 
     friend class BlockLinearUnswizzle3DPass;
+    friend class TextureCacheRuntime;
 
 private:
     bool BlitScaleHelper(bool scale_up);

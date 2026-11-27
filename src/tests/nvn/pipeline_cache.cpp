@@ -28,7 +28,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "common/diag_request.h"
+#include "common/nx2_try_switch.h"
 #include "common/dynamic_library.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -1866,33 +1866,33 @@ TEST_CASE("The NVN host info runs the rescaling pass only while the setting scal
 }
 
 TEST_CASE("Runtime TRY switch changes the translation cache key", "[nvn]") {
-    namespace D = Common::DiagRequest;
+    namespace D = Common::Nx2TrySwitch;
     using Vulkan::Nvn::CurrentTranslationSwitches;
     using Vulkan::Nvn::HashTranslationSwitches;
-    const bool initial = D::TrySwitchEnabled("TRY_RAWGLOBAL_FAST");
+    const bool initial = D::Enabled("TRY_RAWGLOBAL_FAST");
     SCOPE_EXIT {
-        (void)D::SetTrySwitch("TRY_RAWGLOBAL_FAST", initial);
+        (void)D::Set("TRY_RAWGLOBAL_FAST", initial);
     };
     const u64 base = HashTranslationSwitches(CurrentTranslationSwitches());
-    REQUIRE(D::SetTrySwitch("TRY_RAWGLOBAL_FAST", !initial));
+    REQUIRE(D::Set("TRY_RAWGLOBAL_FAST", !initial));
     const u64 changed = HashTranslationSwitches(CurrentTranslationSwitches());
     REQUIRE(changed != base);
-    REQUIRE(D::SetTrySwitch("TRY_RAWGLOBAL_FAST", initial));
+    REQUIRE(D::Set("TRY_RAWGLOBAL_FAST", initial));
     REQUIRE(HashTranslationSwitches(CurrentTranslationSwitches()) == base);
 }
 
 TEST_CASE("Runtime TRY_RO_MIRROR_EXACT changes the translation cache key", "[nvn]") {
-    namespace D = Common::DiagRequest;
+    namespace D = Common::Nx2TrySwitch;
     using Vulkan::Nvn::CurrentTranslationSwitches;
     using Vulkan::Nvn::HashTranslationSwitches;
-    const bool initial = D::TrySwitchEnabled("TRY_RO_MIRROR_EXACT");
+    const bool initial = D::Enabled("TRY_RO_MIRROR_EXACT");
     const u64 base = HashTranslationSwitches(CurrentTranslationSwitches());
     const u64 base_try = Vulkan::Nvn::TrySwitchesHash();
-    REQUIRE(D::SetTrySwitch("TRY_RO_MIRROR_EXACT", !initial));
+    REQUIRE(D::Set("TRY_RO_MIRROR_EXACT", !initial));
     CHECK(CurrentTranslationSwitches().ro_mirror_exact == !initial);
     CHECK(HashTranslationSwitches(CurrentTranslationSwitches()) != base);
     CHECK(Vulkan::Nvn::TrySwitchesHash() != base_try);
-    REQUIRE(D::SetTrySwitch("TRY_RO_MIRROR_EXACT", initial));
+    REQUIRE(D::Set("TRY_RO_MIRROR_EXACT", initial));
     REQUIRE(HashTranslationSwitches(CurrentTranslationSwitches()) == base);
     REQUIRE(Vulkan::Nvn::TrySwitchesHash() == base_try);
 }

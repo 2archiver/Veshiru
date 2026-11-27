@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -19,6 +22,7 @@
 #include "common/event_wait.h"
 #include "common/logging.h"
 #include "common/assert.h"
+#include "common/settings.h"
 #include "common/thread.h"
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -27,6 +31,7 @@
 #elif defined(_WIN32)
 #include <windows.h>
 #include "common/string_util.h"
+#include "common/windows/cpu_layout.h"
 #include "common/windows/timer_resolution.h"
 #else
 #if defined(__FreeBSD__)
@@ -49,6 +54,7 @@
 #ifdef __linux__
 #include <sys/resource.h>
 #include <algorithm>
+#include <fstream>
 
 namespace {
 constexpr int NICE_AUDIO = -16;
@@ -726,6 +732,11 @@ void SetCurrentThreadName(const char* name) {
 #else
     pthread_setname_np(pthread_self(), name);
 #endif
+#ifdef _WIN32
+    if (std::strcmp(name, "GPUBack") == 0) {
+        Windows::StartNx2CpuLayout();
+    }
+#endif
 }
 
 void SetCurrentThreadToPerformanceCores() {
@@ -869,6 +880,32 @@ void RefreshThreadPolicies() {
         return gone;
     });
     SnapshotCanaryLocked(state);
+#elif defined(_WIN32)
+    const auto& topology = GetWin32CacheTopology();
+    if (!topology.asymmetric) {
+        return;
+    }
+    const bool vcache_enabled = IsVCachePinningEnabled();
+    Win32PolicyState& state = GetWin32PolicyState();
+    std::scoped_lock lock{state.mutex};
+    for (const auto& policy : state.policies) {
+        if (policy.handle != nullptr) {
+            SetThreadAffinityMask(policy.handle,
+                                  MaskForWin32Group(topology, policy.group, vcache_enabled));
+        }
+    }
+#elif defined(__linux__)
+    const auto& topology = GetLinuxCacheTopology();
+    if (!topology.asymmetric) {
+        return;
+    }
+    const bool vcache_enabled = IsVCachePinningEnabled();
+    LinuxPolicyState& state = GetLinuxPolicyState();
+    std::scoped_lock lock{state.mutex};
+    for (const auto& policy : state.policies) {
+        const auto& mask = MaskForLinuxGroup(topology, policy.group, vcache_enabled);
+        sched_setaffinity(policy.tid, sizeof(mask), &mask);
+    }
 #endif
 }
 

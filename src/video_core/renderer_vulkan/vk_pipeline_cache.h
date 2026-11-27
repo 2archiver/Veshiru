@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -8,9 +11,12 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <deque>
 #include <filesystem>
+#include <functional>
+#include <future>
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
@@ -18,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include "common/container/unordered_map.h"
 #include <vector>
 
@@ -135,7 +142,18 @@ public:
                            TextureCache& texture_cache, VideoCore::ShaderNotify& shader_notify_);
     ~PipelineCache();
 
-    [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipeline();
+    [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipeline(bool is_indexed = false);
+    [[nodiscard]] bool IsIndirectResetShader() const;
+    /// State captured by ShaderCache::RefreshStages for the programs of the current draw.
+    [[nodiscard]] u64 Nx2ResolvedEpoch() const noexcept {
+        return nx2_resolved_epoch;
+    }
+    [[nodiscard]] u64 Nx2ResolvedMap() const noexcept {
+        return nx2_resolved_map;
+    }
+    [[nodiscard]] const auto& Nx2CodeRanges() const noexcept {
+        return nx2_code_ranges;
+    }
 
     void TickFrame();
 
@@ -155,11 +173,17 @@ public:
                            const VideoCore::DiskResourceLoadCallback& callback);
 
 private:
-    [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipelineSlowPath();
+    [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipelineSlowPath(bool is_indexed);
+
+    /// Records a skipped depth-tested color draw so matching depth-only geometry is skipped too.
+    void RecordSkippedGeometry(bool is_indexed, const GraphicsPipeline* pipeline) noexcept;
+    [[nodiscard]] bool ShouldSkipDepthOnlyGeometry(bool is_indexed) noexcept;
+    void ClearSkippedGeometryIfDrawn(bool is_indexed) noexcept;
 
     /// Returns `pipeline` when it is built or its draw must wait for it, nullptr when the draw
     /// may be skipped while it builds (asynchronous shaders, CanDiscardPendingDraw).
-    [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline) noexcept;
+    [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline,
+                                                  bool is_indexed) noexcept;
 
     /// How native work with an unbuilt pipeline is handled: native_async_draws, or Skip when
     /// explicit async discard is enabled.
@@ -311,6 +335,15 @@ private:
     /// Destroys graphics pipelines unused for a while, once the GPU is done with them.
     void EvictUnusedPipelines();
     u64 frame_count{};
+    static constexpr size_t SkippedGeometryTableSize = 256;
+    struct SkippedGeometryEntry {
+        u64 key{};
+        u64 frame{};
+        const GraphicsPipeline* pipeline{};
+    };
+    std::array<SkippedGeometryEntry, SkippedGeometryTableSize> skipped_geometry{};
+    u64 last_skipped_geometry_frame{~u64{}};
+
     /// Wait budget of native draws for unbuilt pipelines left in this frame, in microseconds
     /// (native_async_draws = Bounded). Only touched on the GPU thread; reset in TickFrame.
     s64 native_wait_budget_us{8000};
@@ -330,6 +363,19 @@ private:
     std::deque<std::pair<u64, std::unique_ptr<ComputePipeline>>> retired_compute_pipelines;
     ::Common::unordered_map<GraphicsPipelineCacheKey, std::unique_ptr<GraphicsPipeline>> graphics_cache;
 
+    static constexpr size_t ComputeFastCacheSize = 64;
+    struct ComputeFastCacheEntry {
+        ComputePipelineCacheKey key{};
+        ComputePipeline* pipeline{};
+    };
+    std::array<ComputeFastCacheEntry, ComputeFastCacheSize> compute_fast_cache{};
+
+    /// Nx2Perf pipeline_fast_cache: filled only by the slow path, validated by the full key and
+    /// cleared whenever pipelines are evicted.
+    static constexpr size_t GraphicsFastCacheSize = 256;
+    std::array<GraphicsPipeline*, GraphicsFastCacheSize> graphics_fast_cache{};
+    u64 graphics_fast_mismatches{};
+
     ShaderPools main_pools;
     std::mutex spare_pools_mutex;
     std::vector<std::shared_ptr<ShaderPools>> spare_pools;
@@ -339,7 +385,6 @@ private:
     Shader::HostTranslateInfo host_info;
 
     std::filesystem::path pipeline_cache_filename;
-
     /// Key hashes of the graphics pipelines in the disk cache. Only those a recent session used
     /// (used_pipelines) are built at boot; the rest are built when first needed, and not stored
     /// again. Each built pipeline holds driver memory (title 1: 6.5k cached, a quarter used).
@@ -372,6 +417,7 @@ private:
     std::stop_source serialization_stop;
     Common::ThreadWorker serialization_thread;
     DynamicFeatures dynamic_features;
+
 };
 
 } // namespace Vulkan

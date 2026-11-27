@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -87,7 +90,7 @@ static const constexpr frozen::map<StringKey, frozen::string, 23> strings = {
     {FwInstallFailedCorrupted,
      QT_TR_NOOP(
          "Firmware installation cancelled, firmware may be in a bad state or corrupted. Restart "
-         "Eden or re-install firmware.")},
+         "Eglantine or re-install firmware.")},
 
     {FwCheckErrorFirmwareMissing,
      QT_TR_NOOP(

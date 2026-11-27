@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -7,6 +10,7 @@
 #include <cctype>
 #include <iostream>
 #include <sstream>
+#include <fmt/format.h>
 #include "common/container/unordered_map.h"
 
 #include "common/assert.h"
@@ -16,6 +20,7 @@
 #endif
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
+#include "common/game_presets.h"
 #include "common/logging.h"
 
 #ifdef _WIN32
@@ -93,9 +98,8 @@ public:
     }
 
     void CreateEdenPaths() {
-        std::for_each(eden_paths.begin(), eden_paths.end(), [](auto &path) {
-            void(FS::CreateDirs(path.second));
-        });
+        std::for_each(eden_paths.begin(), eden_paths.end(),
+                      [](auto& path) { void(FS::CreateDirs(path.second)); });
     }
 
     void SetEdenPathImpl(EdenPath eden_path, const fs::path& new_path) {
@@ -123,9 +127,12 @@ public:
         }
         eden_path_cache = eden_path / CACHE_DIR;
         eden_path_config = eden_path / CONFIG_DIR;
-#define LEGACY_PATH(titleName, upperName) GenerateLegacyPath(EmuPath::titleName##Dir, GetAppDataRoamingDirectory() / upperName##_DIR); \
-        GenerateLegacyPath(EmuPath::titleName##ConfigDir, GetAppDataRoamingDirectory() / upperName##_DIR / CONFIG_DIR); \
-        GenerateLegacyPath(EmuPath::titleName##CacheDir, GetAppDataRoamingDirectory() / upperName##_DIR / CACHE_DIR);
+#define LEGACY_PATH(titleName, upperName)                                                          \
+    GenerateLegacyPath(EmuPath::titleName##Dir, GetAppDataRoamingDirectory() / upperName##_DIR);   \
+    GenerateLegacyPath(EmuPath::titleName##ConfigDir,                                              \
+                       GetAppDataRoamingDirectory() / upperName##_DIR / CONFIG_DIR);               \
+    GenerateLegacyPath(EmuPath::titleName##CacheDir,                                               \
+                       GetAppDataRoamingDirectory() / upperName##_DIR / CACHE_DIR);
         LEGACY_PATH(Citron, CITRON)
         LEGACY_PATH(Sudachi, SUDACHI)
         LEGACY_PATH(Yuzu, YUZU)
@@ -151,9 +158,13 @@ public:
             eden_path_cache = eden_path / CACHE_DIR;
             eden_path_config = eden_path / CONFIG_DIR;
         }
-#define LEGACY_PATH(titleName, upperName) GenerateLegacyPath(EmuPath::titleName##Dir, GetDataDirectory("XDG_DATA_HOME") / upperName##_DIR); \
-        GenerateLegacyPath(EmuPath::titleName##ConfigDir, GetDataDirectory("XDG_CONFIG_HOME") / upperName##_DIR); \
-        GenerateLegacyPath(EmuPath::titleName##CacheDir, GetDataDirectory("XDG_CACHE_HOME") / upperName##_DIR);
+#define LEGACY_PATH(titleName, upperName)                                                          \
+    GenerateLegacyPath(EmuPath::titleName##Dir,                                                    \
+                       GetDataDirectory("XDG_DATA_HOME") / upperName##_DIR);                       \
+    GenerateLegacyPath(EmuPath::titleName##ConfigDir,                                              \
+                       GetDataDirectory("XDG_CONFIG_HOME") / upperName##_DIR);                     \
+    GenerateLegacyPath(EmuPath::titleName##CacheDir,                                               \
+                       GetDataDirectory("XDG_CACHE_HOME") / upperName##_DIR);
         LEGACY_PATH(Citron, CITRON)
         LEGACY_PATH(Sudachi, SUDACHI)
         LEGACY_PATH(Yuzu, YUZU)
@@ -312,12 +323,21 @@ std::string GetLegacyPathString(EmuPath legacy_path) {
     return PathToUTF8String(GetLegacyPath(legacy_path));
 }
 
+fs::path GetVulkanPipelineCacheDir(const fs::path& shader_dir, u64 title_id) {
+    auto dir = shader_dir / fmt::format("{:016x}", title_id);
+    if (title_id == Settings::MarioKartWorldProgramId) {
+        dir /= "mkw_zero_depth_v1";
+    }
+    return dir;
+}
+
 void SetEdenPath(EdenPath eden_path, const fs::path& new_path) {
     auto& instance = PathManagerImpl::GetInstance();
     if (FS::IsDir(new_path)) {
         instance.SetEdenPathImpl(eden_path, new_path);
     } else {
-        LOG_ERROR(Common_Filesystem, "Filesystem object at new_path={} is not a directory", PathToUTF8String(new_path));
+        LOG_ERROR(Common_Filesystem, "Filesystem object at new_path={} is not a directory",
+                  PathToUTF8String(new_path));
     }
 }
 

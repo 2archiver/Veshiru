@@ -10,7 +10,7 @@
 
 #include "common/common_types.h"
 
-namespace Common::DiagRequest {
+namespace Common::DiagImage {
 
 /// Saves `rgba` (width * height * 4 bytes, first row at the top, tightly packed) as a PNG file.
 /// Returns false (and logs) when the file cannot be written.
@@ -22,4 +22,4 @@ bool WriteTextFile(const std::filesystem::path& path, std::string_view text);
 /// `text` as the body of a JSON string literal (quotes, backslashes and control characters escaped).
 [[nodiscard]] std::string JsonEscape(std::string_view text);
 
-} // namespace Common::DiagRequest
+} // namespace Common::DiagImage

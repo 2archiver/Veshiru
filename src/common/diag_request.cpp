@@ -23,6 +23,7 @@
 #include "common/fs/path_util.h"
 #include "common/frame_stats.h"
 #include "common/logging.h"
+#include "common/nx2_try_switch.h"
 
 namespace Common::DiagRequest {
 
@@ -43,36 +44,13 @@ struct Registry {
     std::mutex mutex;
     std::map<std::string, Handler> handlers;
     std::map<std::string, std::string> unavailable;
-    std::map<std::string, bool, std::less<>> try_switches;
     std::filesystem::path user_directory_override;
-    u64 try_generation{};
 };
 
 Registry& GetRegistry() {
     static Registry registry;
     return registry;
 }
-bool TrySwitchDefaultEnabled(std::string_view name) {
-    std::string env_name{"EDEN_NX2_"};
-    env_name.append(name);
-    const char* value = std::getenv(env_name.c_str());
-    if (value != nullptr) {
-        return value[0] == '1';
-    }
-    // TRY_RO_MIRROR_EXACT / TRY_STORAGE_RAW_WRITE_THROUGH: raw stores write through to the read-only
-    // and storage VTX-HLE pool mirrors, so raw-writing draws skip the whole-pool snapshot (OoT
-    // market: 345 -> 62 MiB copied each way per present, +2.5 fps). On by default; =0 opts out.
-    return name == "TRY_NATIVE_F32_ATOMICS" || name == "TRY_ATOMIC_RESERVE" ||
-           name == "TRY_RO_MIRROR_EXACT" || name == "TRY_STORAGE_RAW_WRITE_THROUGH";
-}
-
-bool TrySwitchEnabledLocked(const Registry& registry, std::string_view name) {
-    if (const auto it = registry.try_switches.find(name); it != registry.try_switches.end()) {
-        return it->second;
-    }
-    return TrySwitchDefaultEnabled(name);
-}
-
 bool Enabled() {
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_REQUESTS");
@@ -130,7 +108,7 @@ void InstallBuiltins() {
         const size_t equals = assignment.find('=');
         if (equals == std::string_view::npos || (assignment.substr(equals + 1) != "0" &&
                                                   assignment.substr(equals + 1) != "1") ||
-            !SetTrySwitch(assignment.substr(0, equals), assignment[equals + 1] == '1')) {
+            !Nx2TrySwitch::Set(assignment.substr(0, equals), assignment[equals + 1] == '1')) {
             LOG_WARNING(Core, "[diag] try: expected SET TRY_NAME=0|1");
             return;
         }
@@ -193,55 +171,6 @@ void RegisterUnavailable(std::string command, std::string reason) {
     if (!registry.handlers.contains(command)) {
         registry.unavailable[std::move(command)] = std::move(reason);
     }
-}
-
-bool TrySwitchEnabled(std::string_view name) {
-    Registry& registry = GetRegistry();
-    std::scoped_lock lock{registry.mutex};
-    return TrySwitchEnabledLocked(registry, name);
-}
-
-bool TrySwitchEnabled(std::string_view name, bool recommended_value) {
-    Registry& registry = GetRegistry();
-    std::scoped_lock lock{registry.mutex};
-    if (const auto it = registry.try_switches.find(name); it != registry.try_switches.end()) {
-        return it->second;
-    }
-    std::string env_name{"EDEN_NX2_"};
-    env_name.append(name);
-    if (const char* value = std::getenv(env_name.c_str()); value != nullptr) {
-        return value[0] == '1';
-    }
-    return recommended_value;
-}
-
-bool SetTrySwitch(std::string_view name, bool enabled) {
-    if (!name.starts_with("TRY_") || name.size() <= 4 ||
-        !std::all_of(name.begin(), name.end(), [](unsigned char c) {
-            return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
-        })) {
-        return false;
-    }
-    Registry& registry = GetRegistry();
-    std::scoped_lock lock{registry.mutex};
-    const bool changed = TrySwitchEnabledLocked(registry, name) != enabled;
-    registry.try_switches[std::string{name}] = enabled;
-    if (changed) {
-        ++registry.try_generation;
-    }
-    return true;
-}
-
-u64 TrySwitchGeneration() {
-    Registry& registry = GetRegistry();
-    std::scoped_lock lock{registry.mutex};
-    return registry.try_generation;
-}
-bool TrySwitchDiffersFromDefault(std::string_view name) {
-    Registry& registry = GetRegistry();
-    std::scoped_lock lock{registry.mutex};
-    const auto it = registry.try_switches.find(name);
-    return it != registry.try_switches.end() && it->second != TrySwitchDefaultEnabled(name);
 }
 
 void SetUserDirectoryForTesting(std::filesystem::path directory) {

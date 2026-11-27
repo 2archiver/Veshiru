@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -531,6 +534,10 @@ void OneTimeInit() {
         LOG_ERROR(Service_SSL, "SSL_CTX_set_default_verify_paths failed");
         CheckOpenSSLErrors();
         return;
+    }
+
+    if (const auto bundle = Common::Net::FindSystemCaBundle(); !bundle.empty()) {
+        SSL_CTX_load_verify_locations(ssl_ctx, bundle.c_str(), nullptr);
     }
 
     OneTimeInitLogFile();

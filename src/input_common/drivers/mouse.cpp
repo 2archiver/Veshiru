@@ -189,7 +189,7 @@ void Mouse::NotifyChanged() {
     last_notify_timestamp = timestamp;
 }
 
-void Mouse::RelativeMove(int dx, int dy) {
+MouseMode::Delta Mouse::RelativeMove(int dx, int dy) {
     const MouseMode::Config config{
         .sensitivity = MouseMode::ClampSensitivity(
             static_cast<float>(Settings::values.joycon2_mouse_sensitivity.GetValue())),
@@ -197,7 +197,7 @@ void Mouse::RelativeMove(int dx, int dy) {
     };
     const MouseMode::Delta delta = MouseMode::Scale(dx, dy, config);
     if (delta.x == 0.0f && delta.y == 0.0f) {
-        return;
+        return delta;
     }
 
     const auto timestamp = Common::SteadyClock::Now();
@@ -230,6 +230,7 @@ void Mouse::RelativeMove(int dx, int dy) {
         SetAxis(identifier, mouse_axis_x, value.x);
         SetAxis(identifier, mouse_axis_y, value.y);
     }
+    return delta;
 }
 
 void Mouse::MouseMove(f32 touch_x, f32 touch_y) {

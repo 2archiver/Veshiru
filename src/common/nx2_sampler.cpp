@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -24,8 +27,9 @@
 #include <fmt/format.h>
 
 #include <windows.h>
-#include <tlhelp32.h>
+// windows.h first: the other two use its types.
 #include <dbghelp.h>
+#include <tlhelp32.h>
 
 namespace Nx2Sampler {
 namespace {
@@ -128,8 +132,7 @@ std::vector<Target> FindThreads(const std::vector<std::string>& patterns) {
         std::string name;
         if (SUCCEEDED(get_description(handle, &wide)) && wide != nullptr) {
             char buffer[256]{};
-            WideCharToMultiByte(CP_UTF8, 0, wide, -1, buffer, sizeof(buffer) - 1, nullptr,
-                                nullptr);
+            WideCharToMultiByte(CP_UTF8, 0, wide, -1, buffer, sizeof(buffer) - 1, nullptr, nullptr);
             name = buffer;
             LocalFree(wide);
         }
@@ -192,7 +195,8 @@ unsigned Walk(CONTEXT context, std::array<DWORD64, MaxDepth>& frames, const NT_T
             break;
         }
         DWORD64 image_base{};
-        const PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
+        const PRUNTIME_FUNCTION function =
+            RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
         if (function == nullptr) {
             // A leaf function (no unwind data): its return address is on top of the stack.
             if (depth != 1) {
@@ -411,8 +415,8 @@ std::string SampleThreads(const std::vector<std::string>& patterns, double secon
         }
         Sleep(1);
     }
-    // DbgHelp is single-threaded: the debug server's `sample` and EDEN_NX2_SAMPLE can report at
-    // the same time.
+    // DbgHelp is single-threaded: direct Sample calls and EDEN_NX2_SAMPLE can report at the same
+    // time.
     static std::mutex report_mutex;
     std::unique_lock report_lock{report_mutex};
     std::string text = Report(targets, samples, out.c_str());
