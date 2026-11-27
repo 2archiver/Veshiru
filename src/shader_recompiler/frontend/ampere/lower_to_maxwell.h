@@ -598,20 +598,7 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             emit(0x5c40000000000000ULL | predicate | target | (u64{250} << 8) |
                  (u64{251} << 20) | (u64{1} << 41) | (u64{7} << 48));
         };
-        const auto right_shift_u64_low = [&](u32 target, u32 low, u32 high, u32 shift) {
-            mov_imm(250, 32);
-            emit(0x5c10000000000000ULL | predicate | 251 | (u64{250} << 8) |
-                 (u64{shift} << 20) | (u64{1} << 48));
-            emit(0x5c28000000000000ULL | predicate | 250 | (u64{low} << 8) | (u64{shift} << 20));
-            emit(0x5c48000000000000ULL | predicate | 251 | (u64{high} << 8) | (u64{251} << 20));
-            emit(0x5c40000000000000ULL | predicate | 250 | (u64{250} << 8) |
-                 (u64{251} << 20) | (u64{1} << 41) | (u64{7} << 48));
-            emit(0x1c00000000000000ULL | predicate | 251 | (u64{shift} << 8) |
-                 (u64{0xffffffe0U} << 20));
-            emit(0x5c28000000000000ULL | predicate | 251 | (u64{high} << 8) | (u64{251} << 20));
-            emit(0x5c40000000000000ULL | predicate | target | (u64{250} << 8) |
-                 (u64{251} << 20) | (u64{1} << 41) | (u64{7} << 48));
-        };
+
         switch (opcode) {
         case 0x304: { // F2F.F16.F32, scalar round-to-nearest conversion.
             if (insn.words[2] != 0x00200800 || insn.Bits(24, 8) ||
@@ -1344,33 +1331,23 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             // the channel mask: the first two enabled channels go to Rd, Rd+1, the others to the
             // second destination (RZ drops them; a third channel alone may be in an odd register).
             const u32 mask = insn.Bits(72, 4), channels = static_cast<u32>(std::popcount(mask));
-            if ((insn.words[2] & ~(0xfffU | (1U << 26))) != (bindless ? 0x081e0000U : 0x001e0000U) || mask == 0 || insn.Bits(59, 2) ||
-                (dimension != 1 && dimension != 5) ||
-                (bindless ? (handle >= 248 || insn.Bits(46, 13) || derivatives > 244 || coordinates > 245)
-                          : (binding >= 18 || offset > 0x1fff)) ||
+            if ((insn.words[2] & ~(0xfffU | (1U << 26))) != 0x001e0000 || mask == 0 || insn.Bits(59, 2) ||
+                (dimension != 1 && dimension != 5) || binding >= 18 || offset > 0x1fff ||
                 (channels > 1 && (dest & 1)) || dest >= 248 || (channels <= 2 && high != 255) ||
                 (high != 255 && ((channels > 3 && (high & 1)) || high >= 248)) ||
                 coordinates >= 248 || derivatives >= 247)
                 return fail(index, "native gradient texture mode");
-            if (!bindless && result.required_texture_buffer != ~0U && result.required_texture_buffer != binding)
+            if (result.required_texture_buffer != ~0U && result.required_texture_buffer != binding)
                 return fail(index, "native texture descriptor buffer conflict");
-            if (!bindless) result.required_texture_buffer = binding;
+            result.required_texture_buffer = binding;
             // Maxwell writes the channels to consecutive registers: when the second destination
             // doesn't follow Rd (Splatoon Raiders: R12/R18, R18/R44), write them to scratch and move
             // each into place.
-            const bool consecutive = !bindless && (channels <= 2 || high == dest + 2);
+            const bool consecutive = channels <= 2 || high == dest + 2;
             const u64 target = consecutive ? dest : 248;
-            if (bindless) {
-                // Maxwell TXD.B expects the handle before x, y and the optional array layer.
-                emit(0x5c98000000000000ULL | predicate | 248 | (u64{15} << 39) | (u64{handle} << 20));
-                for (u32 i = 0; i < (dimension == 5 ? 3U : 2U); ++i) {
-                    emit(0x5c98000000000000ULL | predicate | (249 + i) | (u64{15} << 39) |
-                         (u64{coordinates + i} << 20));
-                }
-            }
-            emit((bindless ? 0xde40000000000000ULL : 0xde00000000000000ULL) | predicate | target | (u64{bindless ? 248U : coordinates} << 8) |
+            emit(0xde00000000000000ULL | predicate | target | (u64{coordinates} << 8) |
                  (u64{derivatives} << 20) | (u64{dimension == 5 ? 3U : 2U} << 28) | (u64{mask} << 31) |
-                 (bindless ? 0ULL : u64{offset} << 36) | (u64{insn.Bits(90, 1)} << 49) | (u64{7} << 51));
+                 (u64{offset} << 36) | (u64{insn.Bits(90, 1)} << 49) | (u64{7} << 51));
             if (!consecutive) {
                 for (u32 i = 0; i < channels; ++i) {
                     if (i >= 2 && high == 255) break;
