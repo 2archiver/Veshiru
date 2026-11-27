@@ -69,7 +69,6 @@ public:
         }
         tracked = true;
         recent[recent_cursor++ % recent.size()] = {offset, size};
-        touched = true;
         const size_t page = offset >> BUFFER_PAGE_SHIFT;
         const size_t page_end = (offset + size) >> BUFFER_PAGE_SHIFT;
         if (page_end < page || page_end >= pages.size()) {
@@ -120,10 +119,6 @@ public:
         return pages;
     }
 
-    [[nodiscard]] std::span<const u64> Pages() const noexcept {
-        return pages;
-    }
-
 private:
     void FillPages(size_t begin, size_t end) noexcept {
         if (begin >= end) {
@@ -167,7 +162,6 @@ private:
             return;
         }
         const size_t offset_in_page = offset % BUFFER_PAGE_BYTES;
-        const size_t end_in_page = std::min<size_t>(BUFFER_PAGE_BYTES, offset_in_page + size);
         const size_t first_bit = offset_in_page >> BUFFER_BYTES_PER_BITSHIFT;
         const size_t bytes = std::min<size_t>(size, BUFFER_PAGE_BYTES - offset_in_page);
         const size_t last_bit = (offset_in_page + bytes - 1) >> BUFFER_BYTES_PER_BITSHIFT;
