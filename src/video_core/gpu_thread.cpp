@@ -126,7 +126,7 @@ void ReportPendingWake(PendingWakeStats& stats) {
 
 /// pending_wake's form of the pending 1 ms sleep: ends early on a command queued or a latch
 /// since the poll that saw `push_seen` and `latch_seen`.
-void PendingWakeSleep(PendingWakeStats& stats, u64 push_seen, u64 latch_seen) {
+bool PendingWakeSleep(PendingWakeStats& stats, u64 push_seen, u64 latch_seen) {
     namespace Wake = Tegra::Nx2PendingWakeState;
     namespace Profile = VideoCommon::Nx2Profile;
     Wake::wake_event.Reset();
@@ -151,6 +151,12 @@ void PendingWakeSleep(PendingWakeStats& stats, u64 push_seen, u64 latch_seen) {
 
     const bool by_push = (reason & Wake::ByPush) != 0;
     const bool by_latch = !by_push && (reason & Wake::ByLatch) != 0;
+    if (by_latch && !skipped) {
+        const s64 latch_ns = Wake::last_latch_ns.exchange(0, std::memory_order_relaxed);
+        if (latch_ns != 0) {
+            NotePendingLatchResume(stats, latch_ns);
+        }
+    }
     ++stats.waits;
     stats.by_push += by_push ? 1 : 0;
     stats.by_latch += by_latch ? 1 : 0;
@@ -164,6 +170,7 @@ void PendingWakeSleep(PendingWakeStats& stats, u64 push_seen, u64 latch_seen) {
     if (VideoCommon::Nx2Perf::Verify() || Profile::Enabled()) {
         ReportPendingWake(stats);
     }
+    return woke;
 }
 
 } // Anonymous namespace
@@ -209,6 +216,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
         auto& wake = Tegra::Nx2PendingWake::Get();
         auto& waiters = Tegra::Nx2SemaphoreWaiters::Get();
         auto& acquire_stats = VideoCommon::g_acquire_stats;
+        PendingWakeStats pending_wake_stats;
         namespace Profile = VideoCommon::Nx2Profile;
         auto& split = VideoCommon::GpuSplit::Get();
         namespace BackIdleTrace = VideoCommon::BackIdleTrace;
@@ -220,6 +228,10 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 split.ReportAcquire();
             }
             if (scheduler.HasPendingChannels()) {
+                const u64 push_seen = Tegra::Nx2PendingWakeState::push_seq.load(
+                    std::memory_order_seq_cst);
+                const u64 latch_seen = Tegra::Nx2PendingWakeState::latch_seq.load(
+                    std::memory_order_seq_cst);
                 // Suspended channels wait on semaphores and list copies: a new command, a GPU
                 // release or a finished copy wakes the wait below at once (Nx2PendingWake), so
                 // arm it before looking.
@@ -232,6 +244,13 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 const bool popped = state.queue.TryPop(next);
                 if (popped) {
                     BackIdleTrace::SetFrontState(FrontState::Parse);
+                }
+                if (Tegra::Nx2PendingWakeState::verify_resume) {
+                    Tegra::Nx2PendingWakeState::verify_resume = false;
+                    if (!resumed && !popped) {
+                        Tegra::Nx2PendingWakeState::verify_unmet.fetch_add(
+                            1, std::memory_order_relaxed);
+                    }
                 }
                 if (resumed || popped) {
                     if (last_wait == WaitEnd::PollTimedOut) {
@@ -294,7 +313,12 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     } else {
                         VideoCommon::Count(acquire_stats.front_sleeps);
                         last_wait = WaitEnd::SleepTimedOut;
-                        woken = wake.Sleep(std::chrono::microseconds{500});
+                        if (Tegra::Nx2PendingWakeState::On() &&
+                            !scheduler.WaitsForListCopy()) {
+                            woken = PendingWakeSleep(pending_wake_stats, push_seen, latch_seen);
+                        } else {
+                            woken = wake.Sleep(std::chrono::microseconds{500});
+                        }
                     }
                     if (woken) {
                         VideoCommon::Count(acquire_stats.front_woken);
@@ -451,6 +475,10 @@ u64 ThreadManager::PushCommand(CommandData&& command_data, bool block, bool is_a
     std::unique_lock lk(state.write_lock);
     const u64 fence{++state.last_fence};
     state.queue.EmplaceWait(std::move(command_data), fence, block);
+    if (Tegra::Nx2PendingWakeState::On()) {
+        Tegra::Nx2PendingWakeState::Wake(Tegra::Nx2PendingWakeState::push_seq,
+                                         Tegra::Nx2PendingWakeState::ByPush);
+    }
     Tegra::Nx2PendingWake::Get().Notify();
 
     if (block) {

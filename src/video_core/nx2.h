@@ -938,6 +938,12 @@ public:
             }
         }
         if (latched) {
+            if (Nx2PendingWakeState::On()) {
+                Nx2PendingWakeState::last_latch_ns.store(Nx2PendingWakeState::NowNs(),
+                                                         std::memory_order_relaxed);
+                Nx2PendingWakeState::Wake(Nx2PendingWakeState::latch_seq,
+                                          Nx2PendingWakeState::ByLatch);
+            }
             Nx2PendingWake::Get().Notify();
         }
     }
