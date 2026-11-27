@@ -928,7 +928,7 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
         rejected->second.emulates_tensor == emulates_tensor) {
         if (dlss_chain.active) {
             ++dlss_chain.rejected;
-            return output_pass ? FinishDlssEvaluation() : false;
+            return dlss_chain.output_pass ? FinishDlssEvaluation() : false;
         }
         if (rejected->second.matrix_multiply && rejected->second.upscale_failures < 2) {
             if (UpscaleInsteadOfNativeProgram()) {
@@ -936,7 +936,7 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
             }
             ++rejected->second.upscale_failures;
         }
-        if (output_pass) {
+        if (dlss_chain.output_pass) {
             return FinishDlssEvaluation();
         }
         return false;
@@ -1707,7 +1707,7 @@ bool KeplerCompute::TryFireEmblemUpscale(bool allow_history) {
     }
     const auto surface = [](const Texture::TICEntry& tic, Tegra::RenderTargetFormat format) {
         Fermi2D::Surface result{};
-        result.format = blit_format(tic).value_or(RTFormat::B10G11R11_FLOAT);
+        result.format = format;
         result.linear = Fermi2D::MemoryLayout::BlockLinear;
         result.block_width.Assign(tic.block_width);
         result.block_height.Assign(tic.block_height);
