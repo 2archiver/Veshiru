@@ -61,6 +61,7 @@ public:
         const std::vector<Word>* fifo;
         Word emit_count;
         Word emit_capacity; ///< Emits buffered before `emit` runs; 0 calls it for each
+        Word emit_excluded_method; ///< Never buffer this method, or ~Word{0} for no exclusion
         std::uint8_t borrowed; ///< `params` is not `fifo`'s until the FIFO holds words
         std::array<Word, 2 * EmitBatch> emit_buffer; ///< (method, value) pairs
     };
@@ -73,6 +74,8 @@ public:
         bool batch_emits{};
         /// Reuse one State across calls instead of initializing every field.
         bool keep_state{};
+        /// Method whose writes alter how later writes are interpreted; flush the batch before it.
+        Word batch_excluded_method{~Word{0}};
     };
 
     enum Error : Word {
@@ -164,6 +167,7 @@ public:
         state.fifo = &fifo;
         state.emit_count = 0;
         state.emit_capacity = options.batch_emits && compiled_batch ? EmitBatch : 0;
+        state.emit_excluded_method = options.batch_excluded_method;
         Thunks<Read, Emit> thunks{read, emit};
         state.user = &thunks;
         state.emit = &Thunks<Read, Emit>::CallEmit;
@@ -473,6 +477,8 @@ private:
                         jae(call_emit);
                         cmp(ecx, 0xe00);
                         jae(call_emit);
+                        cmp(ecx, dword[st + offsetof(State, emit_excluded_method)]);
+                        je(call_emit);
                         mov(r8d, ecx);
                         sub(r8d, 0x157);
                         cmp(r8d, 1);

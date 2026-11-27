@@ -88,7 +88,7 @@ struct PendingWakeStats {
 };
 
 void NotePendingLatchResume(PendingWakeStats& stats, s64 latch_ns) {
-    const s64 us = (Tegra::Nx2PendingWake::NowNs() - latch_ns) / 1000;
+    const s64 us = (Tegra::Nx2PendingWakeState::NowNs() - latch_ns) / 1000;
     const size_t bucket = std::min<size_t>(
         us <= 0 ? 0 : static_cast<size_t>(std::bit_width(static_cast<u64>(us))),
         stats.latency.size() - 1);
@@ -97,7 +97,7 @@ void NotePendingLatchResume(PendingWakeStats& stats, s64 latch_ns) {
 }
 
 void ReportPendingWake(PendingWakeStats& stats) {
-    const s64 now = Tegra::Nx2PendingWake::NowNs();
+    const s64 now = Tegra::Nx2PendingWakeState::NowNs();
     if (stats.window_start_ns == 0) {
         stats.window_start_ns = now;
         return;
@@ -117,9 +117,9 @@ void ReportPendingWake(PendingWakeStats& stats) {
              "Nx2Perf pending_wake: {} sleeps/s ended by push {}, latch {}, timeout {}, stale {} "
              "({} skipped before the wait); latch to resume p50 under {} us ({} samples); "
              "{} resumed unmet so far",
-             stats.waits, stats.by_push, stats.by_latch, stats.timeouts, stats.stale,
-             stats.skipped, p50_us, stats.latency_samples,
-             Tegra::Nx2PendingWake::verify_unmet.load(std::memory_order_relaxed));
+             stats.waits, stats.by_push, stats.by_latch, stats.timeouts, stats.stale, stats.skipped,
+             p50_us, stats.latency_samples,
+             Tegra::Nx2PendingWakeState::verify_unmet.load(std::memory_order_relaxed));
     stats = {};
     stats.window_start_ns = now;
 }
@@ -127,7 +127,7 @@ void ReportPendingWake(PendingWakeStats& stats) {
 /// pending_wake's form of the pending 1 ms sleep: ends early on a command queued or a latch
 /// since the poll that saw `push_seen` and `latch_seen`.
 void PendingWakeSleep(PendingWakeStats& stats, u64 push_seen, u64 latch_seen) {
-    namespace Wake = Tegra::Nx2PendingWake;
+    namespace Wake = Tegra::Nx2PendingWakeState;
     namespace Profile = VideoCommon::Nx2Profile;
     Wake::wake_event.Reset();
     Wake::wake_reasons.store(0, std::memory_order_relaxed);

@@ -42,6 +42,8 @@ public:
     using Address = std::uint64_t;
     using Descriptor = std::array<Word, 64>;
     struct RejectShaderDispatch { bool operator()(const Descriptor&) const { return false; } };
+    /// Enable the per-dispatch scratch optimization (tests can compare it with the reference path).
+    bool nx2_perf = VideoCommon::Nx2Perf::On(VideoCommon::Nx2Perf::Opt::QmdScratch);
     // Optional diagnostics: called with "load"/"count"/"defer"/"run" events.
     std::function<void(std::string_view, Address, std::int32_t)> trace;
     // Optional diagnostics: called with the QMD, slot and raw words of a release it skips.

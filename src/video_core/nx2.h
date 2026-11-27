@@ -778,7 +778,7 @@ private:
 
 /// pending_wake: the GPU thread's 1 ms sleep while a channel waits on an acquire ends at once
 /// when a command is queued or a release latches a waiter. The timeout bounds a missed wake.
-namespace Nx2PendingWake {
+namespace Nx2PendingWakeState {
 enum Reason : u32 { ByPush = 1, ByLatch = 2 };
 
 inline bool On() {
@@ -812,7 +812,7 @@ inline void Wake(std::atomic<u64>& seq, u32 reason) {
         wake_event.Set();
     }
 }
-} // namespace Nx2PendingWake
+} // namespace Nx2PendingWakeState
 
 /// Channels suspended on a semaphore acquire. A console channel polls and sees every release;
 /// Eden writes releases in bursts when fences signal and resumes waiters only between command
@@ -869,16 +869,21 @@ public:
         if (count.load(std::memory_order_acquire) == 0) {
             return;
         }
-        std::scoped_lock lk{mutex};
-        for (Slot& slot : slots) {
-            if (slot.owner.load(std::memory_order_relaxed) == owner) {
-                slot.owner.store(nullptr, std::memory_order_relaxed);
-                count.fetch_sub(1, std::memory_order_relaxed);
+        bool latched = false;
+        {
+            std::scoped_lock lk{mutex};
+            for (Slot& slot : slots) {
+                if (slot.owner.load(std::memory_order_relaxed) == owner) {
+                    latched |= slot.latched.load(std::memory_order_relaxed);
+                    slot.owner.store(nullptr, std::memory_order_relaxed);
+                    count.fetch_sub(1, std::memory_order_relaxed);
+                }
             }
         }
-        if (latched && Nx2PendingWake::On()) {
-            Nx2PendingWake::last_latch_ns.store(Nx2PendingWake::NowNs(), std::memory_order_relaxed);
-            Nx2PendingWake::Wake(Nx2PendingWake::latch_seq, Nx2PendingWake::ByLatch);
+        if (latched && Nx2PendingWakeState::On()) {
+            Nx2PendingWakeState::last_latch_ns.store(Nx2PendingWakeState::NowNs(),
+                                                     std::memory_order_relaxed);
+            Nx2PendingWakeState::Wake(Nx2PendingWakeState::latch_seq, Nx2PendingWakeState::ByLatch);
         }
     }
 

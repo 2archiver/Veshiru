@@ -309,17 +309,6 @@ bool DmaPusher::QueueSnapshotCopy(CommandList& list, u64 now) {
     return true;
 }
 
-bool DmaPusher::IsMemoryWriter(const Engines::EngineInterface& engine, Engines::EngineTypes type,
-                              u32 method) {
-    if (type == Engines::EngineTypes::KeplerCompute) {
-        return static_cast<const Engines::KeplerCompute&>(engine).MayWriteMemory(method);
-    }
-    if (type == Engines::EngineTypes::MaxwellDMA) {
-        return method >= MacroRegistersStart || engine.execution_mask[method];
-    }
-    return false;
-}
-
 DmaPusher::DmaPusher(Core::System& system_, MemoryManager& memory_manager_, Control::ChannelState& channel_state_)
     : system{system_}
     , memory_manager{memory_manager_}
@@ -615,15 +604,6 @@ bool DmaPusher::Step() {
             VideoCommon::GpuSplit::Get().WaitForSyncedWriters();
             gpu_written =
                 IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
-            if (entry_writer_stats != 0) {
-                static u64 waits{}, found{};
-                ++waits;
-                found += gpu_written ? 1 : 0;
-                if (waits % 20000 == 0) {
-                    LOG_INFO(HW_GPU, "nx2 entry writer waits: {} ({} found GPU-written words)",
-                             waits, found);
-                }
-            }
         }
         // Resume and GPU-written entries need live words, even after a flush cleared dirty state.
         const bool submitted = (command_list.snapshot_suspensions & 1) == 0 &&
@@ -820,7 +800,7 @@ size_t DmaPusher::ProcessCommands(std::span<const CommandHeader> commands, size_
         } else if (dma_state.method_count) {
             if (!dma_state.non_incrementing && !dma_increment_once &&
                 dma_state.method >= non_puller_methods && dma_state.method_count > 1 &&
-                g_semaphore_watch == 0 && FrontRun(commands, word_offset, index)) {
+                semaphore_watch == 0 && FrontRun(commands, word_offset, index)) {
                 if (puller.HasPendingAcquire()) {
                     return index;
                 }

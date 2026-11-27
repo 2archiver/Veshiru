@@ -78,7 +78,8 @@ public:
         if (method >= native_plain_methods.size()) {
             return true;
         }
-        return native_mode ? !native_plain_methods[method] : execution_mask[method];
+        return native_mode ? !native_plain_methods[method]
+                           : method >= execution_mask.size() || execution_mask[method];
     }
 
     /// The channel's MME data RAM, shared with its 3D engine.
@@ -311,6 +312,10 @@ private:
 
     bool DispatchNativeCompute(const NativeQmdScheduler::Descriptor& descriptor);
     bool BypassOotBaseNetwork();
+    bool ReadConstBufferWords(u32 slot, std::vector<u32>& words) const;
+    void FollowPhotoUpscale();
+    bool UpscaleFromConstBuffers();
+    bool CopySceneForStarFoxCutsceneNetwork();
     void ProcessNativeReportSemaphore(u32 argument);
     void DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
     /// Texture descriptor that the handle at `offset` in constant buffer 0 selects.
@@ -384,17 +389,6 @@ private:
     bool native_mme_dumped{};
     std::optional<u32> native_executing_macro_logged;
     bool native_mode{};
-
-public:
-    /// Whether this method may write guest memory: dispatches, uploads and reports. Plain native
-    /// state does not.
-    [[nodiscard]] bool MayWriteMemory(u32 method) const {
-        if (method >= native_plain_methods.size()) {
-            return true;
-        }
-        return native_mode ? !native_plain_methods[method]
-                           : method < execution_mask.size() && execution_mask[method];
-    }
 
 private:
     NativeMacroContext* native_context{};
