@@ -70,8 +70,8 @@ void OnBack(const Func& func,
     }
 }
 
-void DrainBack() {
-    VideoCommon::GpuSplit::Get().Drain(VideoCommon::DrainSite::Acquire);
+void DrainBack(VideoCommon::DrainSite site = VideoCommon::DrainSite::Acquire) {
+    VideoCommon::GpuSplit::Get().Drain(site);
 }
 
 // The fence manager records into the scheduler and downloads the CPU's writes over GPU data:
@@ -255,7 +255,8 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     DrainBack(VideoCommon::DrainSite::AcquirePoll);
     const u32 current = ReadSemaphoreWord(dma_pusher, pending_acquire->address);
     if (Nx2SemaphoreWaiters::Get().Latched(this)) {
-        if (!pending_acquire->Matches(current) && rescued.fetch_add(1) < 64) {
+        if (static std::atomic<u32> rescued{};
+            !pending_acquire->Matches(current) && rescued.fetch_add(1) < 64) {
             LOG_INFO(HW_GPU, "Channel {} met semaphore {:#x} value {:#x} at its release (now {:#x})",
                      dma_pusher.channel_state.bind_id, pending_acquire->address,
                      pending_acquire->value, current);
@@ -572,7 +573,7 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
     const u32 payload = regs.reg_array[0x19];
     const u32 operation = argument & 7;
     if (operation == 1) { // RELEASE
-        OnBackRelease(dma_pusher, address, [rasterizer = dma_pusher.rasterizer, address, payload] {
+        OnBack([rasterizer = dma_pusher.rasterizer, address, payload] {
             rasterizer->Query(address, VideoCommon::QueryType::Payload,
                               VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
         });

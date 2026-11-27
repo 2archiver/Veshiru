@@ -39,6 +39,7 @@
 #include "video_core/game_dlss_status.h"
 #include "video_core/memory_manager.h"
 #include "video_core/native_query_trace.h"
+#include "video_core/native_tensor_programs.h"
 #include "video_core/oot_network.h"
 #ifdef ARCHITECTURE_x86_64
 #include "video_core/macro_turing_jit.h"
@@ -586,6 +587,10 @@ void KeplerCompute::CallMultiMethod(Core::System& system, u32 method, const u32*
     }
 }
 
+bool KeplerCompute::EmulatesNativeTensorPrograms() const {
+    return VideoCommon::LowersNativeTensorPrograms(Settings::GetCurrentProgramID());
+}
+
 /// Set up the compute registers from the native descriptor and submit the dispatch.
 /// Returns true if the dispatch was submitted, skipped, or replaced.
 bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& qmd) {
@@ -616,6 +621,7 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
     if (!launch_description.block_dim_x || !launch_description.block_dim_y || !launch_description.block_dim_z) {
         return false;
     }
+    const GPUVAddr program_address = regs.code_loc.Address() + launch_description.program_start;
     dlss_chain.output_pass = false;
     // Fortune's Weave's evaluation is 13 dispatches. Bound incomplete evaluations, including
     // skipped dispatches, so a missing output pass cannot keep the chain active indefinitely.
@@ -917,7 +923,7 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
     }
 
     const bool emulates_tensor = EmulatesNativeTensorPrograms();
-    if (const auto rejected = rejected_compute_programs.find(program);
+    if (const auto rejected = rejected_compute_programs.find(program_address);
         rejected != rejected_compute_programs.end() &&
         rejected->second.emulates_tensor == emulates_tensor) {
         if (dlss_chain.active) {
@@ -963,8 +969,7 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
         dispatched = false;
         const bool matrix_multiply =
             std::string_view{error.what()}.find("matrix multiply") != std::string_view::npos;
-        auto& rejected = rejected_compute_programs[program];
-        rejected.message = error.what();
+        auto& rejected = rejected_compute_programs[program_address];
         rejected.emulates_tensor = emulates_tensor;
         rejected.matrix_multiply = matrix_multiply;
         rejected.upscale_failures = 0;
@@ -972,6 +977,7 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
             ++dlss_chain.rejected;
         } else if (matrix_multiply) {
             DescribeNativeResources(qmd);
+            FollowPhotoUpscale();
             LOG_ERROR(HW_GPU, "Native tensor dispatch is unsupported; no validated replacement was available");
         }
     }
@@ -2014,6 +2020,10 @@ bool KeplerCompute::CopySceneForStarFoxCutsceneNetwork() {
         }
     }
     return done;
+}
+
+bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
+    return CopySceneForStarFoxCutsceneNetwork() || UpscaleFromConstBuffers();
 }
 
 void KeplerCompute::ProcessLaunch() {

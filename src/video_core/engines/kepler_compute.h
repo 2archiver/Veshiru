@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "common/bit_field.h"
@@ -296,6 +297,23 @@ public:
 
 private:
     struct FrontState;
+    struct RejectedComputeProgram {
+        bool emulates_tensor{};
+        bool matrix_multiply{};
+        u32 upscale_failures{};
+    };
+    struct PhotoUpscaleWatch {
+        u32 window_left{};
+        u32 evaluations{};
+        GPUVAddr output_program{};
+        u32 slot{};
+        u32 input_offset{};
+        u32 output_offset{};
+        GPUVAddr last_input{};
+        GPUVAddr last_output{};
+    };
+    [[nodiscard]] bool EmulatesNativeTensorPrograms() const;
+    bool UpscaleInsteadOfNativeProgram();
     FrontState& Front(VideoCommon::GpuSplit& split);
     void ReleaseFront();
     void FrontApply(FrontState& state, u32 method, u32 argument);
@@ -363,6 +381,11 @@ private:
         /// What the Graphics tab was last told.
         VideoCore::GameDlssStatus status{};
     } dlss_chain;
+
+    /// Native programs rejected by translation, retried only when tensor lowering changes or a
+    /// validated replacement may be available.
+    std::unordered_map<GPUVAddr, RejectedComputeProgram> rejected_compute_programs;
+    PhotoUpscaleWatch photo_upscale;
 
     /// Ocarina of Time's movie network: a pass that reads one colour image and stores none
     /// retains its input here; the pass that stores an image upscaling it is replaced by a plain

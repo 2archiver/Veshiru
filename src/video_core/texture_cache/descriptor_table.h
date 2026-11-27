@@ -56,12 +56,11 @@ public:
             invalidated = false;
         }
         const GPUVAddr gpu_addr = current_gpu_addr + index * sizeof(T);
-        const u64 page_offset = gpu_addr & Core::Memory::YUZU_PAGEMASK;
+        const u64 page_offset = gpu_addr & Core::Memory::VESHIRU_PAGEMASK;
         std::pair<T, bool> result;
         // This runs for every texture and sampler of every draw. An entry within one page is
         // contiguous in host memory, so a single page lookup replaces the generic block read.
-        const bool one_page =
-            (gpu_addr & Core::Memory::VESHIRU_PAGEMASK) + sizeof(T) <= Core::Memory::VESHIRU_PAGESIZE;
+        const bool one_page = page_offset + sizeof(T) <= Core::Memory::VESHIRU_PAGESIZE;
         if (const u8* const host = one_page ? gpu_memory.GetPointer(gpu_addr) : nullptr) {
             std::memcpy(std::addressof(result.first), host, sizeof(T));
         } else {

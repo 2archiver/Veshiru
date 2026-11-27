@@ -43,6 +43,7 @@ enum class DrainSite : u32 {
     Other,
     FetchDrain,     ///< EDEN_NX2_FETCH_DRAIN: before every entry
     Acquire,        ///< A semaphore acquire reads the value the back may release
+    AcquirePoll,    ///< A suspended acquire polls a value the back may have released
     SemaphoreFlush, ///< The acquired semaphore is in the buffer cache
     FenceRelease,   ///< The puller's acquires release the pending fences
     ListWriters,    ///< GPU-written command lists: the dispatches and copies sent before them
@@ -112,7 +113,8 @@ inline void Count(std::atomic<u64>& counter, u64 amount = 1) {
 }
 
 inline constexpr std::array<const char*, static_cast<size_t>(DrainSite::Count)> drain_site_names{
-    "other",           "fetch drain",   "acquire",    "semaphore flush", "fence release",
+    "other",           "fetch drain",   "acquire",    "acquire poll",    "semaphore flush",
+    "fence release",
     "list writers",    "list sync",     "list flush", "macro dma read",  "macro dma writes",
     "macro dma flush", "gp sync fence", "map",        "front start",     "front verify",
     "ring full",       "back register", "back code",

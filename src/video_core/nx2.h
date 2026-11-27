@@ -23,6 +23,7 @@
 #include "common/bit_util.h"
 #include "common/common_types.h"
 #include "common/thread.h"
+#include "video_core/nx2_perf.h"
 
 namespace Tegra {
 
