@@ -30,6 +30,11 @@ extern const char g_title_bar_format_running[];
 extern const char g_shader_cache_version[];
 extern const char g_compiler_id[];
 
+/// "3.4.0 (Windows, clang-cl)": the version and flavour, for messages that name the build.
+[[nodiscard]] inline std::string BuildDisplayName() {
+    return std::string{g_display_version} + " (" + g_build_flavour + ")";
+}
+
 extern const bool g_is_dev_build;
 extern const bool g_is_nightly_build;
 

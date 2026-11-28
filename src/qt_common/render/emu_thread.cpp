@@ -41,8 +41,6 @@ void EmuThread::run() {
 
     emit LoadProgress(VideoCore::LoadCallbackStage::Prepare, 0, 0);
     if (Settings::values.use_disk_shader_cache.GetValue()) {
-        VideoCommon::ShaderWarm::RefreshWarmFiles(
-            *QtCommon::system, QtCommon::system->GetApplicationProcessProgramID(), stop_token);
         QtCommon::system->Renderer().ReadRasterizer()->LoadDiskResources(
             QtCommon::system->GetApplicationProcessProgramID(), stop_token,
             [this](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {

@@ -33,6 +33,7 @@
 
 #include <fmt/format.h>
 
+#include "common/httplib.h"
 #include "common/logging.h"
 #include "core/core.h"
 #include "core/file_sys/control_metadata.h"
