@@ -152,6 +152,8 @@ struct Values {
                                                     "update_channel", Category::UiGeneral};
     // Tag of the release the user chose not to be reminded of
     Setting<std::string> skipped_update{linkage, {}, "skipped_update", Category::Ui};
+    // Program IDs whose recommended-settings prompt the user asked not to see again
+    std::set<u64> skipped_recommended_settings;
 
     // Linux/MinGW may support (requires libdl support)
     SwitchableSetting<bool> enable_gamemode{linkage,

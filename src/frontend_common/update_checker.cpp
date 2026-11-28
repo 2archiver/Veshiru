@@ -17,6 +17,14 @@
 
 namespace UpdateChecker {
 
+std::string_view BuildChannel() {
+#ifdef VESHIRU_UPDATE_CHANNEL
+    return VESHIRU_UPDATE_CHANNEL;
+#else
+    return {};
+#endif
+}
+
 namespace {
 
 std::optional<u64> ParseBuildNumber(std::string_view tag) {

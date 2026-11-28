@@ -176,6 +176,9 @@ ENUM(GameListMode, TreeView, GridView, CarouselView);
 ENUM(SpeedMode, Standard, Turbo, Slow);
 ENUM(FrameGenType, Lsfg, Fsr3, NvidiaDlssG, OpenFrameGen);
 ENUM(ColdHintMode, Off, WhenRamIsLow, Always);
+/// Release channel a build follows; Unset until a tagged release or a daily build runs.
+ENUM(UpdateChannel, Unset, Stable, ReleaseCandidate, Daily);
+
 ENUM(GraphicsPath, Hle, Emulated);
 // VTX-HLE upscaler choices (video_core/upscaler.h); no setting selects one yet, the replay uses Auto.
 ENUM(Upscaler, Auto, Game, Fsr, Bilinear, Dlss, Dlaa);
