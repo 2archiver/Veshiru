@@ -77,6 +77,8 @@ public:
         for (Slot& slot : compute_slots) {
             slot.size = 0;
             slot.tick = 0;
+            slot.misses = 0;
+            slot.direct = 0;
         }
     }
 
@@ -139,6 +141,58 @@ template <class Runtime, class DeviceMemory>
         return true;
     }
     const std::span<u8> span = runtime.BindMappedUniformBuffer(stage, binding_index, size);
+    std::memcpy(span.data(), scratch, size);
+    slot.ref = runtime.LastStreamUniformRef();
+    // After the allocation: the tick the stream region is tagged with is the one current now.
+    slot.tick = runtime.CurrentTick();
+    if (same_bytes) {
+        slot.misses = 0;
+    } else {
+        slot.size = size;
+        std::memcpy(slot.bytes.data(), scratch, size);
+        if (++slot.misses >= Reuse::MissStreak) {
+            slot.misses = 0;
+            slot.direct = Reuse::DirectBinds;
+        }
+    }
+    return true;
+}
+
+/// BindSmallUniformReusing for compute uniforms, which have no stage: they stream through stage 0
+/// and reuse their own slots, so a dispatch does not evict the graphics stage's allocations.
+template <class Runtime, class DeviceMemory>
+[[nodiscard]] bool BindSmallComputeUniformReusing(Runtime& runtime, DeviceMemory& device_memory,
+                                                 u32 index, u32 binding_index, u64 device_addr,
+                                                 u32 size) {
+    using Reuse = UniformStreamReuse<typename Runtime::StreamUniformRef>;
+    if (size == 0 || size > Reuse::MaxBytes || index >= Reuse::NumSlots) {
+        return false;
+    }
+    Reuse& reuse = UniformStreamReuseState<typename Runtime::StreamUniformRef>();
+    typename Reuse::Slot& slot = reuse.compute_slots[index];
+    slot.device_addr = device_addr;
+    if (slot.direct != 0) {
+        // As the graphics slot: bytes that change every bind are read without comparing.
+        --slot.direct;
+        device_memory.ReadBlockUnsafe(device_addr, slot.bytes.data(), size);
+        slot.size = size;
+        const std::span<u8> span = runtime.BindMappedUniformBuffer(0, binding_index, size);
+        std::memcpy(span.data(), slot.bytes.data(), size);
+        slot.ref = runtime.LastStreamUniformRef();
+        slot.tick = runtime.CurrentTick();
+        return true;
+    }
+    u8* const scratch = reuse.scratch.data();
+    device_memory.ReadBlockUnsafe(device_addr, scratch, size);
+
+    const bool same_bytes =
+        slot.size == size && std::memcmp(slot.bytes.data(), scratch, size) == 0;
+    if (same_bytes && slot.tick == runtime.CurrentTick()) {
+        slot.misses = 0;
+        runtime.RebindStreamUniform(slot.ref, size);
+        return true;
+    }
+    const std::span<u8> span = runtime.BindMappedUniformBuffer(0, binding_index, size);
     std::memcpy(span.data(), scratch, size);
     slot.ref = runtime.LastStreamUniformRef();
     // After the allocation: the tick the stream region is tagged with is the one current now.

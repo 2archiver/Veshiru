@@ -34,6 +34,8 @@
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_cmdpage_diag.h"
+#include "video_core/nx2_hazard.h"
+#include "video_core/nx2_knobs.h"
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/page_filter.h"
@@ -2621,6 +2623,7 @@ void BufferCache<P>::PopAsyncBuffers() {
     // This runs on the fencing thread while the CPU keeps writing: CPU writes collected since the
     // copy was taken are newer than it, and the GPU thread hasn't dropped them from `ranges` yet.
     const Common::RangeSet<DAddr> cpu_written = PendingCpuWriteRanges();
+    u64 written_bytes = 0;
     for (const auto& copy : downloads) {
         const DAddr device_addr = static_cast<DAddr>(copy.src_offset);
         const u64 dst_offset = copy.dst_offset - base_offset;
