@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -5,6 +8,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
+
+#include <string>
 
 namespace Common {
 
@@ -15,6 +20,8 @@ extern const char g_build_name[];
 extern const char g_build_date[];
 extern const char g_build_fullname[];
 extern const char g_build_version[];
+extern const char g_display_version[];
+extern const char g_build_flavour[];
 extern const char g_build_id[];
 extern const char g_build_release_tag[];
 extern const char g_build_release_platform[];
@@ -22,6 +29,11 @@ extern const char g_title_bar_format_idle[];
 extern const char g_title_bar_format_running[];
 extern const char g_shader_cache_version[];
 extern const char g_compiler_id[];
+
+/// "3.4.0 (Windows, clang-cl)": the version and flavour, for messages that name the build.
+[[nodiscard]] inline std::string BuildDisplayName() {
+    return std::string{g_display_version} + " (" + g_build_flavour + ")";
+}
 
 extern const bool g_is_dev_build;
 extern const bool g_is_nightly_build;

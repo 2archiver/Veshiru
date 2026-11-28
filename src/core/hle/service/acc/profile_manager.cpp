@@ -377,6 +377,21 @@ bool ProfileManager::SetProfileBase(UUID uuid, const ProfileBase& profile_new) {
     return true;
 }
 
+bool ProfileManager::SetProfileUsername(Common::UUID uuid, std::string_view username) {
+    ProfileBase profile{};
+    if (!GetProfileBase(uuid, profile)) {
+        return false;
+    }
+    std::fill(profile.username.begin(), profile.username.end(), 0);
+    std::copy_n(username.begin(), (std::min)(username.size(), profile.username.size()),
+                profile.username.begin());
+    if (!SetProfileBase(uuid, profile)) {
+        return false;
+    }
+    WriteUserSaveFile();
+    return true;
+}
+
 bool ProfileManager::SetProfileBaseAndData(Common::UUID uuid, const ProfileBase& profile_new,
                                            const UserData& data_new) {
     const auto index = GetUserIndex(uuid);

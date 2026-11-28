@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -37,6 +40,7 @@
 #include "ui_configure_graphics.h"
 #include "veshiru/configuration/configuration_shared.h"
 #include "veshiru/configuration/configure_graphics.h"
+#include "veshiru/configuration/configure_frame_generation.h"
 #include "veshiru/configuration/amd_fsr4_panel.h"
 #include "veshiru/configuration/nvidia_dlss_panel.h"
 #include "veshiru/configuration/shared_widget.h"
@@ -268,6 +272,9 @@ void ConfigureGraphics::Setup(const ConfigurationShared::Builder& builder) {
 #endif
 
     for (const auto setting : Settings::values.linkage.by_category[Settings::Category::Renderer]) {
+        if (ConfigureFrameGeneration::IsFrameGenerationSetting(setting->Id())) {
+            continue;
+        }
 #ifndef HAS_RESHADE
         if (setting->Id() == Settings::values.post_shader_enabled.Id()) {
             continue;
@@ -486,21 +493,6 @@ void ConfigureGraphics::Setup(const ConfigurationShared::Builder& builder) {
 
     for (const auto& [id, widget] : hold_graphics) {
         graphics_layout.addWidget(widget);
-    }
-
-    // Hide rather than disable, a disabled widget would read as using the global value
-    if (frame_gen_checkbox != nullptr) {
-        for (const u32 id : {Settings::values.frame_gen_type.Id(),
-                             Settings::values.frame_gen_multiplier.Id(),
-                             Settings::values.frame_gen_target_rate.Id(),
-                             Settings::values.frame_gen_flow_scale_auto.Id(),
-                             Settings::values.frame_gen_flow_scale.Id(),
-                             Settings::values.frame_gen_queue_target.Id()}) {
-            if (const auto it = hold_graphics.find(id); it != hold_graphics.end()) {
-                it->second->setVisible(frame_gen_checkbox->isChecked());
-                connect(frame_gen_checkbox, &QCheckBox::toggled, it->second, &QWidget::setVisible);
-            }
-        }
     }
 
 #ifdef EGLANTINE_STREAMLINE

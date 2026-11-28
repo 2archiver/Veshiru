@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -32,6 +35,10 @@ struct CheckResult {
 
 // Classify a failed release request by its HTTP status, or 0 when no response arrived.
 Failure ClassifyFailure(int status);
+
+/// The release channel this build follows, or empty when the build does not choose one; the
+/// channel selector is only offered when this is not empty.
+std::string_view BuildChannel();
 
 CheckResult Check();
 std::optional<Common::Net::Release> GetUpdate();

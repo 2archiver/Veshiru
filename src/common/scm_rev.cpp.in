@@ -6,6 +6,8 @@
 
 #include "common/scm_rev.h"
 
+#include <string>
+
 #define GIT_REV "@GIT_COMMIT@"
 #define GIT_BRANCH "@GIT_REFSPEC@"
 #define GIT_DESC "@GIT_DESC@"
@@ -13,6 +15,8 @@
 #define BUILD_DATE "@BUILD_DATE@"
 #define BUILD_FULLNAME "@BUILD_FULLNAME@"
 #define BUILD_VERSION "@BUILD_VERSION@"
+#define EGLANTINE_DISPLAY_VERSION "@EGLANTINE_DISPLAY_VERSION@"
+#define EGLANTINE_BUILD_FLAVOUR "@EGLANTINE_BUILD_FLAVOUR@"
 #undef BUILD_ID
 #define BUILD_ID "@BUILD_ID@"
 #define TITLE_BAR_FORMAT_IDLE "@TITLE_BAR_FORMAT_IDLE@"
@@ -35,6 +39,8 @@ constexpr const char g_build_name[] = BUILD_NAME;
 constexpr const char g_build_date[] = BUILD_DATE;
 constexpr const char g_build_fullname[] = BUILD_FULLNAME;
 constexpr const char g_build_version[] = BUILD_VERSION;
+constexpr const char g_display_version[] = EGLANTINE_DISPLAY_VERSION;
+constexpr const char g_build_flavour[] = EGLANTINE_BUILD_FLAVOUR;
 constexpr const char g_build_id[] = BUILD_ID;
 constexpr const char g_build_release_tag[] = "@VESHIRU_BUILD_TAG@";
 constexpr const char g_build_release_platform[] = "@VESHIRU_BUILD_PLATFORM@";

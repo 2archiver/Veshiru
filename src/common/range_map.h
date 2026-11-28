@@ -1,10 +1,14 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
 
+#include <limits>
 #include <map>
 #include <type_traits>
 
@@ -25,6 +29,7 @@ public:
     ~RangeMap() = default;
 
     void Map(KeyTBase address, KeyTBase address_end, ValueT value) {
+        cached_begin = cached_end = 0;
         KeyT new_address = static_cast<KeyT>(address);
         KeyT new_address_end = static_cast<KeyT>(address_end);
         if (new_address < 0) {
@@ -40,12 +45,22 @@ public:
         Map(address, address_end, null_value);
     }
 
-    [[nodiscard]] size_t GetContinuousSizeFrom(KeyTBase address) const {
+    [[nodiscard]] size_t GetContinuousSizeFrom(KeyTBase address, bool use_cache = false,
+                                              bool* cache_hit = nullptr) const {
+        if (cache_hit) {
+            *cache_hit = false;
+        }
         const KeyT new_address = static_cast<KeyT>(address);
         if (new_address < 0) {
             return 0;
         }
-        return ContinuousSizeInternal(new_address);
+        if (use_cache && new_address >= cached_begin && new_address < cached_end) {
+            if (cache_hit) {
+                *cache_hit = true;
+            }
+            return cached_end - new_address;
+        }
+        return ContinuousSizeInternal(new_address, use_cache);
     }
 
     /// Calls func(start, value) for every range, in address order.
@@ -69,16 +84,18 @@ private:
     using IteratorType = typename MapType::iterator;
     using ConstIteratorType = typename MapType::const_iterator;
 
-    size_t ContinuousSizeInternal(KeyT address) const {
+    size_t ContinuousSizeInternal(KeyT address, bool use_cache) const {
         const auto it = GetFirstElementBeforeOrOn(address);
         if (it == container.end() || it->second == null_value) {
             return 0;
         }
         const auto it_end = std::next(it);
-        if (it_end == container.end()) {
-            return (std::numeric_limits<KeyT>::max)() - address;
+        const KeyT end = it_end == container.end() ? (std::numeric_limits<KeyT>::max)() : it_end->first;
+        if (use_cache) {
+            cached_begin = it->first;
+            cached_end = end;
         }
-        return it_end->first - address;
+        return end - address;
     }
 
     ValueT GetValueInternal(KeyT address) const {
@@ -131,6 +148,9 @@ private:
 
     ValueT null_value;
     MapType container;
+    /// Filled by a cached lookup; mutable so a const lookup can memoise its answer.
+    mutable KeyT cached_begin{};
+    mutable KeyT cached_end{};
 };
 
 } // namespace Common

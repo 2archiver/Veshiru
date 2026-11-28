@@ -8,6 +8,64 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-11-28
+
+### Added
+
+- **A Performance page collects the Nx2 launch switches and the cache and memory options.** The
+  page lists the switches as checkboxes for NVIDIA, AMD, Intel and macOS hardware, each with the
+  status the primary graphics device and the OS give it (Recommended, Optional, Unsupported, Set by
+  environment) and a note that says when the device is not the one the flags were chosen for.
+  *Select Recommended* ticks every flag that works with the configuration. Ticked lines are written
+  into a marked block of `nx2_switches.txt` (`%APPDATA%\veshiru`, a portable `user\` folder, or the
+  copy next to `veshiru.exe`), which the frontend reads at startup and applies as environment
+  variables (`src/veshiru/configuration/configure_performance.cpp`, `src/veshiru/nx2_switches.h`);
+  a variable already in the real environment wins, later files override earlier ones, and lines
+  outside the block are left alone. Shaders and RAM have their own tabs in the same area
+  (`Performance::State::Apply`), and the page says that the switches are read at start.
+- **Frame generation has a page of its own.** The settings that steer frame generation and
+  presentation leave the Graphics tab for *Configure > Frame Generation*, which collects them by
+  the id the configuration builder gives them (`ConfigureFrameGeneration::IsFrameGenerationSetting`)
+  so the ordering and the per-game translations stay the builder's
+  (`src/veshiru/configuration/configure_frame_generation.cpp`).
+- **`prefer_3d_vcache` (CPU page, on).** On Windows a processor whose cores fall into two L3 cache
+  domains of different sizes (a Ryzen X3D part) is laid out from the cache sizes:
+  `Common::MakeCpuThreadLayout` gives the guest threads and the GPU back thread the larger domain
+  and background work the other one, instead of pinning from the core list alone
+  (`src/common/cpu_layout.h`, `src/common/windows/cpu_layout.cpp`, wired from
+  `Common::ThreadPool` in `src/common/thread.cpp`). A machine without two domains keeps the
+  existing plan. `EDEN_NX2_CPU_LAYOUT` overrides it for one session.
+
+### Fixed
+
+- **A Nunchuk and another extension are told apart.** The Wii Remote driver read the six extension
+  bytes of every report as Nunchuk data whenever the report carried them, so a Classic Controller's
+  or Motion Plus's bytes could land on the Nunchuk stick and C/Z. `Wii::HasNunchukData` now requires
+  an identified Nunchuk, and a connected Nunchuk keeps its last stick and button state in reports
+  that do not carry extension data (`src/input_common/helpers/wii_remote_protocol.h`,
+  `drivers/wii_remote.cpp`).
+- **A released remote stops moving.** Releasing a remote now clears its published motion and its
+  pointer state and restarts the freshness clock, so a disconnect no longer leaves the emulated
+  controller with the last accelerometer or pointer sample (`WiiRemote::ReleaseController`).
+- **Joy-Con 2 mouse motion reaches every consumer once.** `Mouse::RelativeMove` returns the scaled
+  delta and the HID report, the right-stick fallback and the gyro mapping use that same value,
+  instead of the HID path scaling the host motion a second time against the fallbacks
+  (`src/input_common/drivers/mouse.cpp`, `mouse.h`).
+- **The application icon is the Veshiru icon everywhere.** `dist/veshiru.ico` is generated from
+  `dist/branding/veshiru_icon.png` at every size Windows asks for, including the 20 px and 40 px
+  steps of 125 % and 150 % scaling, and the About dialog looks the theme icon up under the Veshiru
+  name instead of the inherited Eden one before it falls back to the embedded file
+  (`src/veshiru/about_dialog.cpp`, `src/veshiru/veshiru.qrc`).
+
+### Deferred
+
+- **The renderer work planned for this release is not in this build.** The named `Nx2Perf` switches,
+  the split GPU thread and its write tracker, the native uniform banks, the image allocation pool
+  and `PlainUnswizzle`, the texture-cache budget check, the pipeline fast cache and the misaligned
+  storage-access split are not merged here: they call APIs this tree does not have, and they would
+  have shipped as an unbuildable release. They stay on the release branch for a later version, and
+  nothing in this build reads `EDEN_NX2_SPLIT` or `EDEN_NX2_PERF*` that did not already.
+
 ## [3.3.0] - 2026-11-26
 
 ### Added

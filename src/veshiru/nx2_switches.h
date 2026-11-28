@@ -12,12 +12,25 @@
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 
+namespace Nx2Switches {
+
+/// The shared NX2 switches file edited by the Performance settings page.
+inline std::filesystem::path UserFilePath() {
+#ifdef _WIN32
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "nx2_switches.txt";
+#else
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "nx2_switches.txt";
+#endif
+}
+
+} // namespace Nx2Switches
+
 // The NX2 switches are read from the environment (EDEN_NX2_*), which a GUI launch has no way to
 // set. nx2_switches.txt holds "NAME=VALUE" lines, one per line, '#' comments. A variable already
 // in the real environment always wins, so a launcher script can still override one run; between
 // files the later one wins, so the copy next to the executable (shipped with the build) can be
 // overridden by %APPDATA%\veshiru\nx2_switches.txt without editing the one that gets replaced.
-static void ParseSwitchFile(const std::filesystem::path& path,
+inline void ParseSwitchFile(const std::filesystem::path& path,
                             std::map<std::string, std::string>& entries) {
     std::ifstream file{path};
     if (!file) {
@@ -48,7 +61,7 @@ static void ParseSwitchFile(const std::filesystem::path& path,
     }
 }
 
-static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
+inline std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
 #ifdef _WIN32
     return Common::FS::GetExeDirectory();
 #else
@@ -63,7 +76,7 @@ static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
 #endif
 }
 
-static void LoadNx2Switches(const char* argv0) {
+inline void LoadNx2Switches(const char* argv0) {
     // Later files overwrite earlier entries; the real environment is checked only at the end.
     std::map<std::string, std::string> entries;
     if (const auto exe_dir = GetSwitchExeDirectory(argv0); !exe_dir.empty()) {

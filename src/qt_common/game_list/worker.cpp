@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -265,6 +268,21 @@ QString FormatPatchNameVersions(const FileSys::PatchManager& patch_manager,
     return out;
 }
 
+std::vector<u8> ReadBundledGameIcon(u64 program_id) {
+    if (program_id == 0) {
+        return {};
+    }
+
+    QFile file{QStringLiteral(":/game_icons/%1.png")
+                   .arg(QString::fromStdString(fmt::format("{:016X}", program_id)))};
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+
+    const QByteArray bytes = file.readAll();
+    return {bytes.begin(), bytes.end()};
+}
+
 // The expensive half of a row: container stays closed after this. The result is plain data,
 // so it can be cached and the row rebuilt without touching the file again.
 GameListParseCache::EntryData MakeEntryData(const std::string& path, const std::string& name,
@@ -300,17 +318,8 @@ GameListParseCache::EntryData MakeEntryData(const std::string& path, const std::
     const QString game_version = QString::fromStdString(
         GameListVersion::Resolve(patch_versions.toStdString(), patch, loader));
 
-    // A game Satsuma ships an icon for (:/game_icons/<program ID>.png) shows it whatever the
-    // format: a .nup's own icon, a dump's or none.
-    std::vector<u8> picture;
-    {
-        QFile file(QStringLiteral(":/game_icons/%1.png")
-                       .arg(QString::fromStdString(fmt::format("{:016X}", program_id))));
-        if (file.open(QIODevice::ReadOnly)) {
-            const QByteArray bytes = file.readAll();
-            picture.assign(bytes.begin(), bytes.end());
-        }
-    }
+    // Bundled Satsuma icons outrank Control NCA, cached artwork and parse-cache data.
+    std::vector<u8> picture = ReadBundledGameIcon(program_id);
     if (picture.empty()) {
         picture = icon;
     }
@@ -391,6 +400,10 @@ QList<QStandardItem*> GameListWorker::BuildRow(const GameListParseCache::EntryDa
     // session, so look in the pack again; only a row still without a cover keeps the slug.
     std::vector<u8> icon = data.icon;
     QString cover_slug = QString::fromStdString(data.cover_slug);
+    if (auto bundled_icon = ReadBundledGameIcon(data.program_id); !bundled_icon.empty()) {
+        icon = std::move(bundled_icon);
+        cover_slug.clear();
+    }
     if (icon.empty() && !cover_slug.isEmpty()) {
         icon = QtCommon::Boxart::FindCover(data.program_id, data.cover_slug);
         if (icon.empty()) {
@@ -517,8 +530,10 @@ void GameListWorker::AddTitlesToGameList(GameListDir* parent_dir, GameListItemTy
             GetMetadataFromControlNCA(patch, *control, icon, name);
         }
         if (program_id != 0) {
-            if (auto cached_icon = Common::ArtworkCache::ReadCachedArtwork(program_id);
-                !cached_icon.empty()) {
+            if (auto bundled_icon = ReadBundledGameIcon(program_id); !bundled_icon.empty()) {
+                icon = std::move(bundled_icon);
+            } else if (auto cached_icon = Common::ArtworkCache::ReadCachedArtwork(program_id);
+                       !cached_icon.empty()) {
                 icon = std::move(cached_icon);
             }
             if (name.empty() || name == " ") {
@@ -668,8 +683,8 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
             const auto addEntry = [this, physical_name, parent_dir,
                                    fingerprint](std::unique_ptr<Loader::AppLoader>& app_loader,
                                                 const u64 id) {
-                std::vector<u8> icon;
-                if (id != 0) {
+                std::vector<u8> icon = ReadBundledGameIcon(id);
+                if (icon.empty() && id != 0) {
                     icon = Common::ArtworkCache::ReadCachedArtwork(id);
                 }
                 if (icon.empty()) {

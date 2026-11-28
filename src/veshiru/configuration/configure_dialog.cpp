@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -23,6 +26,7 @@
 #include "veshiru/configuration/configure_debug_tab.h"
 #include "veshiru/configuration/configure_dialog.h"
 #include "veshiru/configuration/configure_filesystem.h"
+#include "veshiru/configuration/configure_frame_generation.h"
 #include "veshiru/configuration/configure_general.h"
 #include "veshiru/configuration/configure_graphics.h"
 #include "veshiru/configuration/configure_graphics_advanced.h"
@@ -31,6 +35,7 @@
 #include "veshiru/configuration/configure_input.h"
 #include "veshiru/configuration/configure_input_player.h"
 #include "veshiru/configuration/configure_network.h"
+#include "veshiru/configuration/configure_performance.h"
 #include "veshiru/configuration/configure_profile_manager.h"
 #include "veshiru/configuration/configure_system.h"
 #include "veshiru/configuration/configure_ui.h"
@@ -54,6 +59,7 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
           std::make_unique<ConfigureGraphicsAdvanced>(system_, nullptr, *builder, this)},
       graphics_extensions_tab{
           std::make_unique<ConfigureGraphicsExtensions>(system_, nullptr, *builder, this)},
+      frame_gen_tab{std::make_unique<ConfigureFrameGeneration>(system_, nullptr, *builder, this)},
       ui_tab{std::make_unique<ConfigureUi>(system_, this)},
       graphics_tab{std::make_unique<ConfigureGraphics>(
           system_, vk_device_records, [&]() { graphics_advanced_tab->ExposeComputeOption(); },
@@ -64,6 +70,11 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
       hotkeys_tab{std::make_unique<ConfigureHotkeys>(system_.HIDCore(), this)},
       input_tab{std::make_unique<ConfigureInput>(system_, this)},
       network_tab{std::make_unique<ConfigureNetwork>(system_, this)},
+      performance_state{std::make_unique<Performance::State>()},
+      performance_gpu_tab{
+          std::make_unique<ConfigureGpu>(*performance_state, vk_device_records, this)},
+      performance_shaders_tab{std::make_unique<ConfigureShaders>(system_, *builder, this)},
+      performance_ram_tab{std::make_unique<ConfigureRam>(system_, *builder, this)},
       profile_tab{std::make_unique<ConfigureProfileManager>(system_, this)},
       system_tab{std::make_unique<ConfigureSystem>(system_, nullptr, *builder, this)},
       web_tab{std::make_unique<ConfigureWeb>(this)} {
@@ -85,6 +96,7 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
     ui->tabWidget->addTab(graphics_tab.get(), tr("Graphics"));
     ui->tabWidget->addTab(graphics_advanced_tab.get(), tr("GraphicsAdvanced"));
     ui->tabWidget->addTab(graphics_extensions_tab.get(), tr("GraphicsExtra"));
+    ui->tabWidget->addTab(frame_gen_tab.get(), tr("Frame Generation"));
     ui->tabWidget->addTab(hotkeys_tab.get(), tr("Hotkeys"));
     ui->tabWidget->addTab(input_tab.get(), tr("Controls"));
     ui->tabWidget->addTab(profile_tab.get(), tr("Profiles"));
@@ -155,7 +167,11 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
     ui->buttonBox->setFocus();
 }
 
-ConfigureDialog::~ConfigureDialog() = default;
+ConfigureDialog::~ConfigureDialog() {
+    // Deleting the tab pages makes the tab widget switch tabs; don't run the handler on a
+    // half-destroyed dialog.
+    ui->tabWidget->blockSignals(true);
+}
 
 void ConfigureDialog::SetConfiguration() {}
 
@@ -171,6 +187,10 @@ void ConfigureDialog::ApplyConfiguration() {
     graphics_tab->ApplyConfiguration();
     graphics_advanced_tab->ApplyConfiguration();
     graphics_extensions_tab->ApplyConfiguration();
+    frame_gen_tab->ApplyConfiguration();
+    performance_state->Apply();
+    performance_shaders_tab->ApplyConfiguration();
+    performance_ram_tab->ApplyConfiguration();
     audio_tab->ApplyConfiguration();
     debug_tab_tab->ApplyConfiguration();
     web_tab->ApplyConfiguration();
@@ -235,6 +255,19 @@ void ConfigureDialog::PopulateSelectionList() {
 
         ui->selectorList->addItem(item);
     }
+}
+
+void ConfigureDialog::SelectProfilesTab() {
+    for (int row = 0; row < ui->selectorList->count(); ++row) {
+        const auto tabs = qvariant_cast<QList<QWidget*>>(
+            ui->selectorList->item(row)->data(Qt::UserRole));
+        if (tabs.contains(profile_tab.get())) {
+            ui->selectorList->setCurrentRow(row);
+            break;
+        }
+    }
+
+    ui->tabWidget->setCurrentWidget(profile_tab.get());
 }
 
 void ConfigureDialog::OnLanguageChanged(const QString& locale) {

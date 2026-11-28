@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -13,6 +16,14 @@
 #include "frontend_common/update_checker.h"
 
 namespace UpdateChecker {
+
+std::string_view BuildChannel() {
+#ifdef VESHIRU_UPDATE_CHANNEL
+    return VESHIRU_UPDATE_CHANNEL;
+#else
+    return {};
+#endif
+}
 
 namespace {
 

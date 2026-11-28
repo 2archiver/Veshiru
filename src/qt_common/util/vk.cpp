@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -123,8 +126,15 @@ void PopulateRecords(std::vector<Record>& records, QWindow* window) try {
                 host_ram, device_local_memory, shared_memory, 0, aggressive);
         }
 
-        records.push_back(VkDeviceInfo::Record(name, present_modes, has_broken_compute, fsr4_capable,
-                                               device_local_memory, max_device_memory));
+        VkDeviceInfo::Record record(name, present_modes, has_broken_compute, fsr4_capable,
+                                    device_local_memory, max_device_memory);
+        record.capabilities.vendor_id = properties.properties.vendorID;
+        record.capabilities.driver_id = static_cast<u32>(driverID);
+        for (const VkExtensionProperties& extension :
+             physical_device.EnumerateDeviceExtensionProperties()) {
+            record.capabilities.extensions.emplace_back(extension.extensionName);
+        }
+        records.push_back(record);
     }
 } catch (const Vulkan::vk::Exception& exception) {
     LOG_ERROR(Frontend, "Failed to enumerate devices with error: {}", exception.what());

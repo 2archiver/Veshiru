@@ -2644,7 +2644,7 @@
                <item row="7" column="0" colspan="3">
                 <widget class="QCheckBox" name="wii_remote_ir_pointer">
                  <property name="toolTip">
-                  <string>Needs a Sensor Bar, or two infrared LEDs, in front of the screen. The pointer is published as the right stick and as emulated motion.</string>
+                  <string>Requires a Sensor Bar, or two infrared LEDs, in front of the screen. The tracked pointer is published as the right stick.</string>
                  </property>
                  <property name="text">
                   <string>Wii Remote IR pointer as right stick</string>

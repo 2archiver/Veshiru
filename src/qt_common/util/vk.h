@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -54,6 +57,22 @@ enum class VSyncMode : u32;
 
 namespace VkDeviceInfo {
 // Short class to record Vulkan driver information for configuration purposes
+/// What the configuration UI needs to know about a device's vendor and driver.
+struct Capabilities {
+    u32 vendor_id{};                    ///< VkPhysicalDeviceProperties::vendorID
+    u32 driver_id{};                    ///< VkDriverId, 0 when unknown
+    std::vector<std::string> extensions; ///< Device extension names
+
+    [[nodiscard]] bool HasExtension(std::string_view extension) const {
+        for (const auto& name : extensions) {
+            if (name == extension) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 class Record {
 public:
     explicit Record(std::string_view name, const std::vector<VkPresentModeKHR>& vsync_modes,
@@ -67,6 +86,8 @@ public:
     const bool fsr4_capable; ///< VideoCommon::IsFsr4CapableGpu, IsFsr4PortGpu on Linux
     const u64 device_local_memory; ///< Default GPU memory budget in bytes, 0 if unknown
     const u64 max_device_memory;   ///< Maximum selectable GPU/unified memory ceiling in bytes
+    /// Vendor, driver and extension names, filled by PopulateRecords for the configuration UI.
+    Capabilities capabilities;
 };
 
 // TODO(crueter): Port some configure_graphics.cpp stuff

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -89,12 +92,16 @@ add_executable(veshiru
     configuration/nvidia_dlss_panel.cpp
     configuration/nvidia_dlss_panel.h
     configuration/configure_graphics.ui
+    configuration/configure_frame_generation.cpp
+    configuration/configure_frame_generation.h
     configuration/configure_graphics_advanced.cpp
     configuration/configure_graphics_advanced.h
     configuration/configure_graphics_advanced.ui
     configuration/configure_graphics_extensions.cpp
     configuration/configure_graphics_extensions.h
     configuration/configure_graphics_extensions.ui
+    configuration/configure_performance.cpp
+    configuration/configure_performance.h
     configuration/configure_hotkeys.cpp
     configuration/configure_hotkeys.h
     configuration/configure_hotkeys.ui
@@ -213,6 +220,7 @@ add_executable(veshiru
     multiplayer/state.cpp
     multiplayer/state.h
     multiplayer/validation.h
+    nx2_switches.h
     startup_checks.cpp
     startup_checks.h
     set_play_time_dialog.cpp
