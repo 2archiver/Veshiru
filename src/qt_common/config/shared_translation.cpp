@@ -447,11 +447,6 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "physical performance cores.\n"
               "Windows and Linux only. Takes effect when a game starts."));
 
-    INSERT(Settings, use_mesh_shaders, tr("Use mesh shaders"),
-           tr("Draws the task and mesh shader geometry of Switch 2 games with the GPU's own mesh "
-              "shaders (VK_EXT_mesh_shader).\nTurn it off to use the slower compute fallback, "
-              "for example if a driver draws that geometry wrong or crashes.\n"
-              "Takes effect when a game starts."));
     INSERT(Settings, use_vulkan_driver_pipeline_cache, tr("Use Vulkan pipeline cache"),
            tr("Enables GPU vendor-specific pipeline cache.\nThis option can improve shader loading "
               "time significantly in cases where the Vulkan driver does not store pipeline cache "
