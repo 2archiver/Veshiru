@@ -865,6 +865,14 @@ private:
     std::deque<PendingUnswizzle> unswizzle_queue;
     u8 current_unswizzle_frame;
 
+    /// Images the texture cache bound as color feedback for the last frames (see
+    /// texture_cache.h: they are dropped once unbound for a while).
+    struct FeedbackShadow {
+        ImageId id;
+        u64 last_frame;
+    };
+    std::vector<FeedbackShadow> feedback_shadows;
+
     // Superseded & overlapping images (DeleteSupersededImages / RetireStaleTargets)
     void TrackOverlappingImage(ImageId image_id, ImageBase& image);
     void UntrackOverlappingImage(ImageBase& image);

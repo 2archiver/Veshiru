@@ -306,8 +306,6 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         return std::make_pair<u64, u32>(cur_addr >> Core::DEVICE_PAGEBITS,
                                         static_cast<u32>(cur_addr & Core::DEVICE_PAGEMASK));
     };
-    u8* pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
-    u8* pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
     const u64 report_size = has_timestamp ? 16 : 4;
     const bool immediate =
         !is_fence && !Settings::IsGPULevelHigh() && counter_type == QueryType::Payload;

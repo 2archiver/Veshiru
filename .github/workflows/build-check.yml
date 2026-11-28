@@ -153,6 +153,22 @@ jobs:
       # as annotations (readable from the checks API and the pull request) and the captured
       # compiler output is uploaded for download, since a job log of a clang-cl build is large and
       # is not always retrievable.
+      - name: Digest build errors
+        if: failure() && steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          # One line per distinct error message, in the order the build hit them: 441 errors are
+          # a few dozen causes, and GitHub keeps 10 annotations per step, so the next steps spend
+          # theirs on the causes instead of on the first ten errors of the first file.
+          grep -E " error: |fatal error|undefined reference|LNK[0-9]+" build-output.txt |
+            sed -E 's/^[0-9]+://' |
+            awk '{
+              key = $0
+              if (match(key, /: (fatal )?error: /)) { key = substr(key, RSTART + 2) }
+              if (!(key in seen)) { seen[key] = 1; print $0 }
+            }' > build-errors.txt
+          echo "distinct errors: $(wc -l < build-errors.txt), total: $(grep -cE ' error: ' build-output.txt)"
+
       - name: Summarise build errors
         if: failure() && steps.build.outcome == 'failure'
         shell: bash
@@ -178,6 +194,48 @@ jobs:
             echo "::error::${line}"
           done
 
+      - name: Annotate build errors 1
+        if: failure() && steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          sed -n '1,9p' build-errors.txt | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+      - name: Annotate build errors 2
+        if: failure() && steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          sed -n '10,18p' build-errors.txt | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+      - name: Annotate build errors 3
+        if: failure() && steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          sed -n '19,27p' build-errors.txt | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+      - name: Annotate build errors 4
+        if: failure() && steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          sed -n '28,36p' build-errors.txt | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+      - name: Annotate build errors 5
+        if: failure() && steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          sed -n '37,45p' build-errors.txt | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+      - name: Annotate build errors 6
+        if: failure() && steps.build.outcome == 'failure'
+        shell: bash
+        run: |
+          sed -n '46,54p' build-errors.txt | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
       - name: Upload build output
         if: failure() && steps.build.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

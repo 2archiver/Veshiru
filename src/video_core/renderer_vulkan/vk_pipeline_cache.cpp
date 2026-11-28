@@ -963,11 +963,6 @@ PipelineCache::~PipelineCache() {
     Common::NoteShutdownProgress();
     SaveUsedPipelines();
     if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
-        if (!device.CanReadPipelineCacheDuringBuilds()) {
-            // Drop queued builds, as destroying the workers would; running ones must end first.
-            workers.ClearRequests();
-            workers.WaitForRequests();
-        }
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
                                      CACHE_VERSION);
     }

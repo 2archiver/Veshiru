@@ -31,6 +31,15 @@ namespace VideoCommon {
 /// Advances once per frame; hot-page history is periodically cleared against this epoch.
 inline std::atomic<u32> g_hot_page_epoch{};
 
+/// EDEN_NX2_HOT_PAGES=0 turns the hot page handling off.
+[[nodiscard]] inline bool HotPagesEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_HOT_PAGES");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
 constexpr u64 PAGES_PER_WORD = 64;
 constexpr u64 BYTES_PER_PAGE = Core::DEVICE_PAGESIZE;
 constexpr u64 BYTES_PER_WORD = PAGES_PER_WORD * BYTES_PER_PAGE;

@@ -4536,7 +4536,8 @@ void BufferCache<P>::Nx2FlushListPages(std::span<const DAddr> pages) {
 }
 
 template <class P>
-void BufferCache<P>::Nx2NoteListHostWrite(DAddr device_addr, u64 size) {
+void BufferCache<P>::Nx2NoteListHostWrite(DAddr device_addr, u64 size,
+                                          std::span<const u8> data) {
     if constexpr (!IS_OPENGL) {
         if (size == 0 || !Tegra::g_nx2_has_command_list_pages.load(std::memory_order_relaxed)) {
             return;

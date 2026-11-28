@@ -195,6 +195,10 @@ public:
         return stage_infos[0].is_task || stage_infos[0].is_mesh;
     }
 
+    /// Whether any stage may write guest memory or images: storage buffer, global memory or
+    /// image stores and atomics (Nx2Perf MacroReadWriterSet; conservative).
+    [[nodiscard]] bool Nx2MayWriteMemory() const noexcept;
+
     /// Mesh pipeline drawn through the compute emulation (MeshEmulationSetup).
     [[nodiscard]] bool IsEmulatedMesh() const noexcept {
         return mesh_emulation.has_value();

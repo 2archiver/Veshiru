@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -25,8 +22,8 @@
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
-#include "video_core/renderer_vulkan/vk_driver_build_report.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
+#include "video_core/renderer_vulkan/vk_frame_dump.h"
 #include "video_core/renderer_vulkan/vk_pipeline_binaries.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -228,11 +225,6 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
     std::copy_n(info.constant_buffer_used_sizes.begin(), uniform_buffer_sizes.size(),
                 uniform_buffer_sizes.begin());
     num_descriptor_entries = NumDescriptorEntries(info);
-    has_rescaling_push_constants =
-        !info.texture_descriptors.empty() || !info.image_descriptors.empty();
-    has_image_resources = has_rescaling_push_constants ||
-                          !info.texture_buffer_descriptors.empty() ||
-                          !info.image_buffer_descriptors.empty();
 
     DescriptorLayoutBuilder builder{device};
     builder.Add(info, VK_SHADER_STAGE_COMPUTE_BIT);
@@ -265,9 +257,7 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         }
     }
 
-    const auto queued_at = std::chrono::steady_clock::now();
-    auto func{[this, shader_notify, pipeline_statistics, queued_at] {
-        const auto started_at = std::chrono::steady_clock::now();
+    auto func{[this, shader_notify, pipeline_statistics] {
         const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
             .pNext = nullptr,
@@ -355,7 +345,6 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         // Nothing reads the module once the pipeline exists; the driver keeps its SPIR-V while it
         // lives.
         spv_module.reset();
-        ReportPipelineBuild("Compute", shader_hash, queued_at, started_at);
         std::scoped_lock lock{build_mutex};
         is_built = true;
         build_condvar.notify_all();
@@ -471,12 +460,10 @@ ComputePipeline::ConfigureResult ComputePipeline::Configure(
         ++ssbo_index;
     }
 
-    RescalingPushConstant rescaling;
-    if (has_image_resources) {
-        texture_cache.SynchronizeDescriptors(true);
+    texture_cache.SynchronizeDescriptors(true);
 
-        boost::container::small_vector<VideoCommon::ImageViewInOut, 64> views;
-        boost::container::small_vector<VideoCommon::SamplerId, 64> samplers;
+    boost::container::small_vector<VideoCommon::ImageViewInOut, 64> views;
+    boost::container::small_vector<VideoCommon::SamplerId, 64> samplers;
 
     const auto& qmd{kepler_compute.launch_description};
     const auto& cbufs{qmd.const_buffer_config};
@@ -586,6 +573,15 @@ ComputePipeline::ConfigureResult ComputePipeline::Configure(
         }
     }
 
+    if (RecordingSampledTextures() || deferred_bind) {
+        sampled_images.clear();
+        const size_t first = Shader::NumDescriptors(info.texture_buffer_descriptors) +
+                             Shader::NumDescriptors(info.image_buffer_descriptors);
+        for (size_t index = first; index < first + Shader::NumDescriptors(info.texture_descriptors);
+             ++index) {
+            sampled_images.push_back({views[index].index, views[index].id, samplers[index - first]});
+        }
+    }
 
     std::optional<size_t> shadow_index;
     size_t image_index{Shader::NumDescriptors(info.texture_buffer_descriptors) +
@@ -675,30 +671,14 @@ ComputePipeline::ConfigureResult ComputePipeline::Configure(
                     format = *explicit_format;
                 }
             }
-            return TexturePair(gpu_memory.Read<u32>(addr), via_header_index);
-        }};
-        const auto add_image{[&](const auto& desc, bool blacklist) {
-            for (u32 index = 0; index < desc.count; ++index) {
-                const auto handle{read_handle(desc, index)};
-                views.push_back({
-                    .index = handle.first,
-                    .blacklist = blacklist,
-                    .id = {},
-                });
-            }
-        }};
-        for (const auto& desc : info.texture_buffer_descriptors) {
-            add_image(desc, false);
+            buffer_cache.BindComputeTextureBuffer(index, image_view.GpuAddr(),
+                                                  image_view.BufferSize(), format,
+                                                  is_written, is_image);
+            ++index;
         }
-        for (const auto& desc : info.image_buffer_descriptors) {
-            add_image(desc, false);
-        }
-        u32 last_sampler_handle = ~0U;
-        VideoCommon::SamplerId last_sampler{};
-        for (const auto& desc : info.texture_descriptors) {
-            for (u32 index = 0; index < desc.count; ++index) {
-                const auto handle{read_handle(desc, index)};
-                views.push_back({handle.first});
+    }};
+    std::ranges::for_each(info.texture_buffer_descriptors, add_buffer);
+    std::ranges::for_each(info.image_buffer_descriptors, add_buffer);
 
     // Decided before the bindings below mark the outputs GPU-written.
     // Buffer-only, global-memory, and small reduction/exposure/LUT dispatches (e.g. Ocarina of
@@ -792,6 +772,9 @@ ComputePipeline::ConfigureResult ComputePipeline::Configure(
             LOG_DEBUG(Render_Vulkan, "Failed to reserve descriptor memory, skipping dispatch");
             return ConfigureResult::Failed;
         }
+        WriteDescriptorBuffer(device, descriptor_buffer_layout, descriptor_data, alloc.host);
+        descriptor_buffer_offset = alloc.offset;
+        descriptor_buffer_chunk = alloc.chunk;
     }
 
     const bool bind_descriptor_buffer{

@@ -541,7 +541,7 @@ void Scheduler::RequestOutsideRenderPassOperationContext(std::source_location lo
     EndRenderPass();
 }
 
-bool Scheduler::UpdateGraphicsPipeline(GraphicsPipeline* pipeline) {
+bool Scheduler::UpdateGraphicsPipelineImpl(GraphicsPipeline* pipeline) {
     if (state.graphics_pipeline == pipeline) {
         if (pipeline && pipeline->UsesExtendedDynamicState() &&
             state.needs_state_enable_refresh) {
