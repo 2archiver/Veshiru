@@ -500,6 +500,7 @@ public:
         }
         channel_state->enabled_compute_storage_buffers = 0;
         channel_state->written_compute_storage_buffers = 0;
+        channel_state->native_compute_storage_buffers = 0;
         channel_state->image_compute_texture_buffers = 0;
     }
 
@@ -934,9 +935,11 @@ private:
     void ChangeRegister(BufferId buffer_id);
 
     void TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
-        if (buffer_id != NULL_BUFFER_ID) {
-            lru_cache.Touch(buffer.getLRUID(), frame_tick);
+        if (buffer_id == NULL_BUFFER_ID || buffer.lru_touched_tick == frame_tick) {
+            return;
         }
+        buffer.lru_touched_tick = frame_tick;
+        lru_cache.Touch(buffer.getLRUID(), frame_tick);
     }
 
     bool SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 size);

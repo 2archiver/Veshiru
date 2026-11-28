@@ -1975,15 +1975,8 @@ bool BufferCache<P>::ConstantDataReachesBuffers(DAddr device_addr, u64 size) con
 }
 
 template <class P>
-void BufferCache<P>::SetComputeUniformBufferState(u32 mask,
-                                                  const ComputeUniformBufferSizes* sizes) {
-    channel_state->enabled_compute_uniform_buffer_mask = mask;
-    channel_state->compute_uniform_buffer_sizes = sizes;
-}
-
-template <class P>
-void BufferCache<P>::UnbindGraphicsStorageBuffers(size_t stage) {
-    if (channel_state->enabled_storage_buffers[stage] == 0) {
+void BufferCache<P>::Nx2TraceComputeBufferInputs() {
+    if (!nx2_buffer_deps) {
         return;
     }
     using Input = BufferDependencyTrace::Input;
@@ -2063,27 +2056,6 @@ bool BufferCache<P>::BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, 
 }
 
 template <class P>
-void BufferCache<P>::UnbindGraphicsTextureBuffers(size_t stage) {
-    if (channel_state->enabled_texture_buffers[stage] == 0) {
-        return;
-    }
-    // NVN graphics descriptors carry a size; bare native pointers and tables do not.
-    const bool native_pointer = maxwell3d->GetNativeMacroEngine().native_turing &&
-                                !IsNvnGraphicsStorageDescriptor(stage, cbuf_index, cbuf_offset,
-                                                               indirect_offset);
-    Binding& slot = channel_state->storage_buffers[stage][ssbo_index];
-    Binding next = StorageBufferBinding(ssbo_addr, cbuf_index, is_written, native_pointer,
-                                        indirect_offset != ~0U);
-    if (slot.buffer_id && slot.buffer_id != NULL_BUFFER_ID &&
-        slot.device_addr == next.device_addr && slot.gpu_addr == next.gpu_addr &&
-        slot.size == next.size) {
-        next.buffer_id = slot.buffer_id;
-    }
-    slot = next;
-    return (slot.buffer_id != NULL_BUFFER_ID);
-}
-
-template <class P>
 void BufferCache<P>::BindGraphicsTextureBuffer(size_t stage, size_t tbo_index, GPUVAddr gpu_addr,
                                                u32 size, PixelFormat format, bool is_written,
                                                bool is_image) {
@@ -2094,20 +2066,6 @@ void BufferCache<P>::BindGraphicsTextureBuffer(size_t stage, size_t tbo_index, G
     }
     channel_state->texture_buffers[stage][tbo_index] =
         GetTextureBufferBinding(gpu_addr, size, format);
-}
-
-template <class P>
-void BufferCache<P>::UnbindComputeStorageBuffers() {
-    if constexpr (requires { runtime.ShouldLimitDynamicStorageBuffers(); }) {
-        if (runtime.ShouldLimitDynamicStorageBuffers()) {
-            channel_state->total_compute_storage_buffers -=
-                static_cast<u32>(std::popcount(channel_state->enabled_compute_storage_buffers));
-        }
-    }
-    channel_state->enabled_compute_storage_buffers = 0;
-    channel_state->written_compute_storage_buffers = 0;
-    channel_state->native_compute_storage_buffers = 0;
-    channel_state->image_compute_texture_buffers = 0;
 }
 
 template <class P>
@@ -2203,13 +2161,6 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
         }
     }
     channel_state->compute_storage_write_marks[ssbo_index] = static_cast<u32>(mark);
-}
-
-template <class P>
-void BufferCache<P>::UnbindComputeTextureBuffers() {
-    channel_state->enabled_compute_texture_buffers = 0;
-    channel_state->written_compute_texture_buffers = 0;
-    channel_state->image_compute_texture_buffers = 0;
 }
 
 template <class P>
@@ -4926,15 +4877,6 @@ void BufferCache<P>::ChangeRegister(BufferId buffer_id) {
             page_table[page] = BufferId{};
         }
     }
-}
-
-template <class P>
-void BufferCache<P>::TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
-    if (buffer_id == NULL_BUFFER_ID || buffer.lru_touched_tick == frame_tick) {
-        return;
-    }
-    buffer.lru_touched_tick = frame_tick;
-    lru_cache.Touch(buffer.getLRUID(), frame_tick);
 }
 
 template <class P>

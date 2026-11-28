@@ -144,7 +144,9 @@ jobs:
         run: |
           ccache --zero-stats
           set -o pipefail
-          cmake --build build --parallel 2>&1 | tee build-output.txt
+          # -k 0: keep going after a compile error so one run lists every broken translation unit
+          # instead of one per push. The step still fails, and the summary annotates the errors.
+          cmake --build build --parallel -- -k 0 2>&1 | tee build-output.txt
           ccache --show-stats -v
 
       # A Windows-only project cannot reproduce this build elsewhere, so the errors are surfaced

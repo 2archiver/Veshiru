@@ -45,15 +45,17 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
 
 ### Changed
 
-- **The Nx2 renderer runs behind a named switch set.** `VideoCommon::Nx2Perf` enumerates the 45
-  optimisations the renderer and the split GPU thread now have, with a name and a comment each:
-  the front's method classes, macro JIT batching, early MME reads, native submission, bind
-  memoisation, GPU dirty gathering, handle translation, shader-build budget and the rest. They are
-  on by default except the experimental ones; `EDEN_NX2_PERF=0` turns every one off,
-  `EDEN_NX2_PERF_SAFE=1` keeps the experimental ones off, `EDEN_NX2_PERF_ON`/`_OFF=<name>,...` set
-  individual ones, and `EDEN_NX2_PERF_VERIFY=1` computes the old answer alongside each optimised
-  one, logs any difference and uses the old one (`src/video_core/nx2_perf.h`).
-  `src/tests/video_core/nx2_perf.cpp` and `nx2_perf_switches.cpp` cover the set and its parser.
+- **The Nx2 renderer's optimisations have names.** `VideoCommon::Nx2Perf` now enumerates 45 switches
+  with a name and a comment each, read from `EDEN_NX2_PERF*`, so one optimisation can be turned off
+  without rebuilding: the front's method classes, macro JIT batching, early MME reads, preflush
+  aging, download batching, the split's eager publish and submit-while-waited paths, and the rest of
+  what the renderer and the split GPU thread gate. They are on by default
+  except the experimental ones; `EDEN_NX2_PERF=0` turns every one off, `EDEN_NX2_PERF_SAFE=1` keeps
+  the experimental ones off, `EDEN_NX2_PERF_ON`/`_OFF=<name>,...` set individual ones, and
+  `EDEN_NX2_PERF_VERIFY=1` computes the old answer alongside each optimised one, logs any
+  difference and uses the old one (`src/video_core/nx2_perf.h`).
+  `src/tests/video_core/nx2_perf.cpp` and `nx2_perf_switches.cpp` cover the set and its parser. The
+  switches are read once at start, so `nx2_switches.txt` changes need a restart.
 - **The split GPU thread waits only for the queued work a read depends on.** The split itself is
   unchanged: `EDEN_NX2_SPLIT=2` in the shipped `nx2_switches.txt` keeps parsing and macro work on
   the front and runs the method stream on the back. The front's MME DMA reads now ask
@@ -82,17 +84,13 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
   collector evicting live images for good, 8-9k images re-created per 600 frames against about 30
   with the room. Smaller cards keep the old limit, which stays the default
   (`src/video_core/texture_cache/memory_budget.h`).
-- **Pipelines and shaders.** Each title's pipeline cache gets its own directory under the shader
-  directory (`src/video_core/renderer_vulkan/pipeline_cache_dir.h`); boot-built pipelines this
-  session has not drawn with are kept instead of evicted, a direct-mapped graphics pipeline cache
-  sits in front of the slow path, and graphics pipelines skipped at boot have their disk recordings
-  replayed on background workers on first use (`PipelineKeepPreloaded`, `PipelineFastCache`,
-  `ReplayDiskRecordings`). Misaligned 64/128-bit storage accesses are split instead of viewed as
-  vectors (`EGLANTINE_SSBO_ALIGN_FIX=0` restores the old views; clear the shader cache when
-  switching), stale-slot compute rebuilds keep dispatching the previous pipeline while the
-  replacement compiles, and the Ampere depth-compare lowering has a regression test
-  (`src/shader_recompiler/backend/spirv/ssbo_align_gate.h`,
-  `src/tests/video_core/ampere_depth_compare.cpp`).
+- **Pipeline lookup gets a fast path, and misaligned storage accesses are split.** A direct-mapped
+  graphics pipeline cache sits in front of the slow path (`PipelineFastCache`,
+  `src/video_core/renderer_vulkan/vk_pipeline_cache.cpp`). Misaligned 64/128-bit storage accesses
+  are split instead of viewed as vectors (`EGLANTINE_SSBO_ALIGN_FIX=0` restores the old views; clear
+  the shader cache when switching, `src/shader_recompiler/backend/spirv/ssbo_align_gate.h`), and the
+  Ampere depth-compare lowering has a regression test
+  (`src/tests/video_core/ampere_depth_compare.cpp`).
 
 ### Fixed
 
