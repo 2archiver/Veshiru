@@ -1,14 +1,9 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
-
-#include <unordered_map>
 
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/service.h"
@@ -285,13 +280,6 @@ private:
 
     std::shared_ptr<ResourceManager> resource_manager;
     std::shared_ptr<HidFirmwareSettings> firmware_settings;
-    struct NmousePointerRanges {
-        s32 width;
-        s32 height;
-    };
-    // Keyed by applet resource user id, as the console keeps them per application.
-    std::unordered_map<u64, u64> scene_ids_for_private_app;
-    std::unordered_map<u64, NmousePointerRanges> nmouse_pointer_ranges;
 };
 
 } // namespace Service::HID

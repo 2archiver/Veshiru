@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -86,7 +83,6 @@ struct Applet {
     // Application functions
     bool game_play_recording_supported{};
     bool media_playback_state{};
-    bool cpu_overclock_requested{}; ///< Switch 2 IPerformanceFunctions
     GamePlayRecordingState game_play_recording_state{GamePlayRecordingState::Disabled};
     bool jit_service_launched{};
     bool application_crash_report_enabled{};

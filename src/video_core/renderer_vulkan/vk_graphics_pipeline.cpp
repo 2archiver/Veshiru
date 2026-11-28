@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -28,6 +25,7 @@
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
+#include "video_core/renderer_vulkan/vk_frame_dump.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_pipeline_binaries.h"
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
@@ -36,7 +34,6 @@
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
-#include "video_core/nx2_perf.h"
 #include "video_core/shader_handle_program.h"
 #include "video_core/shader_notify.h"
 #include "video_core/texture_cache/texture_cache.h"
@@ -418,7 +415,6 @@ GraphicsPipeline::GraphicsPipeline(
         num_image_elements += Shader::NumDescriptors(info->texture_descriptors);
         num_image_elements += Shader::NumDescriptors(info->image_descriptors);
         num_descriptor_entries += NumDescriptorEntries(*info);
-        has_render_area_push_constants |= info->uses_render_area;
     }
     fragment_has_color0_output = stage_infos[NUM_STAGES - 1].stores_frag_color[0];
     // The guest leaves render target components the fragment shader doesn't output untouched,
@@ -743,51 +739,7 @@ KeptGraphicsStages GraphicsPipeline::TakeKeptStages() {
     return kept;
 }
 
-bool GraphicsPipeline::Nx2MayWriteMemory() const noexcept {
-    for (const Shader::Info& info : stage_infos) {
-        if (info.stores_global_memory || info.uses_global_increment ||
-            info.uses_global_decrement || info.uses_int64_bit_atomics ||
-            info.uses_atomic_f32_add || info.uses_atomic_f16x2_add ||
-            info.uses_atomic_f16x2_min || info.uses_atomic_f16x2_max ||
-            info.uses_atomic_f32x2_add || info.uses_atomic_f32x2_min ||
-            info.uses_atomic_f32x2_max || info.uses_atomic_s32_min || info.uses_atomic_s32_max ||
-            info.uses_atomic_image_u32 || info.uses_typeless_image_writes ||
-            info.is_task || info.is_mesh) {
-            return true;
-        }
-        for (const auto& desc : info.storage_buffers_descriptors) {
-            if (desc.is_written) {
-                return true;
-            }
-        }
-        for (const auto& desc : info.image_buffer_descriptors) {
-            if (desc.is_written) {
-                return true;
-            }
-        }
-        for (const auto& desc : info.image_descriptors) {
-            if (desc.is_written) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-void GraphicsPipeline::RunBuild() {
-    // A draw or dispatch that needs the pipeline builds it on the scheduler thread instead of
-    // waiting for the worker queue, which can hold hundreds of builds, to reach it.
-    if (build_claimed.exchange(true)) {
-        return;
-    }
-    build_task();
-    build_task = nullptr;
-}
-
 void GraphicsPipeline::AddTransition(GraphicsPipeline* transition) {
-    if (transition_keys.size() >= 16) {
-        return;
-    }
     transition_keys.push_back(transition->key);
     transitions.push_back(transition);
 }
@@ -802,7 +754,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     samplers.reserve(num_textures);
 
     namespace Profile = VideoCommon::Nx2Profile;
-    if (num_image_elements != 0 || num_textures != 0) {
+    {
         Profile::Scope scope{Profile::Zone::SyncDescriptors};
         texture_cache.SynchronizeDescriptors(false);
     }
@@ -812,7 +764,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     const auto& regs{maxwell3d->regs};
     const bool via_header_index{regs.sampler_binding == Maxwell::SamplerBinding::ViaHeaderBinding};
 
-    const bool use_memo{texture_memo_eligible};
+    const bool use_memo{texture_memo_eligible && !RecordingSampledTextures()};
     const bool verify_memo{use_memo && TextureMemoVerify()};
     boost::container::small_vector<GPUVAddr, 32> handle_addresses;
     boost::container::small_vector<VideoCommon::TextureHandleRead, 32> handle_reads;
@@ -930,14 +882,14 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                     const u32 second_offset{desc.secondary_cbuf_offset};
                     const GPUVAddr separate_addr{cbufs[desc.secondary_cbuf_index].address +
                                                  second_offset};
-                    const u32 lhs_raw{read_word(addr) << desc.shift_left};
-                    const u32 rhs_raw{read_word(separate_addr)
+                    const u32 lhs_raw{gpu_memory->Read<u32>(addr) << desc.shift_left};
+                    const u32 rhs_raw{gpu_memory->Read<u32>(separate_addr)
                                       << desc.secondary_shift_left};
                     const u32 raw{lhs_raw | rhs_raw};
                     return TexturePair(raw, via_header_index);
                 }
             }
-            return TexturePair(read_word(addr), via_header_index);
+            return TexturePair(gpu_memory->Read<u32>(addr), via_header_index);
         }};
         const auto add_image{[&](const auto& desc, bool blacklist) LAMBDA_FORCEINLINE {
             for (u32 index = 0; index < desc.count; ++index) {
@@ -1084,7 +1036,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         }
         ReportTextureMemo();
     }
-    if (DrawReuseProbeEnabled()) {
+    if (RecordingSampledTextures() || DrawReuseProbeEnabled()) {
         sampled_images.clear();
         size_t view_index{};
         size_t sampler_index{};
@@ -1244,11 +1196,13 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
             }
         }
         const auto& info{stage_infos[stage]};
-        if (!info.texture_descriptors.empty() || !info.image_descriptors.empty() ||
-            !info.texture_buffer_descriptors.empty() || !info.image_buffer_descriptors.empty()) {
-            Profile::Scope scope{Profile::Zone::PushDescriptors};
-            PushImageDescriptors(texture_cache, guest_descriptor_queue, info, rescaling,
-                                 samplers_it, views_it);
+        if (info.uses_render_area) {
+            render_area.uses_render_area = true;
+            // Switch 2 titles may never program the surface clip; use colour target 0 then.
+            const u32 clip_width = regs.surface_clip.width, clip_height = regs.surface_clip.height;
+            const bool clip_set = clip_width != 0 && clip_height != 0;
+            render_area.words = {static_cast<float>(clip_set ? clip_width : u32{regs.rt[0].width}),
+                                 static_cast<float>(clip_set ? clip_height : u32{regs.rt[0].height})};
         }
     }};
     if constexpr (Spec::enabled_stages[0]) {
@@ -1305,7 +1259,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         return false;
     }
     Profile::Scope scope{Profile::Zone::ConfigureDraw};
-    return ConfigureDraw(rescaling, render_area, is_indexed);
+    return ConfigureDraw(rescaling, render_area);
 }
 
 bool GraphicsPipeline::DeltaImagesChange() const noexcept {
@@ -1501,7 +1455,6 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     if (descriptor_set_layout && uses_descriptor_buffer) {
         const auto* const entries = static_cast<const DescriptorUpdateEntry*>(descriptor_data);
         const bool reuse_allocation =
-            reuse_descriptors &&
             last_descriptor_buffer_generation == descriptor_buffer_ring.CurrentGeneration() &&
             last_descriptor_payload.size() == num_descriptor_entries &&
             std::memcmp(last_descriptor_payload.data(), entries,
@@ -1517,18 +1470,13 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                 LOG_DEBUG(Render_Vulkan, "Failed to reserve descriptor memory, skipping draw");
                 return false;
             }
-            const bool can_diff = last_descriptor_buffer_generation == alloc.generation &&
-                                  last_descriptor_payload.size() == num_descriptor_entries;
-            if (last_descriptor_payload.size() != num_descriptor_entries) {
-                last_descriptor_payload.resize(num_descriptor_entries);
-            }
-            WriteDescriptorBuffer(device, descriptor_buffer_layout, entries, alloc.host,
-                                  last_descriptor_payload, last_descriptor_bytes, can_diff);
+            WriteDescriptorBuffer(device, descriptor_buffer_layout, entries, alloc.host);
             descriptor_buffer_offset = alloc.offset;
             descriptor_buffer_chunk = alloc.chunk;
             last_descriptor_buffer_offset = alloc.offset;
             last_descriptor_buffer_chunk = alloc.chunk;
             last_descriptor_buffer_generation = alloc.generation;
+            last_descriptor_payload.assign(entries, entries + num_descriptor_entries);
         }
     }
 
@@ -1702,23 +1650,16 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     if (descriptor_set_layout && !uses_push_descriptor && !uses_descriptor_buffer) {
         const auto* const entries = static_cast<const DescriptorUpdateEntry*>(descriptor_data);
         update_descriptors =
-            !reuse_descriptors || bind_pipeline ||
-            last_descriptor_payload.size() != num_descriptor_entries ||
+            bind_pipeline || last_descriptor_payload.size() != num_descriptor_entries ||
             std::memcmp(last_descriptor_payload.data(), entries,
                         num_descriptor_entries * sizeof(DescriptorUpdateEntry)) != 0;
         if (update_descriptors) {
             last_descriptor_payload.assign(entries, entries + num_descriptor_entries);
         }
     }
-    // The mesh emulation binds its descriptor sets on every draw (dispatch and draw).
-    if (descriptor_set_layout && !uses_descriptor_buffer &&
-        (uses_push_descriptor || update_descriptors || mesh_emulation)) {
-        scheduler.InvalidateDescriptorBuffer();
-    }
-    const auto rescaling_data = rescaling.Data();
     scheduler.Record([this, descriptor_data, bind_pipeline, update_descriptors,
                       descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
-                      rescaling_data, is_rescaling, update_rescaling,
+                      rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,
                       uses_render_area = render_area.uses_render_area,
                       render_area_data = render_area.words](vk::CommandBuffer cmdbuf) {
         if (bind_descriptor_buffer) {
@@ -1902,7 +1843,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     if (!vertex_binding_divisors.empty()) {
         vertex_input_ci.pNext = &input_divisor_ci;
     }
-    const bool has_tess_stages = !IsMeshPipeline() && (spv_modules[1] || spv_modules[2]);
+    const bool has_tess_stages = spv_modules[1] || spv_modules[2];
     auto input_assembly_topology = MaxwellToVK::PrimitiveTopology(device, key.state.topology);
     if (input_assembly_topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
         if (!has_tess_stages) {

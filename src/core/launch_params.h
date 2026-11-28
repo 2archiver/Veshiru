@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -24,7 +21,6 @@ struct LaunchParams {
     std::string program_args{};
     std::optional<std::string> config_path{};
     std::optional<int> selected_user{};
-    bool enable_gdbstub = false;
     std::optional<u16> override_gdb_port{};
     std::optional<std::string> log_filter{};
     // --pack-nup <dump> [<out.nup>]: packs a loose dump instead of booting a game (eden-cli).

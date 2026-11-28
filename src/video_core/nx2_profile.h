@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -8,7 +5,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #ifdef _MSC_VER
 #include <intrin.h>
 #elif defined(ARCHITECTURE_x86_64)
@@ -16,7 +12,6 @@
 #endif
 #include <chrono>
 #include <cstdlib>
-#include <optional>
 #include <string>
 #include <unordered_set>
 
@@ -55,10 +50,6 @@ enum class Zone : u32 {
     UpdateBuffers,
     DescriptorAcquire,
     BindStageBuffers,
-    BindUniformBank,
-    BindUniformStream,
-    BindUniformCached, ///< A bind that hits the bind memo (buffer_cache_base.h)
-    BindStorage,
     PushDescriptors,
     RenderTargets,
     ConfigureDraw,
@@ -70,11 +61,9 @@ enum class Zone : u32 {
     Method,       ///< Engine method calls (what a split GPU thread's back half would run)
     SplitDrain,   ///< Split GPU thread: the front waits for the back (gpu_split.h)
     SplitWait,    ///< Split GPU thread: the back waits for work
-    BackIdleHook, ///< Split GPU thread: submits deferred work before sleeping
     WriterWait,
     ListSubmitWait,
     ListGpuWait,
-    ListCopyWait,
     GraphicsPipelineMiss, ///< A graphics pipeline built on the GPU thread
     ComputePipelineMiss,  ///< A compute pipeline built on the GPU thread
     PipelineWait,         ///< VulkanWorker: a draw or dispatch waits for its pipeline's build
@@ -93,12 +82,10 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "tick",          "run",           "flush/inval",    "macro",          "draw",
     "clear",         "compute",       "flush work",     "pipeline lookup", "configure",
     "sync descriptors", "read handles", "fill image views", "texture buffers", "update buffers",
-    "descriptor acquire", "bind stage buffers", "bind uniform bank", "bind uniform stream",
-    "bind uniform cached",
-    "bind storage", "push descriptors", "render targets",
+    "descriptor acquire", "bind stage buffers", "push descriptors", "render targets",
     "configure draw", "dynamic state", "draw record", "texture upload", "fence",
-    "fence skipped", "method", "split drain", "split wait", "back idle hook",
-    "writer wait", "list submit wait", "list GPU wait", "list copy wait", "graphics pipeline miss",
+    "fence skipped", "method", "split drain", "split wait",
+    "writer wait", "list submit wait", "list GPU wait", "graphics pipeline miss",
     "compute pipeline miss", "pipeline wait", "shader capture", "texture cache", "GPU wait",
     "present", "worker idle",
     "present wait", "queue submit",
@@ -118,7 +105,6 @@ inline constexpr auto stutter_categories = [] {
     set(Zone::PendingSleep, Category::Idle);
     set(Zone::SplitDrain, Category::Idle);
     set(Zone::SplitWait, Category::Idle);
-    set(Zone::BackIdleHook, Category::Idle);
     set(Zone::WriterWait, Category::Idle);
     set(Zone::WorkerIdle, Category::Idle);
     set(Zone::GraphicsPipelineMiss, Category::GraphicsMiss);
@@ -133,13 +119,9 @@ inline constexpr auto stutter_categories = [] {
     set(Zone::TextureBuffers, Category::BufferCache);
     set(Zone::UpdateBuffers, Category::BufferCache);
     set(Zone::BindStageBuffers, Category::BufferCache);
-    set(Zone::BindUniformBank, Category::BufferCache);
-    set(Zone::BindUniformStream, Category::BufferCache);
-    set(Zone::BindStorage, Category::BufferCache);
     set(Zone::Fence, Category::QueryFence);
     set(Zone::ListSubmitWait, Category::QueryFence);
     set(Zone::ListGpuWait, Category::QueryFence);
-    set(Zone::ListCopyWait, Category::QueryFence);
     set(Zone::GpuWait, Category::QueryFence);
     set(Zone::Present, Category::Present);
     set(Zone::PresentWait, Category::Present);
@@ -181,89 +163,12 @@ inline u64 Ticks() {
 #endif
 }
 
-enum class FlushOrigin : u8 {
-    Other,
-    Fence,
-    IdleHook,
-    Waited,
-    GpuIdle,
-    ListCopy,
-    Count,
-};
-
-inline constexpr std::array<const char*, static_cast<size_t>(FlushOrigin::Count)>
-    flush_origin_names{"other", "fence", "idle hook", "front waited", "GPU idle", "list copy"};
-
-enum class Counter : u32 {
-    DownloadBytes,
-    DownloadCopies,
-    DmaReadBytes,
-    DownloadBytesOnDmaPages,
-    MethodWrites,
-    SameValueWrites,
-    AcquireChecks,
-    AcquireWaits,
-    IndirectRecords,
-    IndirectRecordsUnordered,
-    BankLateChanges,
-    BankRechecksSkippedByFrame,
-    PendingWaits,
-    PendingWakePush,
-    PendingWakeLatch,
-    PendingWakeTimeout,
-    DrawBeginCoalesced,
-    DirectWrites,
-    MacroWrites,
-    DmaReadsEarly,
-    DmaReadsWaitUnknown,
-    DmaReadsWaitWrite,
-    DmaReadsWaitGpu,
-    DmaReadsOverlayFallback,
-    DmaReadsWriterSetFallback,
-    DmaReadsWriterSet,
-    DmaReadsOverlayWaited,
-    DmaReadsOverlayNoWait,
-    DmaReadsWaitWriteOther,
-    DmaReadsWaitWriteCbLost,
-    DmaReadsWaitWriteCbOlder,
-    DownloadAgeNone,
-    DownloadAge60,
-    DownloadAge120,
-    DownloadAge600,
-    DownloadAge3600,
-    DownloadAgeOlder,
-    BindMemoHits,
-    BindMemoMisses,
-    Count,
-};
-
-inline constexpr std::array<const char*, static_cast<size_t>(Counter::Count)> counter_names{
-    "download bytes", "download copies", "MME DMA bytes", "download bytes on MME DMA pages",
-    "3D method writes", "same-value writes", "semaphore acquires", "unmet acquires",
-    "indirect records", "unordered indirect records", "late uniform-bank changes",
-    "uniform-bank rechecks skipped by frame", "pending waits", "pending wakes by push",
-    "pending wakes by latch", "pending wake timeouts", "coalesced draw.begin writes",
-    "direct method writes", "macro method writes", "early MME DMA reads",
-    "MME DMA reads waiting for unknown writer", "MME DMA reads waiting for known writer",
-    "MME DMA reads waiting for GPU", "MME DMA overlay fallbacks", "MME DMA writer-set fallbacks",
-    "MME DMA reads using writer set", "MME DMA reads waiting for overlay", "MME DMA overlay no-waits",
-    "MME DMA writes from other target", "MME DMA writes from lost CB overlay",
-    "MME DMA writes from older CB overlay", "download bytes with no age mark",
-    "download bytes age under 60 frames",
-    "download bytes age under 120 frames", "download bytes age under 600 frames",
-    "download bytes age under 3600 frames", "download bytes age over 3600 frames",
-    "bind memo hits", "bind memo misses",
-};
-
 struct ThreadData {
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
-    std::array<u64, static_cast<size_t>(Counter::Count)> counters{};
+    std::array<u64, 16> counters{}; ///< See Counter
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_ns{};
     std::array<u64, static_cast<size_t>(DrainSite::Count)> drain_count{};
-    std::array<u64, static_cast<size_t>(FlushOrigin::Count)> flushes{};
-    u64 list_copy_done_ns{};
-    u64 list_copy_done_count{};
     /// GPU waits by the zone they happened in (Other: outside every zone)
     std::array<u64, static_cast<size_t>(Zone::Count)> gpu_wait_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> gpu_wait_count{};
@@ -275,10 +180,6 @@ struct ThreadData {
 };
 
 inline thread_local ThreadData t_data;
-/// Aggregate work completed by the fencing thread; the GPU thread consumes these per report window.
-inline std::atomic<u64> g_fencing_written_bytes{};
-inline std::atomic<u64> g_fencing_lock_ns{};
-inline std::atomic<u64> g_fencing_pops{};
 
 class Scope {
 public:
@@ -334,6 +235,23 @@ private:
     StutterTrace::Category outer{StutterTrace::Category::None};
     u64 start{};
     u64 parent_child_ns{};
+};
+
+/// Amounts counted on the GPU thread, logged per second with the zones.
+enum class Counter : u32 {
+    DownloadBytes,  ///< Buffer data copied back from the host GPU at fences
+    DownloadCopies, ///< Buffer ranges copied back
+    DmaReadBytes,   ///< Guest memory the native MME read with DMA
+    DownloadBytesOnDmaPages, ///< Of DownloadBytes: on pages the MME has DMA-read
+    MethodWrites,   ///< 3D register writes (Maxwell3D::CallMethod below the macro range)
+    SameValueWrites, ///< Of MethodWrites: the register already held the value
+    AcquireChecks,  ///< Semaphore acquires evaluated
+    AcquireWaits,   ///< Of AcquireChecks: not met yet (the channel waits)
+    /// DrawIndexedIndirect calls the host GPU drew from their GPU-written records
+    /// (Maxwell3D::FrontTakeIndirectRecord)
+    IndirectRecords,
+    /// Of those, drawn after storage writes no barrier ordered yet (RasterizerVulkan::DrawIndirect)
+    IndirectRecordsUnordered,
 };
 
 /// Method calls on this thread by method (3D registers on the back, macros on the front), and
@@ -394,47 +312,6 @@ inline void Add(Counter counter, u64 amount) {
     }
 }
 
-inline thread_local FlushOrigin t_flush_origin{FlushOrigin::Other};
-
-/// Tags the scheduler submissions made in its scope (only while profiling); nests.
-class FlushOriginTag {
-public:
-    explicit FlushOriginTag(FlushOrigin origin) : enabled{Enabled()} {
-        if (enabled) {
-            previous = t_flush_origin;
-            t_flush_origin = origin;
-        }
-    }
-    ~FlushOriginTag() {
-        if (enabled) {
-            t_flush_origin = previous;
-        }
-    }
-
-    FlushOriginTag(const FlushOriginTag&) = delete;
-    FlushOriginTag& operator=(const FlushOriginTag&) = delete;
-
-private:
-    bool enabled;
-    FlushOrigin previous{};
-};
-
-/// Scheduler::Flush: one submission, counted by the current tag.
-inline void AddFlush() {
-    if (Enabled()) {
-        ++t_data.flushes[static_cast<size_t>(t_flush_origin)];
-    }
-}
-
-/// The front waited for a command list copy recorded at `recorded` (Now; 0 when not profiling)
-/// and it is done now.
-inline void AddListCopyDone(u64 recorded) {
-    if (Enabled() && recorded != 0) {
-        t_data.list_copy_done_ns += Now() - recorded;
-        ++t_data.list_copy_done_count;
-    }
-}
-
 /// The front waited for the back since `start` (Ticks) for `site`.
 inline void AddDrain(DrainSite site, u64 start) {
     if (Enabled()) {
@@ -454,7 +331,6 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
     auto& data = t_data;
     const u64 now = Now();
     if (data.window_start == 0) {
-        data = {};
         data.window_start = now;
         data.window_start_ticks = Ticks();
         data.cpu_start_ns = Common::CurrentThreadCpuTimeNs();
@@ -462,8 +338,7 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
         return;
     }
     const u64 window = now - data.window_start;
-    constexpr u64 ReportIntervalNs = 10'000'000'000;
-    if (window < ReportIntervalNs) {
+    if (window < 10'000'000'000ULL) {
         return;
     }
     const auto cpu_now = Common::CurrentThreadCpuTimeNs();
@@ -520,48 +395,6 @@ inline void Report(const char* thread_name = "GPU thread", bool report_all_conte
     if (!gpu_waits.empty()) {
         gpu_waits.pop_back();
         line += " | GPU waits by zone:" + gpu_waits;
-    }
-    std::string extra_counters;
-    for (size_t i = static_cast<size_t>(Counter::IndirectRecords); i < data.counters.size(); ++i) {
-        if (data.counters[i] == 0) {
-            continue;
-        }
-        const double rate = static_cast<double>(data.counters[i]) * 1e9 / window;
-        if (i >= static_cast<size_t>(Counter::DownloadAgeNone)) {
-            extra_counters += fmt::format(" {} {:.1f} KiB/s,", counter_names[i], rate / 1024.0);
-        } else {
-            extra_counters += fmt::format(" {} {:.0f}/s,", counter_names[i], rate);
-        }
-    }
-    if (!extra_counters.empty()) {
-        extra_counters.pop_back();
-        line += " | NX2 counters:" + extra_counters;
-    }
-    const u64 fencing_written_bytes = g_fencing_written_bytes.exchange(0, std::memory_order_relaxed);
-    const u64 fencing_lock_ns = g_fencing_lock_ns.exchange(0, std::memory_order_relaxed);
-    const u64 fencing_pops = g_fencing_pops.exchange(0, std::memory_order_relaxed);
-    if (fencing_written_bytes != 0 || fencing_lock_ns != 0 || fencing_pops != 0) {
-        line += fmt::format(" | fence buffer work {:.0f} pops/s, {:.1f} ms lock/s, {:.1f} KiB/s "
-                            "written",
-                            static_cast<double>(fencing_pops) * 1e9 / window,
-                            static_cast<double>(fencing_lock_ns) * 1000.0 / window,
-                            static_cast<double>(fencing_written_bytes) * 1e9 / window / 1024.0);
-    }
-    std::string flushes;
-    for (size_t i = 0; i < data.flushes.size(); ++i) {
-        if (data.flushes[i] != 0) {
-            flushes += fmt::format(" {} {:.0f}/s,", flush_origin_names[i],
-                                   static_cast<double>(data.flushes[i]) * 1e9 / window);
-        }
-    }
-    if (!flushes.empty()) {
-        flushes.pop_back();
-        line += " | submissions by origin:" + flushes;
-    }
-    if (data.list_copy_done_count != 0) {
-        line += fmt::format(" | command-list copy waits {:.1f} ms ({:.0f}/s)",
-                            static_cast<double>(data.list_copy_done_ns) * 1000.0 / window,
-                            static_cast<double>(data.list_copy_done_count) * 1e9 / window);
     }
     {
         auto& own = Common::t_spin_contention;

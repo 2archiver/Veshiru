@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -23,18 +20,6 @@
 #endif
 
 namespace Core {
-
-/// Parses a whole decimal TCP port (1-65535); nullopt for anything else.
-static std::optional<u16> ParsePort(const char* text) {
-    char* end = nullptr;
-    const unsigned long port = std::strtoul(text, &end, 10);
-    if (end == text || *end != '\0' || port == 0 || port > 65535) {
-        return std::nullopt;
-    }
-    return static_cast<u16>(port);
-}
-
-/// Parses the command line options into a LaunchParams.
 LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wchar_t *argv_w[]) noexcept {
     LaunchParams p{};
 
@@ -73,16 +58,7 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
         if (int arg = getopt_long(argc, argv, "d:c:fhg:m:p:u:vi:nsx", long_options, &option_index); arg != -1) {
             switch (arg) {
             case 'd':
-                // Without a port, the configured one is used (the config is not loaded yet).
-                p.enable_gdbstub = true;
-                if (optarg != nullptr) {
-                    if (const auto port = ParsePort(optarg)) {
-                        p.override_gdb_port = *port;
-                    } else {
-                        LOG_ERROR(Frontend, "Invalid --debug port '{}', using the configured port",
-                                  optarg);
-                    }
-                }
+                p.override_gdb_port = uint16_t(atoi(optarg));
                 break;
             case 'c':
                 p.config_path = optarg;
@@ -223,7 +199,6 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
     return p;
 }
 
-/// Applies the parsed command line options to the log filter and settings.
 void ApplyLaunchParams(LaunchParams const& lp) noexcept {
     // apply the log_filter setting
     // the logger was initialized before and doesn't pick up the filter on its own
@@ -241,10 +216,8 @@ void ApplyLaunchParams(LaunchParams const& lp) noexcept {
     if (lp.selected_user.has_value()) {
         Settings::values.current_user = std::clamp(*lp.selected_user, 0, 7);
     }
-    if (lp.enable_gdbstub) {
-        Settings::values.use_gdbstub = true;
-    }
     if (lp.override_gdb_port.has_value()) {
+        Settings::values.use_gdbstub = true;
         Settings::values.gdbstub_port = *lp.override_gdb_port;
     }
     if (lp.force_single_core) {

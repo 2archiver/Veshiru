@@ -2376,13 +2376,13 @@ TEST_CASE("MKW window filters process a saved gameplay image at display resoluti
                 }
                 CHECK(identity_error <= 1); // orientation, channel order, crop and gamma
             }
-            REQUIRE(Common::DiagImage::WritePng(directory / fmt::format("{}x{}-filter-{}.png",
+            REQUIRE(Common::DiagRequest::WritePng(directory / fmt::format("{}x{}-filter-{}.png",
                                                                           size.width, size.height,
                                                                           static_cast<u32>(filter)),
                                                   size.width, size.height, filtered));
         }
     }
-    REQUIRE(Common::DiagImage::WriteTextFile(directory / "metrics.csv", csv));
+    REQUIRE(Common::DiagRequest::WriteTextFile(directory / "metrics.csv", csv));
 }
 
 TEST_CASE("MKW buffer lookup cache follows pool replacement and virtual remaps", "[nvn][mkw]") {

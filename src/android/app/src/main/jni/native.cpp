@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -1964,7 +1961,7 @@ JNIEXPORT jobjectArray JNICALL Java_dev_veshiru_emulator_NativeLibrary_getAllUse
     manager.ResetUserSaveFile();
 
     if (manager.GetUserCount() == 0) {
-        manager.CreateNewUser(Common::UUID::MakeRandom(), "Eglantine");
+        manager.CreateNewUser(Common::UUID::MakeRandom(), "Eden");
         manager.WriteUserSaveFile();
     }
 
@@ -2063,7 +2060,19 @@ JNIEXPORT jboolean JNICALL Java_dev_veshiru_emulator_NativeLibrary_updateUserUse
     const auto username = Common::Android::GetJString(env, jusername);
     const auto uuid = Common::UUID{uuid_string};
 
-    return manager.SetProfileUsername(uuid, username);
+    Service::Account::ProfileBase profile{};
+    if (!manager.GetProfileBase(uuid, profile)) {
+        return false;
+    }
+
+    std::fill(profile.username.begin(), profile.username.end(), '\0');
+    std::copy(username.begin(), username.end(), profile.username.begin());
+
+    if (manager.SetProfileBase(uuid, profile)) {
+        manager.WriteUserSaveFile();
+        return true;
+    }
+    return false;
 }
 
 JNIEXPORT jboolean JNICALL Java_dev_veshiru_emulator_NativeLibrary_removeUser(
@@ -2169,7 +2178,7 @@ JNIEXPORT void JNICALL Java_dev_veshiru_emulator_NativeLibrary_reloadProfiles(
 
     // create a default user if non exist
     if (manager.GetUserCount() == 0) {
-        manager.CreateNewUser(Common::UUID::MakeRandom(), "Eglantine");
+        manager.CreateNewUser(Common::UUID::MakeRandom(), "Eden");
         manager.WriteUserSaveFile();
     }
 

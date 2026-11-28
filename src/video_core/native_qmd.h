@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
@@ -12,8 +9,6 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
-
-#include "video_core/nx2_perf.h"
 
 namespace Tegra {
 
@@ -42,8 +37,6 @@ public:
     using Address = std::uint64_t;
     using Descriptor = std::array<Word, 64>;
     struct RejectShaderDispatch { bool operator()(const Descriptor&) const { return false; } };
-    /// Enable the per-dispatch scratch optimization (tests can compare it with the reference path).
-    bool nx2_perf = VideoCommon::Nx2Perf::On(VideoCommon::Nx2Perf::Opt::QmdScratch);
     // Optional diagnostics: called with "load"/"count"/"defer"/"run" events.
     std::function<void(std::string_view, Address, std::int32_t)> trace;
     // Optional diagnostics: called with the QMD, slot and raw words of a release it skips.
@@ -65,8 +58,7 @@ public:
     std::string_view Signal(Address address, Word argument, Read read, Release release, Dispatch dispatch) {
         struct Pending { Address address; Word action; Word count; };
         std::string_view error;
-        std::array<Pending, 256> pending;
-        if (!nx2_perf || VideoCommon::Nx2Perf::Verify()) pending = {};
+        std::array<Pending, 256> pending{};
         std::size_t count = 1;
         pending[0] = {address, argument & 15, ((argument >> 14) & 0x3ff) + 1};
         for (std::size_t i = 0; i < count; ++i) {
@@ -79,11 +71,9 @@ public:
                 if (states.size() >= 4096) return "QMD cache limit";
             }
             auto& state = states[request.address];
-            bool just_loaded = false;
             if (request.action == 3 || request.action == 2) {
                 if (request.action == 3 || !state.loaded) {
                     if (!read(request.address, state.descriptor)) return "unmapped QMD";
-                    just_loaded = true;
                     const auto& qmd = state.descriptor;
                     if ((qmd[18] & 0xff) != 0x30 || (qmd[4] & 0x100)) return "unsupported QMD version or queue";
                     if constexpr (std::is_same_v<Dispatch, RejectShaderDispatch>) {
@@ -116,7 +106,7 @@ public:
             if (state.dependencies < 0) return "QMD dependency underflow";
             // The SDK patches release payloads while a scheduled QMD is
             // waiting for its remaining dependencies. Fetch them at execution.
-            if (!just_loaded && !read(request.address, state.descriptor)) return "unmapped QMD";
+            if (!read(request.address, state.descriptor)) return "unmapped QMD";
             const auto qmd = state.descriptor;
             if ((qmd[18] & 0xff) != 0x30 || (qmd[4] & 0x100)) return "unsupported QMD version or queue";
             // A program Eden can't run is skipped, but the QMD still completes: its releases

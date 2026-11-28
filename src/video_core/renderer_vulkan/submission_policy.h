@@ -11,31 +11,12 @@
 namespace Vulkan::SubmissionPolicy {
 
 inline constexpr u32 DefaultNativeBudget = 128;
-inline constexpr u32 WaitedSubmitDraws = 32; ///< Minimum recorded draws before an unblock submit
-inline constexpr u32 IdleSubmitDraws = 64;   ///< Minimum recorded draws before an idle submit
 
 enum class Action {
     None,
     Dispatch,
     Flush,
 };
-
-enum class IdleSubmitReason {
-    None,
-    FrontWaiting,
-    GpuIdle,
-};
-
-constexpr IdleSubmitReason ChooseIdleSubmit(u32 draws, bool front_waiting,
-                                            bool gpu_caught_up) noexcept {
-    if (front_waiting && draws >= WaitedSubmitDraws) {
-        return IdleSubmitReason::FrontWaiting;
-    }
-    if (gpu_caught_up && draws >= IdleSubmitDraws) {
-        return IdleSubmitReason::GpuIdle;
-    }
-    return IdleSubmitReason::None;
-}
 
 inline std::optional<u32> ParseBudget(std::string_view value) {
     if (value.empty()) {

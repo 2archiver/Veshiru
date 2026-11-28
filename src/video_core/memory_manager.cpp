@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -41,14 +38,15 @@ std::atomic<size_t> MemoryManager::unique_identifier_generator{};
 
 MemoryManager::MemoryManager(Core::System& system_, MaxwellDeviceMemoryManager& memory_, u64 address_space_bits_, GPUVAddr split_address_, u64 big_page_bits_, u64 page_bits_)
     : system{system_}, memory{memory_}, address_space_bits{address_space_bits_}
-    , split_address{split_address_}, big_page_bits{big_page_bits_}
+    , split_address{split_address_}, page_bits{page_bits_}, big_page_bits{big_page_bits_}
     , entries{}, big_entries{}
     , page_table{address_space_bits, address_space_bits + page_bits - 38, page_bits != big_page_bits ? page_bits : 0}
     , kind_map{PTEKind::INVALID}, unique_identifier{unique_identifier_generator.fetch_add(1, std::memory_order_acq_rel)}
     , accumulator{}
 {
-    ASSERT(page_bits_ == page_bits);
     address_space_size = 1ULL << address_space_bits;
+    page_size = 1ULL << page_bits;
+    page_mask = page_size - 1ULL;
     big_page_size = 1ULL << big_page_bits;
     big_page_mask = big_page_size - 1ULL;
     const u64 page_table_bits = address_space_bits - page_bits;
@@ -154,11 +152,7 @@ GPUVAddr MemoryManager::PageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr de
         const GPUVAddr current_gpu_addr = gpu_addr + offset;
         [[maybe_unused]] const auto current_entry_type = GetEntry(current_gpu_addr, false);
         SetEntry(current_gpu_addr, entry_type, false);
-        const bool changed_backing = entry_type == EntryType::Mapped &&
-            current_entry_type == EntryType::Mapped &&
-            page_table[PageEntryIndex(current_gpu_addr, false)] !=
-                static_cast<u32>((dev_addr + offset) >> cpu_page_bits);
-        if (current_entry_type != entry_type || changed_backing) {
+        if (current_entry_type != entry_type) {
             if (modified_size == 0) {
                 modified_start = current_gpu_addr;
             }
@@ -206,11 +200,7 @@ GPUVAddr MemoryManager::BigPageTableOp(GPUVAddr gpu_addr, [[maybe_unused]] DAddr
         const GPUVAddr current_gpu_addr = gpu_addr + offset;
         [[maybe_unused]] const auto current_entry_type = GetEntry(current_gpu_addr, true);
         SetEntry(current_gpu_addr, entry_type, true);
-        const bool changed_backing = entry_type == EntryType::Mapped &&
-            current_entry_type == EntryType::Mapped &&
-            big_page_table_dev[PageEntryIndex(current_gpu_addr, true)] !=
-                static_cast<u32>((dev_addr + offset) >> cpu_page_bits);
-        if (current_entry_type != entry_type || changed_backing) {
+        if (current_entry_type != entry_type) {
             if (modified_size == 0) {
                 modified_start = current_gpu_addr;
             }
@@ -257,33 +247,13 @@ void MemoryManager::BindRasterizer(VideoCore::RasterizerInterface* rasterizer_) 
     rasterizer = rasterizer_;
 }
 
-void MemoryManager::PreserveMapping(GPUVAddr gpu_addr, std::size_t size) {
-    if (!UsesNativeTiling() || rasterizer == nullptr || size == 0) {
-        return;
-    }
-    boost::container::small_vector<std::pair<DAddr, std::size_t>, 32> ranges;
-    GetSubmappedRangeImpl<false>(gpu_addr, size, ranges);
-    for (const auto& [address, bytes] : ranges) {
-        rasterizer->FlushRegion(address, bytes, VideoCommon::CacheType::All);
-    }
-}
-
 GPUVAddr MemoryManager::Map(GPUVAddr gpu_addr, DAddr dev_addr, std::size_t size, PTEKind kind, bool is_big_pages) {
-    if (UsesNativeTiling() && rasterizer != nullptr && size != 0 &&
-        (!IsContinuousRange(gpu_addr, size) || GpuToCpuAddress(gpu_addr) != dev_addr)) {
-        PreserveMapping(gpu_addr, size);
-        // Another virtual view can own the newest image contents at this device address.
-        // Publish it while its translation is valid, then make sampled aliases reload it.
-        rasterizer->FlushRegion(dev_addr, size, VideoCommon::CacheType::All);
-        rasterizer->InvalidateRegion(dev_addr, size, VideoCommon::CacheType::TextureCache);
-    }
     if (is_big_pages)
         return BigPageTableOp(gpu_addr, dev_addr, size, kind, EntryType::Mapped);
     return PageTableOp(gpu_addr, dev_addr, size, kind, EntryType::Mapped);
 }
 
 GPUVAddr MemoryManager::MapSparse(GPUVAddr gpu_addr, std::size_t size, bool is_big_pages) {
-    PreserveMapping(gpu_addr, size);
     if (is_big_pages)
         return BigPageTableOp(gpu_addr, 0, size, PTEKind::INVALID, EntryType::Reserved);
     return PageTableOp(gpu_addr, 0, size, PTEKind::INVALID, EntryType::Reserved);
@@ -293,7 +263,6 @@ void MemoryManager::Unmap(GPUVAddr gpu_addr, std::size_t size) {
     if (size == 0) {
         return;
     }
-    PreserveMapping(gpu_addr, size);
     GetSubmappedRangeImpl<false>(gpu_addr, size, page_stash);
 
     for (const auto& [map_addr, map_size] : page_stash) {
@@ -401,28 +370,6 @@ T MemoryManager::Read(GPUVAddr addr) const {
     return {};
 }
 
-u32 MemoryManager::ReadU32(GPUVAddr addr, ReadPageCache& cache) const {
-    const auto shim = native_syncpoint_shim.load(std::memory_order_acquire);
-    if (shim && addr >= shim && addr - shim < NumShimSyncpoints * sizeof(u32)) {
-        return Read<u32>(addr);
-    }
-    const GPUVAddr offset = addr & (page_size - 1);
-    if (offset > page_size - sizeof(u32)) {
-        return Read<u32>(addr); // Crosses into the next page
-    }
-    const GPUVAddr page = addr - offset;
-    if (page != cache.page) {
-        cache.page = page;
-        cache.pointer = GetPointer(page);
-    }
-    if (cache.pointer == nullptr) {
-        return Read<u32>(addr); // Unmapped or sparse: Read logs and handles it
-    }
-    u32 value;
-    std::memcpy(&value, cache.pointer + offset, sizeof(value));
-    return value;
-}
-
 template <typename T>
 void MemoryManager::Write(GPUVAddr addr, T data) {
     // A download for a guest read not yet in guest memory would land over this write later.
@@ -454,10 +401,7 @@ void MemoryManager::Write(GPUVAddr addr, T data) {
         return;
     }
 
-    static std::atomic<u32> reported{};
-    if (reported.fetch_add(1, std::memory_order_relaxed) < 16) {
-        LOG_ERROR(HW_GPU, "Write{} of unmapped GPU address {:#x}", sizeof(T) * 8, addr);
-    }
+    ASSERT(false);
 }
 
 template u8 MemoryManager::Read<u8>(GPUVAddr addr) const;
@@ -675,7 +619,7 @@ void MemoryManager::WriteBlockImpl(GPUVAddr gpu_dest_addr, const void* src_buffe
         VideoCommon::g_buffer_write_pages.Mark(dev_addr_base, copy_amount);
         // After the copy: the buffer cache may upload the written bytes from guest memory.
         if (!unsafe) {
-            rasterizer->PrepareRegionWrite(dev_addr_base, copy_amount, which);
+            rasterizer->InvalidateRegion(dev_addr_base, copy_amount, which);
         }
         src_buffer = static_cast<const u8*>(src_buffer) + copy_amount;
     };
@@ -713,24 +657,8 @@ void MemoryManager::WriteBlockUnsafe(GPUVAddr gpu_dest_addr, const void* src_buf
     WriteBlockImpl(gpu_dest_addr, src_buffer, size, VideoCommon::CacheType::None, true);
 }
 
-void MemoryManager::NoteDeferredCodeWrite(GPUVAddr gpu_addr, std::size_t size) const {
-    if (size == 0 || !Tegra::g_nx2_has_proven_code.load(std::memory_order_acquire)) {
-        return;
-    }
-    constexpr GPUVAddr code_page = GPUVAddr{1} << Tegra::Nx2WrittenPageBits;
-    const GPUVAddr end = gpu_addr + size;
-    for (GPUVAddr begin = gpu_addr; begin < end;) {
-        const GPUVAddr page_end = (std::min)((begin & ~(code_page - 1)) + code_page, end);
-        if (const auto device = GpuToCpuAddress(begin)) {
-            Tegra::Nx2NoteDeferredCodeWrite(*device, page_end - begin);
-        }
-        begin = page_end;
-    }
-}
-
 void MemoryManager::WriteBlockCached(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size) {
     WriteBlockImpl(gpu_dest_addr, src_buffer, size, VideoCommon::CacheType::None, true);
-    NoteDeferredCodeWrite(gpu_dest_addr, size);
     accumulator.Add(gpu_dest_addr, size);
 }
 

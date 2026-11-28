@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -192,67 +189,9 @@ public:
 
     std::optional<Shader::ReplaceConstant> GetReplaceConstBuffer(u32 bank, u32 offset) override;
 
-    /// Copies the 3D engine state translation reads and stops using the engine, so the program
-    /// can be translated on a worker thread while the GPU thread moves on. Returns false, leaving
-    /// the environment unchanged, when the texture pool isn't one contiguous device range or the
-    /// GPU has written it.
-    [[nodiscard]] bool Detach(Tegra::MaxwellDeviceMemoryManager& device_memory);
-
-    /// Bytes of constant buffer contents copied by Detach (0 if not detached).
-    [[nodiscard]] size_t SnapshotSizeBytes() const noexcept;
-
-    /// Frees the constant buffers Detach copied, once translation is done: serialization only
-    /// needs the recorded reads. The texture pool location is kept.
-    void ReleaseSnapshotBuffers() noexcept;
-
-    /// Texture pool entries of a detached environment (limit + 1), 0 if not detached.
-    [[nodiscard]] u32 TexturePoolEntries() const noexcept;
-
-    /// The texture reads translation made, read again from the pool (diagnostic for the late
-    /// pool read on translation workers). GPU thread only.
-    struct TexturePoolCheck {
-        u32 reads{};
-        u32 changed{};
-        bool remapped{}; ///< The pool's GPU address no longer maps to the device range read
-        bool dirty{};    ///< The GPU has written the pool since
-    };
-    [[nodiscard]] TexturePoolCheck CheckTextureReads(const Tegra::MemoryManager& current) const;
-
 private:
-    /// The 3D engine state a detached environment reads instead of the engine.
-    struct EngineSnapshot {
-        struct ConstBuffer {
-            bool enabled{};
-            u32 size{};
-            /// One word longer than `size`, so a read at any offset below `size` stays inside.
-            std::vector<u8> bytes;
-        };
-        std::array<ConstBuffer, Tegra::Engines::Maxwell3D::Regs::MaxConstBuffers> const_buffers;
-
-        /// The texture pool is located, not copied (it can hold thousands of entries); its
-        /// entries are read through the device memory manager, which outlives the GPU address
-        /// space.
-        Tegra::MaxwellDeviceMemoryManager* device_memory{};
-        GPUVAddr texture_pool_gpu{};
-        DAddr texture_pool{};
-        u32 texture_pool_limit{};
-        bool via_header_index{};
-        bool native_tiling{};
-
-        u32 viewport_scale_offset_enabled{};
-        ::Common::unordered_map<u64, Tegra::Engines::Maxwell3D::HLEReplacementAttributeType>
-            replace_table;
-    };
-
-    /// Texture descriptor (TIC entry) of a texture handle, from the engine or the snapshot.
-    Tegra::Texture::TICEntry ReadTextureDescriptor(u32 handle);
-
-    /// Texture descriptor of a texture handle from the snapshot's pool.
-    Tegra::Texture::TICEntry ReadSnapshotDescriptor(u32 handle) const;
-
     Tegra::Engines::Maxwell3D* maxwell3d{};
     size_t stage_index{};
-    std::optional<EngineSnapshot> snapshot;
 };
 
 class ComputeEnvironment final : public GenericEnvironment {
@@ -435,11 +374,9 @@ void SerializePipeline(const Key& key, const Envs& envs, const std::filesystem::
 /// only stops the load. The load holds the cache's lock throughout (waiting for it as
 /// PipelineCacheLockWait says), so that a record another process is appending is not taken for a
 /// damaged one.
-void LoadPipelines(std::stop_token stop_loading, const std::filesystem::path& filename,
-                   u32 expected_cache_version,
-                   Common::UniqueFunction<void, std::ifstream&, FileEnvironment> load_compute,
-                   Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>>
-                       load_graphics);
+void LoadPipelines(std::stop_token stop_loading, const std::filesystem::path& filename, u32 expected_cache_version,
+    Common::UniqueFunction<void, std::ifstream&, FileEnvironment> load_compute,
+    Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>> load_graphics);
 
 /// The record a LoadPipelines callback has read: from `begin`, where its environment count is, to
 /// where `file` is now, after its key.

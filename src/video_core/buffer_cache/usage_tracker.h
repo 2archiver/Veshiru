@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -56,9 +53,6 @@ public:
     }
 
     void Track(u64 offset, u64 size) noexcept {
-        if (size == 0) {
-            return;
-        }
         // Tracking is idempotent until Reset: skip ranges tracked just before. Draws bind the
         // same (often multi-megabyte) storage buffers again and again, and each Track wrote a
         // word per 4 KiB of the range.
@@ -84,15 +78,10 @@ public:
         FillPages(page + 1, page_end);
         const size_t offset_end = offset + size;
         const size_t offset_end_page_aligned = Common::AlignDown(offset_end, BUFFER_PAGE_BYTES);
-        if (offset_end > offset_end_page_aligned) {
-            TrackPage(page_end, offset_end_page_aligned, offset_end - offset_end_page_aligned);
-        }
+        TrackPage(page_end, offset_end_page_aligned, offset_end - offset_end_page_aligned);
     }
 
     [[nodiscard]] bool IsUsed(u64 offset, u64 size) const noexcept {
-        if (size == 0) {
-            return false;
-        }
         const size_t page = offset >> BUFFER_PAGE_SHIFT;
         const size_t page_end = (offset + size) >> BUFFER_PAGE_SHIFT;
         if (page_end < page || page_end >= pages.size()) {
@@ -101,9 +90,6 @@ public:
         if (IsPageUsed(page, offset, size)) {
             return true;
         }
-        if (page == page_end) {
-            return false;
-        }
         for (size_t i = page + 1; i < page_end; i++) {
             if (pages[i] != 0) {
                 return true;
@@ -111,8 +97,7 @@ public:
         }
         const size_t offset_end = offset + size;
         const size_t offset_end_page_aligned = Common::AlignDown(offset_end, BUFFER_PAGE_BYTES);
-        return offset_end > offset_end_page_aligned &&
-               IsPageUsed(page_end, offset_end_page_aligned, offset_end - offset_end_page_aligned);
+        return IsPageUsed(page_end, offset_end_page_aligned, offset_end - offset_end_page_aligned);
     }
 
     [[nodiscard]] std::span<const u64> Pages() const noexcept {

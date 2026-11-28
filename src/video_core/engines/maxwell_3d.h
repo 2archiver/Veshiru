@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -26,13 +23,12 @@
 #include "video_core/engines/const_buffer_info.h"
 #include "video_core/engines/engine_interface.h"
 #include "video_core/engines/engine_upload.h"
-#include "video_core/engines/maxwell_3d.h"
 #include "video_core/gpu.h"
 #include "video_core/macro.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_perf.h"
-#include "video_core/split_write_tracker.h"
 #include "video_core/textures/texture.h"
+#include "video_core/engines/maxwell_3d.h"
 
 namespace Core {
 class System;
@@ -40,7 +36,6 @@ class System;
 
 namespace Tegra {
 class MemoryManager;
-struct Nx2DrawPrograms;
 }
 
 namespace VideoCommon {
@@ -3122,9 +3117,6 @@ public:
         void SetInlineIndexBuffer(Maxwell3D& maxwell3d, u32 index);
         void SetInlineIndexBuffer(Maxwell3D& maxwell3d, u32 method, const u32* base_start, u32 amount);
         void DrawBegin(Maxwell3D& maxwell3d);
-        /// Nx2Perf draw_begin_coalesce: the effect of `repeats` more DrawBegin calls right after
-        /// one, with no write in between.
-        void AddInstances(Maxwell3D& maxwell3d, u32 repeats);
         void DrawEnd(Maxwell3D& maxwell3d, u32 instance_count = 1, bool force_draw = false);
         void DrawIndexSmall(Maxwell3D& maxwell3d, u32 argument);
         void DrawTexture(Maxwell3D& maxwell3d);
@@ -3194,14 +3186,6 @@ public:
     std::array<u32, 0xc00>& GetNativeDataRam() { return native_data_ram; }
     std::span<u32> GetNativeMacroPositions() { return native_macro_context ? std::span<u32>{native_macro_context->positions} : std::span<u32>{macro_positions}; }
 
-    static bool Nx2DrawProgramsOf(std::span<const u32> regs, bool native, u64 memory_id,
-                                  u64 map_serial, Tegra::Nx2DrawPrograms& out);
-    static bool Nx2DrawProgramsOf(const Regs& regs, bool native, u64 memory_id, u64 map_serial,
-                                  Tegra::Nx2DrawPrograms& out) {
-        return Nx2DrawProgramsOf(std::span<const u32>{regs.reg_array}, native, memory_id,
-                                 map_serial, out);
-    }
-
     /// Root tables: eight 256-byte tables written inline (method 0x504 selects a table, bits 0-2,
     /// and a byte offset, bits 8-15; each 0x508 writes the next word) that shaders read as constant
     /// banks 24-31. NVN2 keeps push constants in bank 24. The Ampere lowering reads them all from
@@ -3218,8 +3202,6 @@ public:
 
     /// Write the value to the register identified by method.
     void CallMethod(Core::System& system, u32 method, u32 method_argument, bool is_last_call) override;
-
-    void CallStateMethod(Core::System& system, u32 method, u32 argument) override;
 
     /// Write multiple values to the register identified by method.
     void CallMultiMethod(Core::System& system, u32 method, const u32* base_start, u32 amount, u32 methods_pending) override;
@@ -3246,10 +3228,6 @@ public:
                          u32 argument, bool is_last_call);
     void FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit& split, u32 method,
                               const u32* base_start, u32 amount, u32 methods_pending);
-    /// FrontRun verification records the per-word path's writes to compare them with the fast run.
-    std::vector<std::array<u32, 3>>* front_run_record{};
-    void FrontCallMethodRun(Core::System& system, VideoCommon::GpuSplit& split, u32 method,
-                            const u32* words, u32 count, bool incrementing, u32 methods_pending);
     /// Split front, before an entry holding the remaining 5 parameters (at `record`) of the
     /// pending macro call: true when that macro is DrawIndexedIndirect with a topology the host
     /// draws indirectly. The host GPU then reads the record itself (the words may still be
@@ -3533,17 +3511,13 @@ private:
     void ReleaseFront();
     void FrontWrite(VideoCommon::GpuSplit& split, FrontState& state, u32 method, u32 argument,
                     bool is_last_call, bool from_macro);
-    void FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state,
-                       std::span<const u32> borrowed = {});
+    void FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state);
     bool FrontRunOnBack(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state,
-                        const MacroEngine& engine, u32 start, std::span<const u32> parameters);
+                        const MacroEngine& engine, u32 start);
     u32 FrontRegister(VideoCommon::GpuSplit& split, FrontState& state, u32 method);
     bool FrontTakeOver(VideoCommon::GpuSplit& split, FrontState& state, u32 method);
     void FrontTrackInstanceLoop(FrontState& state, u32 method, u32 value);
     bool FrontSkipsLoopWrite(FrontState& state, u32 method, u32 value, bool shadow_kept);
-    VideoCommon::SplitWriteTracker::Effect FrontDrawEffect(VideoCommon::GpuSplit& split,
-                                                           FrontState& state);
-    static bool FrontIsWriterDraw(std::span<const u32> regs);
     /// Whether the native macro `method` starts is NVN's DrawIndexedIndirect (parameters:
     /// topology, then a 5-word VkDrawIndexedIndirectCommand-style record), told by a dry run.
     bool IsIndirectDrawMacro(FrontState& state, u32 method);
@@ -3557,8 +3531,6 @@ private:
                          u32 amount);
     void FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& state, u32 macro, u32 method,
                       u32 count);
-    bool FrontDmaReadEarly(VideoCommon::GpuSplit& split, FrontState& state, u32 macro, u32 method,
-                           GPUVAddr source, u32 ram, u32 words);
     void FrontNoteReport(VideoCommon::GpuSplit& split, const FrontState& state);
     void FrontVerify(VideoCommon::GpuSplit& split, FrontState& state);
     void FinishFrontMacro(Core::System& system);

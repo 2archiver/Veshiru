@@ -12,7 +12,7 @@
 #include <fmt/format.h>
 
 #include "common/cityhash.h"
-#include "common/nx2_try_switch.h"
+#include "common/diag_request.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/buffer_cache/raw_coverage.h"
@@ -981,8 +981,8 @@ Shader::HostTranslateInfo MakeHostInfo(const Device& device, const Shader::Profi
             profile.support_raw_global_memory && VideoCommon::RawGlobalFastEnabled(),
         .raw_global_store_alias =
             profile.support_raw_global_memory &&
-            (Common::Nx2TrySwitch::Enabled("TRY_RO_MIRROR_EXACT") ||
-             Common::Nx2TrySwitch::Enabled("TRY_STORAGE_RAW_WRITE_THROUGH")),
+            (Common::DiagRequest::TrySwitchEnabled("TRY_RO_MIRROR_EXACT") ||
+             Common::DiagRequest::TrySwitchEnabled("TRY_STORAGE_RAW_WRITE_THROUGH")),
         .compute_storage64 = std::getenv("EDEN_NX2_TRY_COMPUTE_STORAGE64") != nullptr &&
                              std::getenv("EDEN_NX2_TRY_COMPUTE_STORAGE64")[0] == '1',
         // The recompiler's rescaling pass runs only while the Resolution setting scales
@@ -1398,25 +1398,25 @@ TranslationSwitches CurrentTranslationSwitches() {
     switches.raw_coverage = VideoCommon::RawCoverageEnabled();
     switches.raw_global_fast = VideoCommon::RawGlobalFastEnabled();
     switches.direct_unused_atomics =
-        Common::Nx2TrySwitch::Enabled("TRY_DIRECT_UNUSED_ATOMICS");
-    switches.native_f32_atomics = Common::Nx2TrySwitch::Enabled("TRY_NATIVE_F32_ATOMICS");
-    switches.atomic_reserve = Common::Nx2TrySwitch::Enabled("TRY_ATOMIC_RESERVE");
-    switches.ro_mirror_exact = Common::Nx2TrySwitch::Enabled("TRY_RO_MIRROR_EXACT");
+        Common::DiagRequest::TrySwitchEnabled("TRY_DIRECT_UNUSED_ATOMICS");
+    switches.native_f32_atomics = Common::DiagRequest::TrySwitchEnabled("TRY_NATIVE_F32_ATOMICS");
+    switches.atomic_reserve = Common::DiagRequest::TrySwitchEnabled("TRY_ATOMIC_RESERVE");
+    switches.ro_mirror_exact = Common::DiagRequest::TrySwitchEnabled("TRY_RO_MIRROR_EXACT");
     switches.storage_raw_write_through =
-        Common::Nx2TrySwitch::Enabled("TRY_STORAGE_RAW_WRITE_THROUGH");
+        Common::DiagRequest::TrySwitchEnabled("TRY_STORAGE_RAW_WRITE_THROUGH");
     return switches;
 }
 u64 TrySwitchesHash() {
     // Only distinguish live overrides from the configured defaults. The default-on atomics
     // already participate in the profile hash; adding their default values here would invalidate
     // every existing pipeline-cache record before a runtime toggle is requested.
-    return u64{Common::Nx2TrySwitch::DiffersFromDefault("TRY_RAWGLOBAL_FAST")} |
-           (u64{Common::Nx2TrySwitch::DiffersFromDefault("TRY_DIRECT_UNUSED_ATOMICS")}
+    return u64{Common::DiagRequest::TrySwitchDiffersFromDefault("TRY_RAWGLOBAL_FAST")} |
+           (u64{Common::DiagRequest::TrySwitchDiffersFromDefault("TRY_DIRECT_UNUSED_ATOMICS")}
             << 1) |
-           (u64{Common::Nx2TrySwitch::DiffersFromDefault("TRY_NATIVE_F32_ATOMICS")} << 2) |
-           (u64{Common::Nx2TrySwitch::DiffersFromDefault("TRY_ATOMIC_RESERVE")} << 3) |
-           (u64{Common::Nx2TrySwitch::DiffersFromDefault("TRY_RO_MIRROR_EXACT")} << 4) |
-           (u64{Common::Nx2TrySwitch::DiffersFromDefault("TRY_STORAGE_RAW_WRITE_THROUGH")}
+           (u64{Common::DiagRequest::TrySwitchDiffersFromDefault("TRY_NATIVE_F32_ATOMICS")} << 2) |
+           (u64{Common::DiagRequest::TrySwitchDiffersFromDefault("TRY_ATOMIC_RESERVE")} << 3) |
+           (u64{Common::DiagRequest::TrySwitchDiffersFromDefault("TRY_RO_MIRROR_EXACT")} << 4) |
+           (u64{Common::DiagRequest::TrySwitchDiffersFromDefault("TRY_STORAGE_RAW_WRITE_THROUGH")}
             << 5);
 }
 
@@ -1450,13 +1450,13 @@ u64 HashTranslationSwitches(const TranslationSwitches& switches) {
     if (switches.tensor_lowering != 0) {
         key += fmt::format(" tensor_lowering={}", static_cast<int>(switches.tensor_lowering));
     }
-    if (Common::Nx2TrySwitch::DiffersFromDefault("TRY_DIRECT_UNUSED_ATOMICS")) {
+    if (Common::DiagRequest::TrySwitchDiffersFromDefault("TRY_DIRECT_UNUSED_ATOMICS")) {
         key += fmt::format(" direct_unused={}", switches.direct_unused_atomics);
     }
-    if (Common::Nx2TrySwitch::DiffersFromDefault("TRY_NATIVE_F32_ATOMICS")) {
+    if (Common::DiagRequest::TrySwitchDiffersFromDefault("TRY_NATIVE_F32_ATOMICS")) {
         key += fmt::format(" native_f32={}", switches.native_f32_atomics);
     }
-    if (Common::Nx2TrySwitch::DiffersFromDefault("TRY_ATOMIC_RESERVE")) {
+    if (Common::DiagRequest::TrySwitchDiffersFromDefault("TRY_ATOMIC_RESERVE")) {
         key += fmt::format(" atomic_reserve={}", switches.atomic_reserve);
     }
     return Common::CityHash64(key.data(), key.size());

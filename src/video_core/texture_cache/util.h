@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -214,16 +211,9 @@ struct RenderTargetClip {
                                                           GPUVAddr gpu_addr, VAddr cpu_addr,
                                                           const ImageBase& overlap,
                                                           bool strict_size, bool broken_views,
-                                                          bool native_bgr,
-                                                          bool single_layer_padding = false);
+                                                          bool native_bgr);
 
-[[nodiscard]] bool CanShareAttachmentStorage(const ImageInfo& lhs, const ImageInfo& rhs);
-[[nodiscard]] bool IsAttachmentBackingUsable(const ImageBase& image);
-[[nodiscard]] std::optional<Extent3D> GrowAttachmentExtent(const ImageInfo& candidate,
-                                                         const ImageInfo& existing);
-
-[[nodiscard]] bool IsLayerStrideCompatible(const ImageInfo& lhs, const ImageInfo& rhs,
-                                           bool single_layer_padding = false);
+[[nodiscard]] bool IsLayerStrideCompatible(const ImageInfo& lhs, const ImageInfo& rhs);
 
 [[nodiscard]] std::optional<SubresourceBase> FindSubresource(const ImageInfo& candidate,
                                                              const ImageBase& image,

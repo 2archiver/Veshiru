@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -14,7 +11,6 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "common/bit_field.h"
@@ -26,7 +22,6 @@
 #include "video_core/game_dlss_status.h"
 #include "video_core/macro.h"
 #include "video_core/native_qmd.h"
-#include "video_core/split_write_tracker.h"
 #include "video_core/textures/texture.h"
 
 namespace Core {
@@ -49,11 +44,6 @@ namespace Tegra::Engines {
 
 /// Draws left to trace after an upscale fallback (debug aid).
 extern std::atomic<u32> g_nx2_trace_draws_after_upscale;
-
-/// Colour target 0 of the latest depth-tested 3D draw to a float target (the scene image), and its
-/// size as width << 32 | height. Star Fox's cutscene network reads the frame drawn there.
-extern std::atomic<u64> g_nx2_scene_target;
-extern std::atomic<u64> g_nx2_scene_target_size;
 
 /**
  * This Engine is known as GK104_Compute. Documentation can be found in:
@@ -79,31 +69,20 @@ public:
         if (method >= native_plain_methods.size()) {
             return true;
         }
-        return native_mode ? !native_plain_methods[method]
-                           : method >= execution_mask.size() || execution_mask[method];
+        return native_mode ? !native_plain_methods[method] : execution_mask[method];
     }
 
     /// The channel's MME data RAM, shared with its 3D engine.
-    void SetNativeDataRam(std::array<u32, 0xc00>* data_ram) {
-        native_data_ram = data_ram;
-    }
-    void SetNativeMacroMode(MacroEngine* shared_macro, std::span<u32> positions,
-                            NativeMacroContext* context = nullptr) {
-        if (native_context != context)
-            native_compute_uploaded = false;
+    void SetNativeDataRam(std::array<u32, 0xc00>* data_ram) { native_data_ram = data_ram; }
+    void SetNativeMacroMode(MacroEngine* shared_macro, std::span<u32> positions, NativeMacroContext* context = nullptr) {
+        if (native_context != context) native_compute_uploaded = false;
         native_context = context;
         native_mode = shared_macro != nullptr;
         upload_state.SetNativePartialTransfers(native_mode);
         native_macro = shared_macro;
         native_macro_positions = positions;
-        if (native_mode) {
-            execution_mask.set();
-            for (u32 m = 0; m < native_plain_methods.size(); ++m) {
-                if (native_plain_methods[m]) {
-                    execution_mask[m] = false;
-                }
-            }
-        } else {
+        if (native_mode) execution_mask.set();
+        else {
             execution_mask.reset();
             execution_mask[KEPLER_COMPUTE_REG_INDEX(exec_upload)] = true;
             execution_mask[KEPLER_COMPUTE_REG_INDEX(data_upload)] = true;
@@ -262,14 +241,10 @@ public:
                   "KeplerCompute LaunchParams has wrong size");
 
     /// Write the value to the register identified by method.
-    void CallMethod(Core::System& system, u32 method, u32 method_argument,
-                    bool is_last_call) override;
-
-    void CallStateMethod(Core::System& system, u32 method, u32 method_argument) override;
+    void CallMethod(Core::System& system, u32 method, u32 method_argument, bool is_last_call) override;
 
     /// Write multiple values to the register identified by method.
-    void CallMultiMethod(Core::System& system, u32 method, const u32* base_start, u32 amount,
-                         u32 methods_pending) override;
+    void CallMultiMethod(Core::System& system, u32 method, const u32* base_start, u32 amount, u32 methods_pending) override;
 
     std::optional<GPUVAddr> GetIndirectComputeAddress() const {
         return indirect_compute;
@@ -297,23 +272,6 @@ public:
 
 private:
     struct FrontState;
-    struct RejectedComputeProgram {
-        bool emulates_tensor{};
-        bool matrix_multiply{};
-        u32 upscale_failures{};
-    };
-    struct PhotoUpscaleWatch {
-        u32 window_left{};
-        u32 evaluations{};
-        GPUVAddr output_program{};
-        u32 slot{};
-        u32 input_offset{};
-        u32 output_offset{};
-        GPUVAddr last_input{};
-        GPUVAddr last_output{};
-    };
-    [[nodiscard]] bool EmulatesNativeTensorPrograms() const;
-    bool UpscaleInsteadOfNativeProgram();
     FrontState& Front(VideoCommon::GpuSplit& split);
     void ReleaseFront();
     void FrontApply(FrontState& state, u32 method, u32 argument);
@@ -321,19 +279,11 @@ private:
     MacroEngine& FrontMacroEngine(FrontState& state);
     std::span<u32> FrontMacroPositions(FrontState& state);
     void FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split, FrontState& state);
-    /// What a method sent from the front may write on the back (GpuSplit::Effect).
-    VideoCommon::SplitWriteTracker::Effect FrontEffect(u32 method) const;
-    /// After sending it: the memory it writes, for the front's reads.
-    void FrontNoteWrites(VideoCommon::GpuSplit& split, FrontState& state, u32 method);
     std::unique_ptr<FrontState> front;
     bool front_macros{}; ///< The front owns the macro code and bindings (the back skips them)
 
     bool DispatchNativeCompute(const NativeQmdScheduler::Descriptor& descriptor);
     bool BypassOotBaseNetwork();
-    bool ReadConstBufferWords(u32 slot, std::vector<u32>& words) const;
-    void FollowPhotoUpscale();
-    bool UpscaleFromConstBuffers();
-    bool CopySceneForStarFoxCutsceneNetwork();
     void ProcessNativeReportSemaphore(u32 argument);
     void DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
     /// Texture descriptor that the handle at `offset` in constant buffer 0 selects.
@@ -382,11 +332,6 @@ private:
         VideoCore::GameDlssStatus status{};
     } dlss_chain;
 
-    /// Native programs rejected by translation, retried only when tensor lowering changes or a
-    /// validated replacement may be available.
-    std::unordered_map<GPUVAddr, RejectedComputeProgram> rejected_compute_programs;
-    PhotoUpscaleWatch photo_upscale;
-
     /// Ocarina of Time's movie network: a pass that reads one colour image and stores none
     /// retains its input here; the pass that stores an image upscaling it is replaced by a plain
     /// copy (the network's matrix passes cost tens of milliseconds per frame). Cleared after the
@@ -412,8 +357,6 @@ private:
     bool native_mme_dumped{};
     std::optional<u32> native_executing_macro_logged;
     bool native_mode{};
-
-private:
     NativeMacroContext* native_context{};
     bool native_compute_uploaded{};
     MacroEngine* native_macro{};

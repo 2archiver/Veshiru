@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -194,10 +191,6 @@ public:
     [[nodiscard]] bool IsMeshPipeline() const noexcept {
         return stage_infos[0].is_task || stage_infos[0].is_mesh;
     }
-
-    /// Whether any stage may write guest memory or images: storage buffer, global memory or
-    /// image stores and atomics (Nx2Perf MacroReadWriterSet; conservative).
-    [[nodiscard]] bool Nx2MayWriteMemory() const noexcept;
 
     /// Mesh pipeline drawn through the compute emulation (MeshEmulationSetup).
     [[nodiscard]] bool IsEmulatedMesh() const noexcept {
@@ -408,16 +401,13 @@ public:
     }
 
 private:
-    /// Builds the pipeline once, on whichever thread gets here first.
-    void RunBuild();
-
     template <typename Spec>
     bool ConfigureImpl(bool is_indexed);
 
     void KeepImageDescriptors(size_t stage, size_t first_entry);
 
     bool ConfigureDraw(const RescalingPushConstant& rescaling,
-                       const RenderAreaPushConstant& render_are, bool is_indexed);
+                       const RenderAreaPushConstant& render_are);
 
     void MakePipeline(VkRenderPass render_pass);
 
@@ -509,12 +499,9 @@ private:
 
     DescriptorBufferLayout descriptor_buffer_layout;
     std::vector<DescriptorUpdateEntry> last_descriptor_payload;
-    std::vector<u8> last_descriptor_bytes;
     VkDeviceSize last_descriptor_buffer_offset{};
     u32 last_descriptor_buffer_chunk{};
     u64 last_descriptor_buffer_generation{};
-    std::array<u32, 6> last_rescaling_words{};
-    bool has_pushed_rescaling{false};
 
     const bool worker_only_build;
     bool uses_push_descriptor{false};

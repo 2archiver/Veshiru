@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -21,31 +18,23 @@ class Device;
 class Scheduler;
 
 struct DescriptorAddress {
-    VkDeviceAddress address{};
-    VkDeviceSize range{};
-    VkFormat format{};
-    u32 pad{};
+    VkDeviceAddress address;
+    VkDeviceSize range;
+    VkFormat format;
 };
 
 union DescriptorUpdateEntry {
-    DescriptorUpdateEntry() : raw{} {}
-    DescriptorUpdateEntry(VkDescriptorImageInfo image_) : raw{} {
-        image.sampler = image_.sampler;
-        image.imageView = image_.imageView;
-        image.imageLayout = image_.imageLayout;
-    }
+    DescriptorUpdateEntry() = default;
+    DescriptorUpdateEntry(VkDescriptorImageInfo image_) : image{image_} {}
     DescriptorUpdateEntry(VkDescriptorBufferInfo buffer_) : buffer{buffer_} {}
-    DescriptorUpdateEntry(VkBufferView texel_buffer_) : raw{} {
-        texel_buffer = texel_buffer_;
-    }
+    DescriptorUpdateEntry(VkBufferView texel_buffer_) : texel_buffer{texel_buffer_} {}
     DescriptorUpdateEntry(DescriptorAddress address_) : address{address_} {}
-    std::array<u64, 3> raw{};
+    std::monostate empty{};
     VkDescriptorImageInfo image;
     VkDescriptorBufferInfo buffer;
     VkBufferView texel_buffer;
     DescriptorAddress address;
 };
-static_assert(sizeof(DescriptorUpdateEntry) == 24);
 
 class UpdateDescriptorQueue final {
     // This should be plenty for the vast majority of cases. Most desktop platforms only

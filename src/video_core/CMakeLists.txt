@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-# SPDX-License-Identifier: GPL-3.0-or-later
-
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -180,18 +177,21 @@ add_library(video_core STATIC
     native_qmd.h
     native_tensor_programs.h
     native_query_trace.h
+    nvn_draw_probe.cpp
+    nvn_draw_probe.h
     nx2.h
     nx2_back_idle_trace.cpp
     nx2_back_idle_trace.h
     nx2_list_macro_trace.cpp
     nx2_list_macro_trace.h
     nx2_cmdpage_diag.h
+    nx2_debug_control.cpp
+    nx2_debug_control.h
     nx2_fast_draw.cpp
     nx2_fast_draw.h
     nx2_profile.h
     nx2_stutter_trace.cpp
     nx2_stutter_trace.h
-    nx2_perf.cpp
     nx2_perf.h
     nx2_async_readback.h
     nx2_backx.h
@@ -279,6 +279,7 @@ add_library(video_core STATIC
     renderer_vulkan/nvn/nvn_draw.h
     renderer_vulkan/nvn/nvn_draw_clear.cpp
     renderer_vulkan/nvn/nvn_draw_debug.cpp
+    renderer_vulkan/nvn/nvn_draw_probe.cpp
     renderer_vulkan/nvn/nvn_bindless.cpp
     renderer_vulkan/nvn/nvn_draw_descriptors.cpp
     renderer_vulkan/nvn/nvn_draw_indirect.cpp
@@ -372,8 +373,6 @@ add_library(video_core STATIC
     renderer_vulkan/vk_command_pool.h
     renderer_vulkan/vk_compute_pass.cpp
     renderer_vulkan/vk_compute_pass.h
-    renderer_vulkan/vk_camera_motion_pass.cpp
-    renderer_vulkan/vk_camera_motion_pass.h
     renderer_vulkan/vk_fsr3_upscaler.cpp
     renderer_vulkan/vk_fsr3_upscaler.h
     renderer_vulkan/vk_fsr4_upscaler.cpp
@@ -386,8 +385,6 @@ add_library(video_core STATIC
     renderer_vulkan/vk_ocarina_camera_motion.cpp
     renderer_vulkan/vk_ocarina_camera_motion.h
     renderer_vulkan/vk_compute_pipeline.cpp
-    renderer_vulkan/vk_driver_build_report.cpp
-    renderer_vulkan/vk_driver_build_report.h
     renderer_vulkan/vk_compute_pipeline.h
     renderer_vulkan/vk_cooperative_hmma_test.cpp
     renderer_vulkan/vk_cooperative_hmma_test.h
@@ -398,6 +395,8 @@ add_library(video_core STATIC
     renderer_vulkan/frame_pacer.h
     renderer_vulkan/vk_fence_manager.cpp
     renderer_vulkan/vk_fence_manager.h
+    renderer_vulkan/vk_frame_dump.cpp
+    renderer_vulkan/vk_frame_dump.h
     renderer_vulkan/vk_graphics_pipeline.cpp
     renderer_vulkan/vk_graphics_pipeline.h
     renderer_vulkan/vk_multi_range_buffer.cpp
@@ -419,7 +418,6 @@ add_library(video_core STATIC
     renderer_vulkan/vk_query_cache.h
     renderer_vulkan/vk_query_copy.h
     renderer_vulkan/vk_rasterizer.cpp
-    renderer_vulkan/upload_batch.h
     renderer_vulkan/vk_rasterizer.h
     renderer_vulkan/submission_policy.h
     renderer_vulkan/upload_batch.h

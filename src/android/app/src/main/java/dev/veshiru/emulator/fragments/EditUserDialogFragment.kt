@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -266,11 +263,7 @@ class EditUserDialogFragment : Fragment() {
 
     private fun validateInput() {
         val username = binding.editUsername.text.toString()
-        // 20 characters to match the lobby nickname limit, and 32 bytes because that is the size of
-        // the profile field (a character can take more than one byte)
-        val isValid = username.isNotEmpty() &&
-            username.length <= 20 &&
-            username.toByteArray(Charsets.UTF_8).size <= 32
+        val isValid = username.isNotEmpty() && username.length <= 32
         binding.buttonSave.isEnabled = isValid
     }
 

@@ -1,21 +1,15 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <algorithm>
 #include <array>
 #include <cstring>
-#include <vector>
 #include <ctime>
 #include <fmt/chrono.h>
 #include "common/logging.h"
 #include "common/scm_rev.h"
 #include "common/swap.h"
-#include "core/arm/debug.h"
 #include "core/core.h"
 #include "core/hle/service/fatal/fatal.h"
 #include "core/hle/service/fatal/fatal_p.h"
@@ -118,6 +112,7 @@ static void ThrowFatalError(Core::System& system, Result error_code, FatalType f
                             const FatalInfo& info) {
     LOG_ERROR(Service_Fatal, "Threw fatal error type {} with error code {:#x}", fatal_type,
               error_code.raw);
+
     switch (fatal_type) {
     case FatalType::ErrorReportAndScreen:
         GenerateErrorReport(system, error_code, info);

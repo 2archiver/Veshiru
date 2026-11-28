@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -500,13 +497,10 @@ void PresentManager::WaitPresent() {
         return;
     }
 
-    // Wait for the present queue to be empty and any held frame to transition to swapchain_mutex
+    // Wait for the present queue to be empty
     {
         std::unique_lock queue_lock{queue_mutex};
-        wake_present_hold = true;
-        frame_cv.notify_all();
-        frame_cv.wait(queue_lock, [this] { return present_queue.empty() && !presenting_frame; });
-        wake_present_hold = false;
+        frame_cv.wait(queue_lock, [this] { return present_queue.empty(); });
     }
 
     // The above condition will be satisfied when the last frame is taken from the queue.
@@ -519,17 +513,6 @@ void PresentManager::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadName("VulkanPresent");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
     Common::SetCurrentThreadToPerformanceCores();
-
-    using Clock = std::chrono::steady_clock;
-    Clock::time_point last_present_done{};
-    Clock::time_point cadence_window_start = Clock::now();
-    bool has_last_present_done = false;
-
-    std::vector<double> present_intervals_ms;
-    present_intervals_ms.reserve(256);
-    u32 cadence_real_count = 0;
-    u32 cadence_gen_count = 0;
-
     while (!token.stop_requested()) {
         std::unique_lock lock{queue_mutex};
         // Wait for presentation frames
@@ -538,11 +521,7 @@ void PresentManager::PresentThread(std::stop_token token) {
             // Take the frame and notify anyone waiting
             Frame* frame = present_queue.front();
             present_queue.pop_front();
-            presenting_frame = true;
             frame_cv.notify_one();
-
-            presenting_frame = false;
-            frame_cv.notify_all();
 
             // By exchanging the lock ownership we take the swapchain lock
             // before the queue lock goes out of scope. This way the swapchain
@@ -561,43 +540,6 @@ void PresentManager::PresentThread(std::stop_token token) {
             if (Common::DkbFrameTrace::Enabled()) {
                 const auto presented = std::chrono::steady_clock::now();
                 LogPacing(frame, presented - ready, presented);
-            }
-
-            const auto done_now = Clock::now();
-            // Frame generation sets a spacing on the frames it adds (Frame::present_spacing).
-            if (frame->present_spacing.count() != 0) {
-                ++cadence_gen_count;
-            } else {
-                ++cadence_real_count;
-            }
-            if (has_last_present_done) {
-                const double dt_ms =
-                    static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(
-                                            done_now - last_present_done)
-                                            .count()) /
-                    1000.0;
-                present_intervals_ms.push_back(dt_ms);
-            }
-            last_present_done = done_now;
-            has_last_present_done = true;
-
-            if (done_now - cadence_window_start >= std::chrono::seconds(1) &&
-                !present_intervals_ms.empty()) {
-                std::sort(present_intervals_ms.begin(), present_intervals_ms.end());
-                const size_t n = present_intervals_ms.size();
-                const double p10 = present_intervals_ms[n * 10 / 100];
-                const double p50 = present_intervals_ms[n * 50 / 100];
-                const double p90 = present_intervals_ms[n * 90 / 100];
-                const double dt_max = present_intervals_ms.back();
-                LOG_INFO(Render_Vulkan,
-                         "PresentCadence: n={} real={} gen={} dt_p50={:.2f} dt_p10={:.2f} "
-                         "dt_p90={:.2f} dt_max={:.2f}",
-                         cadence_real_count + cadence_gen_count, cadence_real_count,
-                         cadence_gen_count, p50, p10, p90, dt_max);
-                present_intervals_ms.clear();
-                cadence_real_count = 0;
-                cadence_gen_count = 0;
-                cadence_window_start = done_now;
             }
 
             // Free the frame for reuse

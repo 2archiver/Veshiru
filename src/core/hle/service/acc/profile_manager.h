@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -106,8 +103,6 @@ public:
 
     bool RemoveUser(Common::UUID uuid);
     bool RemoveProfileAtIndex(std::size_t index);
-
-    bool SetProfileUsername(Common::UUID uuid, const std::string& username);
 
     bool SetProfileBase(Common::UUID uuid, const ProfileBase& profile_new);
     bool SetProfileBaseAndData(Common::UUID uuid, const ProfileBase& profile_new,

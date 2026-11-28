@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -38,9 +35,7 @@
 #include "video_core/nx2.h"
 #include "video_core/nx2_back_idle_trace.h"
 #include "video_core/nx2_fast_draw.h"
-#include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
-#include "video_core/nx2_sampler.h"
 
 namespace VideoCommon {
 
@@ -157,7 +152,6 @@ void GpuSplit::MaybeStart(Core::System& system_) {
         const char* value = std::getenv("EDEN_NX2_SPLIT");
         return value != nullptr ? value[0] : '2';
     }();
-    VideoCommon::Nx2Sampler::Sampler::MaybeStart();
     const bool wanted = mode == '1' || mode == '2';
     if (!wanted || !Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         return;
@@ -186,8 +180,6 @@ void GpuSplit::MaybeStart(Core::System& system_) {
                          std::getenv("EDEN_NX2_ACQUIRE_STATS") != nullptr ||
                          std::getenv("EDEN_NX2_GUEST_THREAD_STATS") != nullptr;
     ring = std::make_unique<u64[]>(RingWords);
-    eager_publish = Nx2Perf::On(Nx2Perf::Opt::EagerPublish);
-    verify_repeats = Nx2Perf::Verify() && Nx2Perf::On(Nx2Perf::Opt::DrawBeginCoalesce);
     back_thread = std::jthread([this](std::stop_token stop_token) { BackLoop(stop_token); });
     active = true;
     ++starts;
@@ -214,13 +206,7 @@ void GpuSplit::Stop() {
     write_position = 0;
     last_writer_position = 0;
     last_sync_position = 0;
-    last_function_position = 0;
     synced_writer_position = 0;
-    writes.Reset();
-    cb_words.clear();
-    cb_words_lost = 0;
-    std::fill(async_writes.begin(), async_writes.end(), u64{0});
-    any_async_write = false;
     semaphore_writes.clear();
     semaphore_writes_limit = 1024;
     last_any_write = 0;
@@ -228,13 +214,6 @@ void GpuSplit::Stop() {
     write_positions.fill(0);
     published_local = 0;
     consumed_cache = 0;
-    repeat_end = ~u64{0};
-    eager_publish = false;
-    verify_repeats = false;
-    verify_previous = 0;
-    verify_mergeable = 0;
-    verify_mismatches = 0;
-    verify_report_ns = 0;
     publish_every = PublishEvery;
     front_engine = nullptr;
     state_engine = nullptr;
@@ -252,7 +231,6 @@ void GpuSplit::Stop() {
     drain_quiet_requested.store(false, std::memory_order_relaxed);
     back_quiet.store(true, std::memory_order_relaxed);
     back_waiting.store(false, std::memory_order_relaxed);
-    back_idle.store(false, std::memory_order_relaxed);
     front_waiting.store(false, std::memory_order_relaxed);
 }
 
@@ -313,7 +291,6 @@ void GpuSplit::Drain(DrainSite site) {
         return;
     }
     Publish();
-    hook_requested.store(true, std::memory_order_release);
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
     const BackIdleTrace::FrontWait idle_trace{WaitState(site)};
     const CountedWait counted{site};
@@ -405,123 +382,13 @@ void ForEachDeviceRange(const Tegra::MemoryManager& memory, GPUVAddr address, u6
 
 } // Anonymous namespace
 
-bool GpuSplit::NoteWrite(const Tegra::MemoryManager& memory, GPUVAddr address, u64 size,
-                         WriteKind kind) {
-    if (size == 0) {
-        return false;
-    }
+void GpuSplit::NoteWrite(const Tegra::MemoryManager& memory, GPUVAddr address, u64 size) {
     if (size > MaxNotedBytes || address + size < address) {
         NoteAnyWrite();
-        writes.Entry(Effect::Unknown, write_position);
-        return false;
-    }
-    const bool sparse = address < Tegra::g_nx2_sparse_high.load(std::memory_order_relaxed) &&
-                        Tegra::g_nx2_sparse_low.load(std::memory_order_relaxed) < address + size;
-    if (last_function_position > consumed_cache || sparse) {
-        NoteAnyWrite();
-        writes.Entry(Effect::Unknown, write_position);
-        return false;
-    }
-    bool fully_mapped = true;
-    constexpr GPUVAddr page_mask = ~GPUVAddr{0xfff};
-    const GPUVAddr end = address + size;
-    for (GPUVAddr page = address & page_mask; page < end; page += 0x1000) {
-        const auto device = memory.GpuToCpuAddress(page);
-        if (!device) {
-            fully_mapped = false;
-            continue;
-        }
-        const u64 device_page = *device & ~u64{0xfff};
-        writes.Write(device_page, device_page + 0x1000, write_position, kind);
+        return;
     }
     ForEachDeviceRange(memory, address, size,
                        [this](DAddr device, u64 bytes) { NoteDeviceWrite(device, bytes); });
-    if (!fully_mapped) {
-        NoteAnyWrite();
-        writes.Entry(Effect::Unknown, write_position);
-    }
-    return fully_mapped;
-}
-
-void GpuSplit::NoteConstBufferWrite(const Tegra::MemoryManager& memory, GPUVAddr address,
-                                    const u32* words, u32 count, u32 stored) {
-    const bool noted =
-        NoteWrite(memory, address, u64{count} * sizeof(u32), WriteKind::ConstantBuffer);
-    if (stored == 0 || !Nx2Perf::On(Nx2Perf::Opt::MacroReadCbOverlay)) {
-        return;
-    }
-    if (!noted || (address & 3) != 0 || cb_words.size() + stored > MaxConstBufferWords) {
-        cb_words_lost = write_position;
-        return;
-    }
-    constexpr GPUVAddr page_mask = ~GPUVAddr{0xfff};
-    GPUVAddr page = ~GPUVAddr{0};
-    u64 device_page = 0;
-    for (u32 i = 0; i < stored; ++i) {
-        const GPUVAddr word_address = address + u64{i} * sizeof(u32);
-        if ((word_address & page_mask) != page) {
-            page = word_address & page_mask;
-            const auto device = memory.GpuToCpuAddress(page);
-            if (!device) {
-                cb_words_lost = write_position;
-                return;
-            }
-            device_page = *device & ~u64{0xfff};
-        }
-        cb_words.push_back({device_page + (word_address & 0xfff), write_position, words[i]});
-    }
-}
-
-void GpuSplit::OverlayConstBufferWords(u64 consumed_position, u64 begin, u64 size, u8* out) const {
-    const u64 end = begin + size;
-    for (const ConstBufferWord& word : cb_words) {
-        if (word.position <= consumed_position) {
-            continue;
-        }
-        const u64 low = (std::max)(word.device, begin);
-        const u64 high = (std::min)(word.device + sizeof(u32), end);
-        if (low < high) {
-            std::memcpy(out + (low - begin),
-                        reinterpret_cast<const u8*>(&word.value) + (low - word.device), high - low);
-        }
-    }
-}
-
-u64 GpuSplit::SettleWrites() {
-    WaitFor((std::min)(last_function_position, write_position), DrainSite::Map);
-    return RetireWrites();
-}
-
-u64 GpuSplit::RetireWrites() {
-    consumed_cache = consumed.load(std::memory_order_acquire);
-    writes.Retire(consumed_cache);
-    while (!cb_words.empty() && cb_words.front().position <= consumed_cache) {
-        cb_words.pop_front();
-    }
-    return consumed_cache;
-}
-
-void GpuSplit::NoteAsyncWrite(u64 begin, u64 size) {
-    if (size == 0 || begin + size < begin) {
-        return;
-    }
-    const u64 last = (begin + size - 1) >> 4;
-    for (u64 slot = begin >> 4; slot <= last; ++slot) {
-        async_writes[AsyncWriteBucket(slot)] = write_position;
-    }
-    any_async_write = true;
-}
-
-u64 GpuSplit::HasAsyncWrite(u64 begin, u64 size) const {
-    if (!any_async_write || size == 0 || begin + size < begin) {
-        return 0;
-    }
-    u64 newest = 0;
-    const u64 last = (begin + size - 1) >> 4;
-    for (u64 slot = begin >> 4; slot <= last; ++slot) {
-        newest = (std::max)(newest, async_writes[AsyncWriteBucket(slot)]);
-    }
-    return newest;
 }
 
 void GpuSplit::NoteDeviceWrite(DAddr address, u64 size) {
@@ -554,11 +421,8 @@ u64 GpuSplit::DeviceWritesTarget(DAddr address, u64 size) const {
 
 bool GpuSplit::WaitForWrites(const Tegra::MemoryManager& memory, GPUVAddr address, u64 size) {
     FlushState(); // A block that may issue a deferred draw notes its write anywhere.
-    u64 target = (std::max)(WritesTarget(memory, address, size), writes.ReadTarget(0, 0));
-    ForEachDeviceRange(memory, address, size, [this, &target](DAddr device, u64 bytes) {
-        target = (std::max)(target, writes.ReadTarget(device, device + bytes));
-    });
-    return WaitFor(std::min(target, write_position), DrainSite::MacroDmaWrites);
+    return WaitFor(std::min(WritesTarget(memory, address, size), write_position),
+                   DrainSite::MacroDmaWrites);
 }
 
 bool GpuSplit::WaitForSyncedWriters() {
@@ -617,8 +481,7 @@ void GpuSplit::FlushStateSlow() {
                (u64{state_break & 0xffff} << 8) | (u64{count} << 32);
     std::memcpy(entry + 1, state_flags.data(), sizeof(state_flags));
     std::memcpy(entry + 1 + StateFlagWords, state_writes.data(), size_t{count} * sizeof(u64));
-    const Effect effect = state_anywhere ? Effect::Unknown : Effect::None;
-    Commit(size, effect);
+    Commit(size);
     if (state_anywhere) {
         NoteAnyWrite();
     }
@@ -632,25 +495,12 @@ void GpuSplit::SwitchEngine(Tegra::Engines::EngineInterface* engine) {
     u64* const entry = Reserve(2);
     entry[0] = static_cast<u64>(Kind::Engine);
     entry[1] = reinterpret_cast<u64>(engine);
-    Commit(2, Effect::None);
+    Commit(2);
 }
 
 void GpuSplit::MultiMethod(Tegra::Engines::EngineInterface* engine, u32 method, const u32* words,
                            u32 amount, u32 methods_pending, const GPUVAddr* segment,
                            Writes writes) {
-    MultiMethod(engine, method, words, amount, methods_pending, segment, writes,
-                writes == Writes::Anywhere ? Effect::Unknown : Effect::None);
-}
-
-void GpuSplit::MultiMethod(Tegra::Engines::EngineInterface* engine, u32 method, const u32* words,
-                           u32 amount, u32 methods_pending, const GPUVAddr* segment,
-                           Effect effect) {
-    MultiMethod(engine, method, words, amount, methods_pending, segment, Writes::Noted, effect);
-}
-
-void GpuSplit::MultiMethod(Tegra::Engines::EngineInterface* engine, u32 method, const u32* words,
-                           u32 amount, u32 methods_pending, const GPUVAddr* segment, Writes writes,
-                           Effect effect) {
     SelectEngine(engine);
     // Long runs (constant buffer and inline uploads) go in pieces, as when a method's data
     // continues in the next GPFIFO entry.
@@ -667,12 +517,12 @@ void GpuSplit::MultiMethod(Tegra::Engines::EngineInterface* engine, u32 method, 
         }
         entry[size - 1] = 0;
         std::memcpy(entry + head, words, size_t{piece} * sizeof(u32));
-        Commit(size, effect);
+        Commit(size);
         words += piece;
         amount -= piece;
         methods_pending -= piece;
     }
-    if (writes == Writes::Anywhere || EffectMayWriteAnywhere(effect)) {
+    if (writes == Writes::Anywhere) {
         NoteAnyWrite();
     }
 }
@@ -683,62 +533,10 @@ void GpuSplit::DeferFunction(std::function<void()>&& func) {
         (*heap)();
         delete heap;
     });
-    last_function_position = write_position;
-}
-
-void GpuSplit::ExecuteRepeated(u64 head) {
-    // Repeat counts are only emitted for Maxwell3D draw.begin without a DMA segment.
-    using Tegra::Engines::Maxwell3D;
-    auto* const maxwell3d = static_cast<Maxwell3D*>(back_engine);
-    Nx2Profile::Scope method_scope{Nx2Profile::Zone::Method};
-    maxwell3d->ConsumeSink(*system);
-    maxwell3d->CallMethod(*system, static_cast<u32>((head >> 8) & 0xffff),
-                          static_cast<u32>(head >> 32), (head & IsLast) != 0);
-    maxwell3d->draw_manager.AddInstances(*maxwell3d, static_cast<u32>((head & RepeatMask) >> 24));
-}
-
-void GpuSplit::VerifyRepeat(u64 head) {
-    const u64 word = head & ~Repeatable;
-    if ((head & Repeatable) != 0) {
-        ++verify_mergeable;
-        if (verify_previous != word) {
-            static std::atomic<u64> differences{};
-            const u64 count = differences.fetch_add(1, std::memory_order_relaxed) + 1;
-            ++verify_mismatches;
-            if (count <= 64) {
-                LOG_ERROR(HW_GPU,
-                          "Nx2Perf draw_begin_coalesce: mergeable entry {:#x} after {:#x}, not "
-                          "the same draw.begin ({} so far)",
-                          head, verify_previous, count);
-            }
-        }
-        if ((verify_mergeable & 1023) == 0) {
-            const u64 now =
-                static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                     std::chrono::steady_clock::now().time_since_epoch())
-                                     .count());
-            if (verify_report_ns == 0) {
-                verify_report_ns = now;
-            } else if (now - verify_report_ns >= 1'000'000'000) {
-                const double seconds = static_cast<double>(now - verify_report_ns) / 1e9;
-                LOG_INFO(HW_GPU,
-                         "Nx2Perf draw_begin_coalesce: {:.0f} mergeable draw.begin entries/s, {} "
-                         "not after the same one",
-                         static_cast<double>(verify_mergeable) / seconds, verify_mismatches);
-                verify_report_ns = now;
-                verify_mergeable = 0;
-                verify_mismatches = 0;
-            }
-        }
-    }
-    verify_previous = word;
 }
 
 size_t GpuSplit::Execute(const u64* entry, size_t words) {
     const u64 head = entry[0];
-    if (verify_repeats) [[unlikely]] {
-        VerifyRepeat(head);
-    }
     switch (static_cast<Kind>(head & 0xf)) {
     case Kind::Wrap:
         return 0;
@@ -746,10 +544,6 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
         back_engine = reinterpret_cast<Tegra::Engines::EngineInterface*>(entry[1]);
         return 2;
     case Kind::Method: {
-        if ((head & RepeatMask) != 0) [[unlikely]] {
-            ExecuteRepeated(head);
-            return 1;
-        }
         const u32 method = static_cast<u32>((head >> 8) & 0xffff);
         const u32 argument = static_cast<u32>(head >> 32);
         auto* const engine = back_engine;
@@ -805,19 +599,9 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
             Nx2FastDraw::Break(Nx2FastDraw::Reason::OtherEngine);
         }
         if ((head & Direct) != 0) {
-            static const bool method_fast = [] {
-                const char* value = std::getenv("EDEN_NX2_METHOD_FAST");
-                return value == nullptr || value[0] != '0';
-            }();
             Nx2Profile::Scope method_scope{Nx2Profile::Zone::Method};
-            if (!engine->method_sink.empty()) {
-                engine->ConsumeSink(*system);
-            }
-            if (method_fast && !engine->execution_mask[method]) {
-                engine->CallStateMethod(*system, method, argument);
-            } else {
-                engine->CallMethod(*system, method, argument, true);
-            }
+            engine->ConsumeSink(*system);
+            engine->CallMethod(*system, method, argument, true);
         } else if (!engine->execution_mask[method]) {
             engine->method_sink.emplace_back(method, argument);
         } else {
@@ -868,11 +652,6 @@ size_t GpuSplit::Execute(const u64* entry, size_t words) {
     return 1;
 }
 
-void GpuSplit::RunIdleHook() {
-    Nx2Profile::Scope scope{Nx2Profile::Zone::BackIdleHook};
-    idle_hook(idle_argument);
-}
-
 void GpuSplit::BackLoop(std::stop_token stop_token) {
     const Common::DkbCpuTrace::Registration cpu_trace{Common::DkbCpuTrace::Role::GpuBack};
     const StutterTrace::ThreadScope stutter_thread{StutterTrace::Thread::Back};
@@ -895,7 +674,6 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
         Nx2Profile::Report("GPU back thread", true);
         u64 available = published.load(std::memory_order_acquire);
         if (available == read_position) {
-            back_idle.store(true, std::memory_order_relaxed);
             Nx2Profile::Scope scope{Nx2Profile::Zone::SplitWait};
             if (idle_trace && idle_since == 0) {
                 idle_since = BackIdleTrace::Now();
@@ -944,11 +722,9 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
                     Count(g_acquire_stats.back_sleeps);
                     wake.wait(seen, std::memory_order_seq_cst);
                 }
-                back_waiting.store(false, std::memory_order_seq_cst);
-                back_idle.store(false, std::memory_order_relaxed);
+                back_waiting.store(false, std::memory_order_relaxed);
                 continue;
             }
-            back_idle.store(false, std::memory_order_relaxed);
         }
         if (idle_since != 0) {
             BackIdleTrace::NoteBackIdle(idle_since, BackIdleTrace::Now());
@@ -965,7 +741,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
             if (hook_requested.load(std::memory_order_relaxed) &&
                 idle_hook != nullptr) [[unlikely]] {
                 hook_requested.store(false, std::memory_order_seq_cst);
-                RunIdleHook();
+                idle_hook(idle_argument);
             }
             // Hand ring space back now and then while working through a long batch, and at once
             // when the front waits for this position (WaitForWriters).

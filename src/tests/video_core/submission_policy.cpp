@@ -12,25 +12,10 @@ namespace {
 
 using Vulkan::SubmissionPolicy::Action;
 using Vulkan::SubmissionPolicy::Advance;
-using Vulkan::SubmissionPolicy::ChooseIdleSubmit;
 using Vulkan::SubmissionPolicy::DefaultNativeBudget;
-using Vulkan::SubmissionPolicy::IdleSubmitDraws;
-using Vulkan::SubmissionPolicy::IdleSubmitReason;
 using Vulkan::SubmissionPolicy::ParseBudget;
-using Vulkan::SubmissionPolicy::WaitedSubmitDraws;
 
 } // namespace
-
-TEST_CASE("Idle submissions honor waited and caught-up draw thresholds",
-          "[video_core][submission_policy]") {
-    STATIC_REQUIRE(WaitedSubmitDraws < IdleSubmitDraws);
-    REQUIRE(ChooseIdleSubmit(WaitedSubmitDraws - 1, true, false) == IdleSubmitReason::None);
-    REQUIRE(ChooseIdleSubmit(WaitedSubmitDraws, true, false) == IdleSubmitReason::FrontWaiting);
-    REQUIRE(ChooseIdleSubmit(IdleSubmitDraws - 1, false, true) == IdleSubmitReason::None);
-    REQUIRE(ChooseIdleSubmit(IdleSubmitDraws, false, true) == IdleSubmitReason::GpuIdle);
-    REQUIRE(ChooseIdleSubmit(IdleSubmitDraws, true, true) == IdleSubmitReason::FrontWaiting);
-    REQUIRE(ChooseIdleSubmit(IdleSubmitDraws, false, false) == IdleSubmitReason::None);
-}
 
 TEST_CASE("Native desktop submissions use an exact default budget", "[video_core][submission_policy]") {
     u32 counter{};

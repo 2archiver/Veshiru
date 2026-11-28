@@ -258,7 +258,7 @@ std::string Number(f32 value) {
 }
 
 std::string Quoted(std::string_view text) {
-    return "\"" + Common::DiagImage::JsonEscape(text) + "\"";
+    return "\"" + Common::DiagRequest::JsonEscape(text) + "\"";
 }
 
 void AppendNote(std::string& note, std::string_view text) {
@@ -301,7 +301,7 @@ void WriteIndex(const State& state) {
         json += fmt::format(", \"note\": {}}}", note.empty() ? std::string{"null"} : Quoted(note));
     }
     json += first ? "]}\n" : "\n]}\n";
-    Common::DiagImage::WriteTextFile(state.directory / "textures-nvn.json", json);
+    Common::DiagRequest::WriteTextFile(state.directory / "textures-nvn.json", json);
 }
 
 } // namespace
@@ -456,7 +456,7 @@ void Complete(const Readback& readback, std::span<const u8> pixels) {
     if (!converted) {
         failure = fmt::format("host format {} cannot be converted to RGBA8: not captured",
                               static_cast<s32>(format));
-    } else if (!Common::DiagImage::WritePng(path, readback.width, readback.height, rgba)) {
+    } else if (!Common::DiagRequest::WritePng(path, readback.width, readback.height, rgba)) {
         failure = "PNG could not be written";
     }
     std::scoped_lock lock{state.mutex};

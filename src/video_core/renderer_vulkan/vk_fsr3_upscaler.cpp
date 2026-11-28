@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -188,7 +185,6 @@ public:
                                                  VK_ACCESS_SHADER_READ_BIT |
                                                      VK_ACCESS_SHADER_WRITE_BIT));
         });
-        scheduler_.InvalidateDescriptorBuffer();
     }
 
 private:

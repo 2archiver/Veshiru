@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -1419,8 +1416,7 @@ VkBuffer TextureCacheRuntime::GetTemporaryBuffer(size_t needed_size) {
     const auto new_size = Common::NextPow2(needed_size);
     static constexpr VkBufferUsageFlags flags =
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-        VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
     const VkBufferCreateInfo temp_ci = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = nullptr,
@@ -2026,63 +2022,50 @@ void TextureCacheRuntime::DrawUpscaledOutput(Framebuffer* dst_framebuffer, VkIma
 }
 
 #ifdef EGLANTINE_STREAMLINE
-StreamlineDlssUpscaler* TextureCacheRuntime::DlssUpscaler() {
+bool TextureCacheRuntime::UpscaleWithDlss(Framebuffer* dst_framebuffer, ImageView& input_color,
+                                          ImageView& motion_vectors, ImageView& depth,
+                                          std::array<u32, 2> render_size,
+                                          std::array<f32, 2> jitter,
+                                          std::array<f32, 2> motion_scale, bool reset) {
     // EDEN_NX2_DLSS_REPLACEMENT=fsr keeps FSR 3.1 for A/B runs.
     static const bool force_fsr = [] {
         const char* const value = std::getenv("EDEN_NX2_DLSS_REPLACEMENT");
         return value && std::string_view{value} == "fsr";
     }();
     if (force_fsr || dlss_unsupported) {
-        return nullptr;
+        return false;
     }
     if (!dlss_upscaler) {
         // Off in the settings, or Streamline didn't start: it has said why.
         if (!Streamline::IsDlssAvailable()) {
             dlss_unsupported = true;
-            return nullptr;
+            return false;
         }
         try {
             dlss_upscaler =
                 std::make_unique<StreamlineDlssUpscaler>(device, scheduler, memory_allocator);
         } catch (const vk::Exception& exception) {
-            LOG_WARNING(Render_Vulkan, "NVIDIA DLSS unavailable ({})", exception.what());
+            LOG_WARNING(Render_Vulkan, "NVIDIA DLSS unavailable ({}); using FSR 3.1",
+                        exception.what());
             dlss_unsupported = true;
-            return nullptr;
+            return false;
         }
     }
-    return dlss_upscaler.get();
-}
-
-namespace {
-StreamlineDlssUpscaler::Image DlssImage(const Device& device, ImageView& view, VkImageView handle,
-                                        VkImageAspectFlags aspect) {
-    return StreamlineDlssUpscaler::Image{
-        .view = handle,
-        .image = view.ImageHandle(),
-        .format =
-            MaxwellToVK::SurfaceFormat(device, FormatType::Optimal, false, view.format).format,
-        .range{
-            .aspectMask = aspect,
-            .baseMipLevel = static_cast<u32>(view.range.base.level),
-            .levelCount = 1,
-            .baseArrayLayer = static_cast<u32>(view.range.base.layer),
-            .layerCount = 1,
-        },
-        .barrier_aspect = ImageAspectMask(view.format),
-    };
-}
-} // Anonymous namespace
-
-bool TextureCacheRuntime::UpscaleWithDlss(Framebuffer* dst_framebuffer, ImageView& input_color,
-                                          ImageView& motion_vectors, ImageView& depth,
-                                          std::array<u32, 2> render_size,
-                                          std::array<f32, 2> jitter,
-                                          std::array<f32, 2> motion_scale, bool reset) {
-    if (!DlssUpscaler()) {
-        return false;
-    }
     const auto image = [&](ImageView& view, VkImageView handle, VkImageAspectFlags aspect) {
-        return DlssImage(device, view, handle, aspect);
+        return StreamlineDlssUpscaler::Image{
+            .view = handle,
+            .image = view.ImageHandle(),
+            .format = MaxwellToVK::SurfaceFormat(device, FormatType::Optimal, false, view.format)
+                          .format,
+            .range{
+                .aspectMask = aspect,
+                .baseMipLevel = static_cast<u32>(view.range.base.level),
+                .levelCount = 1,
+                .baseArrayLayer = static_cast<u32>(view.range.base.layer),
+                .layerCount = 1,
+            },
+            .barrier_aspect = ImageAspectMask(view.format),
+        };
     };
     const bool native_resolution =
         Settings::GetNvidiaDlssRuntimeSettings().quality == Settings::NvidiaDlssQuality::Native;
@@ -2124,80 +2107,6 @@ bool TextureCacheRuntime::UpscaleWithDlss(Framebuffer* dst_framebuffer, ImageVie
     return true;
 }
 #endif
-
-bool TextureCacheRuntime::UpscaleWithCameraMotion(Framebuffer* dst_framebuffer,
-                                                  ImageView& input_color, ImageView& depth,
-                                                  std::array<u32, 2> render_size,
-                                                  const std::array<f32, 16>& reprojection,
-                                                  std::array<f32, 2> jitter, bool reset) {
-#ifdef EGLANTINE_STREAMLINE
-    const VkExtent2D render_extent{render_size[0], render_size[1]};
-    const VkExtent2D upscale_extent = dst_framebuffer->RenderArea();
-    if (upscale_extent.width < render_extent.width ||
-        upscale_extent.height < render_extent.height ||
-        input_color.Samples() != VK_SAMPLE_COUNT_1_BIT ||
-        depth.Samples() != VK_SAMPLE_COUNT_1_BIT) {
-        return false;
-    }
-    if (!DlssUpscaler()) {
-        return false;
-    }
-    if (!camera_motion_pass) {
-        camera_motion_pass = std::make_unique<CameraMotionPass>(
-            device, scheduler, descriptor_pool, compute_pass_descriptor_queue, memory_allocator);
-    }
-    camera_motion_pass->Record(depth.DepthView(), render_extent, reprojection);
-    const StreamlineDlssUpscaler::Image motion_vectors{
-        .view = camera_motion_pass->View(),
-        .image = camera_motion_pass->Image(),
-        .format = CameraMotionPass::FORMAT,
-        .range{
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-        .barrier_aspect = VK_IMAGE_ASPECT_COLOR_BIT,
-    };
-    bool upscaled{};
-    try {
-        upscaled = dlss_upscaler->Upscale({
-            .color = DlssImage(device, input_color,
-                               input_color.Handle(Shader::TextureType::Color2D),
-                               VK_IMAGE_ASPECT_COLOR_BIT),
-            .depth = DlssImage(device, depth, depth.DepthView(), VK_IMAGE_ASPECT_DEPTH_BIT),
-            .motion_vectors = motion_vectors,
-            .render_size = render_extent,
-            .upscale_size = upscale_extent,
-            .jitter = jitter,
-            // The motion vectors are in render pixels.
-            .motion_vector_scale = {1.0f, 1.0f},
-            .reset = reset,
-            .depth_inverted = false,
-            .hdr = false,
-        });
-    } catch (const vk::Exception& exception) {
-        LOG_WARNING(Render_Vulkan, "NVIDIA DLSS evaluation unavailable ({})", exception.what());
-    }
-    if (!upscaled) {
-        dlss_unsupported = true;
-        return false;
-    }
-    DrawUpscaledOutput(dst_framebuffer, dlss_upscaler->OutputView(), dlss_upscaler->OutputImage(),
-                       dlss_upscaler->PointSampler());
-    static bool logged{};
-    if (!logged) {
-        logged = true;
-        LOG_INFO(Render_Vulkan, "Anti-aliasing replaced by NVIDIA DLSS: {}x{} -> {}x{}",
-                 render_extent.width, render_extent.height, upscale_extent.width,
-                 upscale_extent.height);
-    }
-    return true;
-#else
-    return false;
-#endif
-}
 
 bool TextureCacheRuntime::TemporalUpscale(Framebuffer* dst_framebuffer, ImageView& dst,
                                           ImageView& input_color, ImageView& motion_vectors,
@@ -3217,7 +3126,9 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
                                    ? std::span<const VkFormat>{OpaqueAstcViewFormats}
                                    : runtime->ViewFormats(info.format),
                                AstcHostFormat(runtime_.device, info),
-                               unbacked,
+                               UsesSparseLayers(runtime_.device, info, gpu_addr_) ||
+                                   UsesSparseTiles(runtime_.device, info, gpu_addr_) ||
+                                   IsUnwrittenSparse(runtime_.device, info, gpu_addr_),
                                UsesSparseTiles(runtime_.device, info, gpu_addr_) &&
                                    SparseTilesModeOf(runtime_.device) == SparseTilesMode::Aliased,
                                true)),

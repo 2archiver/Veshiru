@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -84,18 +81,6 @@ public:
         });
     }
 
-    /// Nx2Perf bind_memo: bumped whenever CPU-modified bits may be set (cpu) and whenever
-    /// GPU-modified bits change (gpu). A binding synced clean stays clean while cpu is unchanged.
-    [[nodiscard]] u64 CpuEpoch() const noexcept {
-        return cpu_epoch;
-    }
-    [[nodiscard]] u64 GpuEpoch() const noexcept {
-        return gpu_epoch;
-    }
-    void BumpGpuEpoch() noexcept {
-        ++gpu_epoch;
-    }
-
     /// Mark region as CPU modified, notifying the device_tracker about this change
     void MarkRegionAsCpuModified(VAddr dirty_cpu_addr, u64 query_size) {
         ForgetSynchronized(dirty_cpu_addr, query_size);
@@ -140,7 +125,6 @@ public:
 
     /// Unmark region as modified from the host GPU
     void UnmarkRegionAsGpuModified(VAddr dirty_cpu_addr, u64 query_size) noexcept {
-        ++gpu_epoch;
         IteratePages<true>(dirty_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {
             manager->ChangeRegionState(Type::GPU, false, manager->cpu_addr + offset, size);
         });
@@ -222,7 +206,6 @@ public:
     /// Call 'func' for each GPU modified range and unmark those pages as GPU modified
     template <typename Func>
     void ForEachDownloadRange(VAddr query_cpu_range, u64 query_size, bool clear, Func&& func) {
-        gpu_epoch += clear ? 1 : 0;
         IteratePages<false>(query_cpu_range, query_size, [&func, clear](Manager* manager, u64 offset, size_t size) {
             manager->ForEachModifiedRange(Type::GPU, clear, manager->cpu_addr + offset, size, func);
         });
@@ -230,7 +213,6 @@ public:
 
     template <typename Func>
     void ForEachDownloadRangeAndClear(VAddr query_cpu_range, u64 query_size, Func&& func) {
-        ++gpu_epoch;
         IteratePages<false>(query_cpu_range, query_size, [&func](Manager* manager, u64 offset, size_t size) {
             manager->ForEachModifiedRange(Type::GPU, true, manager->cpu_addr + offset, size, func);
         });
@@ -365,7 +347,6 @@ private:
     }
 
     void CreateRegion(std::size_t page_index) {
-        ++cpu_epoch; // A new manager starts with every page CPU-modified
         const VAddr base_cpu_addr = page_index << HIGHER_PAGE_BITS;
         top_tier[page_index] = GetNewManager(base_cpu_addr);
     }
@@ -393,8 +374,6 @@ private:
     u64 synchronized_mask{};
     PageFilter ever_synchronized_pages;
     DeviceTracker* device_tracker = nullptr;
-    u64 cpu_epoch{};
-    u64 gpu_epoch{};
 };
 
 } // namespace VideoCommon

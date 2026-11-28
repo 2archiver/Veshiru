@@ -1,7 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // SPDX-FileCopyrightText: Ryujinx Team and Contributors
@@ -805,11 +802,6 @@ boost::container::small_vector<ImageCopy, 16> MakeShrinkImageCopies(const ImageI
         };
         const Extent3D mip_size = AdjustMipSize(dst.size, base.level + level);
         copy.extent = AdjustSamplesSize(mip_size, dst.num_samples);
-        if (both_2d && CanShareAttachmentStorage(dst, src)) {
-            // Logical attachment growth can preserve tiled backing without enlarging the source.
-            copy.extent.width = (std::min)(copy.extent.width, src.size.width);
-            copy.extent.height = (std::min)(copy.extent.height, src.size.height);
-        }
         if (is_dst_3d) {
             copy.extent.depth = src.size.depth;
         }
@@ -1787,11 +1779,10 @@ bool IsPitchLinearSameSize(const ImageInfo& lhs, const ImageInfo& rhs, bool stri
 
 std::optional<OverlapResult> ResolveOverlap(const ImageInfo& new_info, GPUVAddr gpu_addr,
                                             VAddr cpu_addr, const ImageBase& overlap,
-                                            bool strict_size, bool broken_views, bool native_bgr,
-                                            bool single_layer_padding) {
+                                            bool strict_size, bool broken_views, bool native_bgr) {
     ASSERT(new_info.type != ImageType::Linear);
     ASSERT(overlap.info.type != ImageType::Linear);
-    if (!IsLayerStrideCompatible(new_info, overlap.info, single_layer_padding)) {
+    if (!IsLayerStrideCompatible(new_info, overlap.info)) {
         return std::nullopt;
     }
     if (!IsViewCompatible(overlap.info.format, new_info.format, broken_views, native_bgr)) {
@@ -1855,11 +1846,6 @@ std::optional<SubresourceBase> FindSubresource(const ImageInfo& candidate, const
         return std::nullopt;
     }
     const ImageInfo& existing = image.info;
-    if (True(options & RelaxedOptions::RenderTarget) && candidate_addr == image.gpu_addr &&
-        IsAttachmentBackingUsable(image) && CanShareAttachmentStorage(existing, candidate) &&
-        existing.size.width >= candidate.size.width && existing.size.height >= candidate.size.height) {
-        return base;
-    }
     if (True(options & RelaxedOptions::Format)) {
         // Format checking is relaxed, but we still have to check for matching bytes per block.
         // This avoids creating a view for blits on UE4 titles where formats with different bytes
@@ -1873,7 +1859,7 @@ std::optional<SubresourceBase> FindSubresource(const ImageInfo& candidate, const
             return std::nullopt;
         }
     }
-    if (!IsLayerStrideCompatible(existing, candidate, True(options & RelaxedOptions::SingleLayerStride))) {
+    if (!IsLayerStrideCompatible(existing, candidate)) {
         return std::nullopt;
     }
     if (existing.type != candidate.type) {

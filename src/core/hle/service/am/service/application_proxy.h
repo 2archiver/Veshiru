@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -19,9 +16,8 @@ class IApplicationFunctions;
 class ICommonStateGetter;
 class IDebugFunctions;
 class IDisplayController;
-class IGraphicsScalingParametersFunctions;
+class IGraphicsScaleController;
 class ILibraryAppletCreator;
-class IPerformanceFunctions;
 class IProcessWindingController;
 class ISelfController;
 class IWindowController;
@@ -35,9 +31,7 @@ public:
 
 private:
     void GetNx2Interface(HLERequestContext& ctx);
-    Result GetPerformanceFunctions(Out<SharedPointer<IPerformanceFunctions>> out_functions);
-    Result GetGraphicsScalingParametersFunctions(
-        Out<SharedPointer<IGraphicsScalingParametersFunctions>> out_functions);
+    Result GetGraphicsScaleController(Out<SharedPointer<IGraphicsScaleController>> out_controller);
     Result GetAudioController(Out<SharedPointer<IAudioController>> out_audio_controller);
     Result GetDisplayController(Out<SharedPointer<IDisplayController>> out_display_controller);
     Result GetProcessWindingController(

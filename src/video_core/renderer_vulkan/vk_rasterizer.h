@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -9,7 +6,6 @@
 #pragma once
 
 #include <array>
-#include <chrono>
 #include <optional>
 #include <string_view>
 #include <unordered_set>
@@ -33,6 +29,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_query_cache.h"
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
+#include "video_core/renderer_vulkan/vk_frame_dump.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
@@ -137,7 +134,7 @@ public:
     void InvalidateGPUCache() override;
     void UnmapMemory(DAddr addr, u64 size) override;
     void ModifyGPUMemory(size_t as_id, GPUVAddr addr, u64 size) override;
-    void SignalFence(std::function<void()>&& func, bool force_completion = false) override;
+    void SignalFence(std::function<void()>&& func) override;
     void SyncOperation(std::function<void()>&& func) override;
     void SignalSyncPoint(u32 value) override;
     void SignalReference() override;
@@ -170,8 +167,6 @@ public:
                                    std::array<f32, 2> jitter,
                                    std::array<f32, 2> motion_scale, bool use_history,
                                    std::optional<std::array<u32, 2>> render_region) override;
-    bool AccelerateCameraMotionUpscale(const Tegra::Engines::Fermi2D::Surface& src,
-                                       const Tegra::Engines::Fermi2D::Surface& dst) override;
     VideoCommon::OotNetwork::BypassState* OotNetworkBypass() override;
     Tegra::Engines::AccelerateDMAInterface& AccessAccelerateDMA() override;
     void AccelerateInlineToMemory(GPUVAddr address, size_t copy_size,
@@ -206,32 +201,21 @@ private:
     void CaptureIndirectTrace();
     void CollectIndirectTrace();
     void TraceDrawFailure(std::string_view reason);
-    void Nx2ProveNonWriterDraw(const GraphicsPipeline& pipeline);
     /// Remembers render target 0 of a draw with one of Ocarina of Time's tonemap shaders.
     void TrackOotTonemappedImage(const GraphicsPipeline& pipeline);
     bool TryNx2IndirectReset(bool is_indexed, u32 instance_count);
 
     void FlushWork();
-    /// Nx2Perf submit_while_waited, at FlushWork's dispatch check: submits the recorded draws
-    /// when the front waits for the back or the host GPU has caught up. True when it submitted.
-    bool SubmitWhileWaited();
 
     void TraceRenderState(bool is_indexed, const char* outcome, const Framebuffer* framebuffer);
 
     /// Records the copies of the command list pages the work just recorded wrote and submits, so
     /// the GPU makes them now (BufferCache::Nx2CopyListPages).
     void SubmitNx2ListCopies();
-    /// The split back's idle hook: submits pending list copies and deferred work.
-    void FlushSplitIdle();
 
     /// Records the dynamic state of the draw being prepared with `pipeline` (null for
     /// DrawTexture's blit).
     void UpdateDynamicStates(const GraphicsPipeline* pipeline);
-
-    /// NVIDIA DLSS in place of Ocarina of Time's anti-aliasing: track scene cameras and jitter
-    /// depth-tested draws so the texture-cache pass can generate camera-only motion vectors.
-    void NoteCameraMotionDraw();
-    void NoteCameraMotionClear();
 
     void HandleTransformFeedback();
 
@@ -282,6 +266,7 @@ private:
 
     /// Clears a 3D color target whose slices the framebuffer can't reach. Returns true when handled.
     bool ClearVolumeSlices(const Framebuffer* framebuffer, u32 first_slice, u32 slice_count);
+    void FrameDumpPass(const Framebuffer* framebuffer);
     /// EDEN_NX2_PENDING_WRITE_TRACE: logs bound buffer ranges with collected, unapplied CPU writes.
     void TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes);
     bool OcarinaTemporalEnabled() const;
@@ -294,6 +279,8 @@ private:
     void TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool is_indirect);
     bool TryOcarinaUpscale(const ComputePipeline& pipeline, u64 native_key, bool replace);
     void ReadOcarinaActor(struct OcarinaActorMesh& mesh);
+    /// Records the uniform and storage buffers of the current draw or dispatch for the frame dump.
+    bool FrameDumpBuffers(bool compute, std::span<const u64> shader_hashes);
 
     Tegra::GPU& gpu;
     Tegra::MaxwellDeviceMemoryManager& device_memory;
@@ -321,6 +308,7 @@ private:
     PipelineCache pipeline_cache;
     AccelerateDMA accelerate_dma;
     FenceManager fence_manager;
+    FrameDump frame_dump;
 
     boost::container::static_vector<u32, MAX_IMAGE_VIEWS> image_view_indices;
     std::array<VideoCommon::ImageViewId, MAX_IMAGE_VIEWS> image_view_ids;
@@ -373,44 +361,6 @@ private:
         std::array<f32, 4> origin{};
         std::array<f32, 280 * 12> bones{};
     } oot_actor, oot_previous_actor;
-    /// Camera/depth pairs observed between the game's upscale dispatches; used to reproject
-    /// depth into the previous frame when the game supplies no motion-vector texture.
-    struct CameraMotionScene {
-        GPUVAddr depth{};
-        VideoCommon::ImageInfo depth_info;
-        GPUVAddr camera{};
-        std::array<f32, 16> view_projection{};
-        VkViewport viewport{};
-        f32 y_sign{1.0f};
-        bool depth_minus_one{};
-        bool rescaled{};
-        std::array<f32, 2> jitter{};
-        u32 draws{};
-    };
-    struct CameraMotion {
-        bool armed{};
-        std::array<CameraMotionScene, 16> scenes;
-        size_t num_scenes{};
-        GPUVAddr jitter_depth{};
-        std::array<u32, 2> jitter_depth_size{};
-        bool jitter_ready{};
-        bool jitter_active{};
-        u32 phase{};
-        std::array<f32, 2> jitter{};
-        std::array<f32, 2> applied{};
-        struct {
-            GPUVAddr address{};
-            bool perspective{};
-            std::array<f32, 16> view_projection{};
-        } camera;
-        std::optional<VideoCommon::OcarinaUpscale::Matrix> previous_screen;
-        GPUVAddr previous_depth{};
-        std::array<u32, 2> previous_size{};
-        bool previous_rescaled{};
-        std::optional<std::chrono::steady_clock::time_point> last_evaluation;
-        u32 evaluations{};
-        bool jittered{};
-    } camera_motion;
     u64 render_trace_frame = 0;
     u32 render_trace_draws = 0;
     u32 render_trace_clears = 0;

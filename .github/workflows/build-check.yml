@@ -53,12 +53,6 @@ jobs:
     if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 120
-    # Publishes the error digest on the job's own check run, where the checks API returns it whole
-    # (annotations stop at 10 per step).
-    permissions:
-      contents: read
-      checks: write
-      actions: read
     # ccache rather than sccache: sccache has no direct mode for clang-cl, so every hit still ran the
     # preprocessor and a 99% hit build took 8.5 minutes.
     env:
@@ -150,119 +144,25 @@ jobs:
         run: |
           ccache --zero-stats
           set -o pipefail
-          # -k 0: keep going after a compile error so one run lists every broken translation unit
-          # instead of one per push. The step still fails, and the summary annotates the errors.
-          cmake --build build --parallel -- -k 0 2>&1 | tee build-output.txt
+          cmake --build build --parallel 2>&1 | tee build-output.txt
           ccache --show-stats -v
 
       # A Windows-only project cannot reproduce this build elsewhere, so the errors are surfaced
       # as annotations (readable from the checks API and the pull request) and the captured
       # compiler output is uploaded for download, since a job log of a clang-cl build is large and
       # is not always retrievable.
-      - name: Digest build errors
-        if: failure() && steps.build.outcome == 'failure'
-        shell: bash
-        run: |
-          # One line per distinct error message, in the order the build hit them: 441 errors are
-          # a few dozen causes, and GitHub keeps 10 annotations per step, so the next steps spend
-          # theirs on the causes instead of on the first ten errors of the first file.
-          grep -E " error: |fatal error|undefined reference|LNK[0-9]+" build-output.txt |
-            sed -E 's/^[0-9]+://' |
-            awk '{
-              key = $0
-              if (match(key, /: (fatal )?error: /)) { key = substr(key, RSTART + 2) }
-              if (!(key in seen)) { seen[key] = 1; print $0 }
-            }' > build-errors.txt
-          echo "distinct errors: $(wc -l < build-errors.txt), total: $(grep -cE ' error: ' build-output.txt)"
-
       - name: Summarise build errors
         if: failure() && steps.build.outcome == 'failure'
         shell: bash
         run: |
-          # GitHub keeps 10 annotations per step: spend one on the totals and the rest on the
-          # first error of each distinct file, so a run reports as many broken translation units
-          # as it can. The full list goes to the step summary.
-          mapfile -t errors < <(
-            grep -E " error: |fatal error|undefined reference|LNK[0-9]+" build-output.txt |
-              sed -E 's/^[0-9]+://' | awk '{
-                key = $0
-                sub(/\([0-9]+(,[0-9]+)?\):.*/, "", key)
-                if (key != "" && !(key in seen)) { seen[key] = 1; print }
-              }'
-          )
           echo "### Build errors" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          printf '%s\n' "${errors[@]}" >> "$GITHUB_STEP_SUMMARY"
+          grep -nE " error: |fatal error|undefined reference|LNK[0-9]+|note: in instantiation" \
+            build-output.txt | head -60 | tee -a "$GITHUB_STEP_SUMMARY" | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          total=$(grep -cE " error: " build-output.txt)
-          echo "::error::${total} compiler errors in ${#errors[@]} distinct files (first error of each below)"
-          printf '%s\n' "${errors[@]}" | head -9 | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
 
-      - name: Annotate build errors 1
-        if: failure() && steps.build.outcome == 'failure'
-        shell: bash
-        run: |
-          sed -n '1,9p' build-errors.txt | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
-      - name: Annotate build errors 2
-        if: failure() && steps.build.outcome == 'failure'
-        shell: bash
-        run: |
-          sed -n '10,18p' build-errors.txt | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
-      - name: Annotate build errors 3
-        if: failure() && steps.build.outcome == 'failure'
-        shell: bash
-        run: |
-          sed -n '19,27p' build-errors.txt | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
-      - name: Annotate build errors 4
-        if: failure() && steps.build.outcome == 'failure'
-        shell: bash
-        run: |
-          sed -n '28,36p' build-errors.txt | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
-      - name: Annotate build errors 5
-        if: failure() && steps.build.outcome == 'failure'
-        shell: bash
-        run: |
-          sed -n '37,45p' build-errors.txt | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
-      - name: Annotate build errors 6
-        if: failure() && steps.build.outcome == 'failure'
-        shell: bash
-        run: |
-          sed -n '46,54p' build-errors.txt | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
-      - name: Publish the error digest on the check run
-        if: failure() && steps.build.outcome == 'failure'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # The checks API returns a check run's output.summary whole, unlike the ten annotations a
-          # step may add: the whole distinct-error list goes there for scripts to read.
-          {
-            echo "distinct errors: $(wc -l < build-errors.txt), total: $(grep -cE ' error: ' build-output.txt)"
-            echo
-            cat build-errors.txt
-          } > digest.txt
-          head -c 60000 digest.txt > digest-cut.txt
-          job_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" \
-                     --jq '.jobs[] | select(.name | startswith("Windows clang-cl")) | .databaseId' |
-                     head -1)
-          echo "check run ${job_id}"
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/check-runs/${job_id}" \
-            -f 'output[title]=Build errors' \
-            -F "output[summary]=@digest-cut.txt" > /dev/null
       - name: Upload build output
         if: failure() && steps.build.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

@@ -16,6 +16,7 @@
 #include "shader_recompiler/stage.h"
 #include "video_core/nvn/state_layouts.h"
 #include "video_core/nvn/timestamp_mode.h"
+#include "video_core/nvn_draw_probe.h"
 #include "video_core/shader_log.h"
 #include "video_core/renderer_vulkan/nvn/nvn_barrier.h"
 #include "video_core/renderer_vulkan/nvn/nvn_draw.h"
@@ -1329,6 +1330,9 @@ void DrawContext::EndPass(BreakCause cause) {
         pass_reports_ordered = false;
         if (Debug::Tracing()) {
             DebugOnPassEnd();
+        }
+        if (!probe_images.empty()) [[unlikely]] {
+            ProbeFlushImages();
         }
         ++counters.pass_breaks;
         ++counters.break_causes[static_cast<size_t>(cause)];
@@ -2806,6 +2810,12 @@ bool DrawContext::PrepareDraw(u32 mode, u32 element_count, const IndexRange* ind
                     impl.NoteVtxCov(true, reason, index->bytes);
                 }
             }
+        }
+    }
+    if (VideoCommon::NvnDrawProbe::Active()) [[unlikely]] {
+        if (ProbeDraw(*active, mode, element_count, index, vertex, used_streams, active->mesh)) {
+            ++counters.draws_skipped;
+            return false;
         }
     }
     if (impl.gpu_profiler) {

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -89,8 +86,8 @@ public:
     /// Signal disabling of a uniform buffer
     virtual void DisableGraphicsUniformBuffer(size_t stage, u32 index) = 0;
 
-    /// Signal a GPU based semaphore as a fence. force_completion also waits at low accuracy.
-    virtual void SignalFence(std::function<void()>&& func, bool force_completion = false) = 0;
+    /// Signal a GPU based semaphore as a fence
+    virtual void SignalFence(std::function<void()>&& func) = 0;
 
     /// Send an operation to be done after a certain amount of flushes.
     virtual void SyncOperation(std::function<void()>&& func) = 0;
@@ -281,14 +278,6 @@ public:
         const Tegra::Texture::TICEntry* depth, std::array<f32, 2> jitter,
         std::array<f32, 2> motion_scale, bool use_history = true,
         std::optional<std::array<u32, 2>> render_region = std::nullopt) {
-        return false;
-    }
-
-    /// NVIDIA DLSS (DLAA or Super Resolution) in place of a game's own anti-aliasing / upscaling
-    /// of src into dst (Ocarina of Time; ocarina_upscale.h), with jitter and camera motion from
-    /// the host. False when it can't run; the caller retains its native dispatch.
-    [[nodiscard]] virtual bool AccelerateCameraMotionUpscale(
-        const Tegra::Engines::Fermi2D::Surface& src, const Tegra::Engines::Fermi2D::Surface& dst) {
         return false;
     }
 

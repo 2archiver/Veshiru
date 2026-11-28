@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -59,7 +56,7 @@ std::optional<EmitX64::BlockDescriptor> EmitX64::GetBasicBlock(IR::LocationDescr
     return iter->second;
 }
 
-void EmitX64::EmitInvalid(EmitContext&, IR::Inst*) {
+void EmitX64::EmitInvalid(EmitContext&, IR::Inst* inst) {
     UNREACHABLE();
 }
 

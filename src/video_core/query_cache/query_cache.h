@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -26,7 +23,6 @@
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
-#include "video_core/nx2_perf.h"
 #include "video_core/query_cache/bank_base.h"
 #include "video_core/query_cache/frame_trace.h"
 #include "video_core/query_cache/query_base.h"
@@ -71,11 +67,7 @@ public:
         if (pending_sync.empty()) {
             return;
         }
-        std::vector<SyncValuesStruct> local_values;
-        auto& sync_values = Nx2Perf::On(Nx2Perf::Opt::QueryUploadScratch) && !Nx2Perf::Verify()
-                                ? sync_values_stash
-                                : local_values;
-        sync_values.clear();
+        std::vector<SyncValuesStruct> sync_values;
         sync_values.reserve(pending_sync.size());
         for (size_t pending_id : pending_sync) {
             auto& query = slot_queries[pending_id];
@@ -98,7 +90,6 @@ public:
 private:
     RuntimeType& runtime;
     std::deque<size_t> pending_sync;
-    std::vector<SyncValuesStruct> sync_values_stash;
 };
 
 template <typename Traits>
@@ -280,23 +271,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         return;
     }
     DAddr cpu_addr = *cpu_addr_opt;
-    u8* const pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
-    if (!is_fence && !Settings::IsGPULevelHigh() && counter_type == QueryType::Payload) {
-        if (has_timestamp) {
-            const u64 timestamp = impl->gpu.GetTicks();
-            const u64 value = static_cast<u64>(payload);
-            u8* const pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
-            std::memcpy(pointer_timestamp, &timestamp, sizeof(timestamp));
-            std::memcpy(pointer, &value, sizeof(value));
-        } else {
-            std::memcpy(pointer, &payload, sizeof(payload));
-        }
-        Tegra::Nx2SemaphoreWaiters::Get().OnWrite(cpu_addr, payload);
-        return;
-    }
     const size_t new_query_id = streamer->WriteCounter(cpu_addr, has_timestamp, payload, subreport);
-    // `pointer` is the one the fast path above took: each of the bodies below re-derives its own.
-    u8* const pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
     auto* query = streamer->GetQuery(new_query_id);
     if (is_fence) {
         query->flags |= QueryFlagBits::IsFence;
@@ -308,6 +283,8 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         return std::make_pair<u64, u32>(cur_addr >> Core::DEVICE_PAGEBITS,
                                         static_cast<u32>(cur_addr & Core::DEVICE_PAGEMASK));
     };
+    u8* pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
+    u8* pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
     const u64 report_size = has_timestamp ? 16 : 4;
     const bool immediate =
         !is_fence && !Settings::IsGPULevelHigh() && counter_type == QueryType::Payload;
@@ -397,7 +374,7 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
             }
             std::memcpy(pointer, &query_base->value, sizeof(query_base->value));
         } else {
-            const u32 value = static_cast<u32>(query_base->value);
+            u32 value = static_cast<u32>(query_base->value);
             std::memcpy(pointer, &value, sizeof(value));
         }
         if (!mirrored && counter_type == QueryType::Payload) {
@@ -474,9 +451,6 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
 
 template <typename Traits>
 void QueryCacheBase<Traits>::UnregisterPending() {
-    if (impl->pending_unregister.empty()) {
-        return;
-    }
     const auto gen_caching_indexing = [](VAddr cur_addr) {
         return std::make_pair<u64, u32>(cur_addr >> Core::DEVICE_PAGEBITS,
                                         static_cast<u32>(cur_addr & Core::DEVICE_PAGEMASK));

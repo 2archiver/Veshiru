@@ -694,14 +694,6 @@ struct Values {
                                                            "vram_usage_mode",
                                                            Category::RendererAdvanced};
 
-    Setting<ColdHintMode> cold_hint_mode{linkage,
-                                         ColdHintMode::Off,
-                                         "cold_hint_mode",
-                                         Category::RendererMemory,
-                                         Specialization::Default,
-                                         true,
-                                         true};
-
     /// Video memory kept free of the driver's budget, in MiB. -1: automatic (an eighth of the
     /// budget, at most 1 GiB). Used for the reported VRAM and the texture cache's margin.
     SwitchableSetting<int, true> vram_reserve_mib{linkage,

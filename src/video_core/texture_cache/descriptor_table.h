@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -56,11 +53,11 @@ public:
             invalidated = false;
         }
         const GPUVAddr gpu_addr = current_gpu_addr + index * sizeof(T);
-        const u64 page_offset = gpu_addr & Core::Memory::VESHIRU_PAGEMASK;
         std::pair<T, bool> result;
         // This runs for every texture and sampler of every draw. An entry within one page is
         // contiguous in host memory, so a single page lookup replaces the generic block read.
-        const bool one_page = page_offset + sizeof(T) <= Core::Memory::VESHIRU_PAGESIZE;
+        const bool one_page =
+            (gpu_addr & Core::Memory::VESHIRU_PAGEMASK) + sizeof(T) <= Core::Memory::VESHIRU_PAGESIZE;
         if (const u8* const host = one_page ? gpu_memory.GetPointer(gpu_addr) : nullptr) {
             std::memcpy(std::addressof(result.first), host, sizeof(T));
         } else {
@@ -175,7 +172,6 @@ private:
     std::array<PageCacheEntry, PageCacheSize> page_cache{};
 
     void ClearReadDescriptors() noexcept {
-        page_cache = {};
         // Reserved capacity is not addressable. A later limit increase clears its new range.
         const size_t words = (std::min)(read_descriptors.size(), size_t{current_limit} / 64 + 1);
         std::fill_n(read_descriptors.begin(), words, u64{0});

@@ -340,11 +340,6 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Selects whether the emulator should prefer to conserve memory or make maximum usage "
               "of available video memory for performance.\nAggressive mode may impact performance "
               "of other applications such as recording software."));
-    INSERT(Settings, cold_hint_mode, tr("Cold Page Hinting:"),
-           tr("Hints guest memory the game is not using as cold, so the operating system can "
-              "reclaim it under pressure.\n"
-              "When RAM is low: only while free physical memory is tight.\n"
-              "Always: on every pass. Off by default."));
     INSERT(Settings, vram_reserve_mib, tr("VRAM Reserve:"),
            tr("Video memory kept free of what the driver allows the emulator, in MiB.\nAuto keeps "
               "an eighth of the driver budget, at most 1024 MiB. Lower values leave more room for "

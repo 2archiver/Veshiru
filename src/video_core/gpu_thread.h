@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -10,7 +7,6 @@
 
 #include <functional>
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <optional>
@@ -19,9 +15,6 @@
 
 #include "common/bounded_threadsafe_queue.h"
 #include "common/polyfill_thread.h"
-#include "video_core/nx2_gpu_latency.h"
-#include "video_core/nx2_hazard.h"
-#include "video_core/nx2_timeline.h"
 #include "video_core/dma_pusher.h"
 #include "video_core/framebuffer_config.h"
 
@@ -49,19 +42,10 @@ namespace VideoCommon::GPUThread {
 /// Command to signal to the GPU thread that a command list is ready for processing
 struct SubmitListCommand final {
     explicit SubmitListCommand(s32 channel_, Tegra::CommandList&& entries_)
-        : channel{channel_}, entries{std::move(entries_)},
-          epoch{VideoCommon::Nx2Hazard::CurrentEpoch()},
-          timeline_seq{VideoCommon::Nx2Timeline::OnSubmit(
-              static_cast<u32>(entries.command_lists.size()))},
-          submit_time{std::chrono::steady_clock::now()},
-          guest_waits{VideoCommon::Nx2GpuLatency::GuestWaits()} {}
+        : channel{channel_}, entries{std::move(entries_)} {}
 
     s32 channel;
     Tegra::CommandList entries;
-    u64 epoch; ///< Presents the guest had made when it submitted the list (nx2_hazard.h)
-    u64 timeline_seq; ///< nx2_timeline.h
-    std::chrono::steady_clock::time_point submit_time; ///< nx2_gpu_latency.h
-    u64 guest_waits;                                   ///< nx2_gpu_latency.h
 };
 
 /// Command to signal to the GPU thread to flush a region

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -108,6 +105,17 @@ public:
         return written_images;
     }
 
+    struct SampledImage {
+        u32 tic;
+        VideoCommon::ImageViewId id;
+        VideoCommon::SamplerId sampler;
+    };
+
+    /// The textures sampled by the last configured dispatch, kept while a sampled frame dump runs.
+    [[nodiscard]] std::span<const SampledImage> SampledImages() const noexcept {
+        return sampled_images;
+    }
+
     /// Advances the frame window of EDEN_NX2_UPSCALER_TRACE
     static void TickUpscalerTrace();
 
@@ -136,6 +144,7 @@ private:
     u32 num_descriptor_entries{};
     boost::container::small_vector<VideoCommon::ImageViewId, 8> written_images;
     bool wait_logged{};
+    std::vector<SampledImage> sampled_images;
 
     VideoCommon::ComputeUniformBufferSizes uniform_buffer_sizes{};
 
@@ -144,11 +153,6 @@ private:
     bool uses_push_descriptor{false};
     bool uses_descriptor_buffer{false};
     DescriptorBufferLayout descriptor_buffer_layout;
-    std::vector<DescriptorUpdateEntry> last_descriptor_payload;
-    std::vector<u8> last_descriptor_bytes;
-    VkDeviceSize last_descriptor_buffer_offset{};
-    u32 last_descriptor_buffer_chunk{};
-    u64 last_descriptor_buffer_generation{};
     DescriptorAllocator descriptor_allocator;
     VkPipelineLayout pipeline_layout{}; ///< Owned by the PipelineLayoutCache
     vk::DescriptorUpdateTemplate descriptor_update_template;

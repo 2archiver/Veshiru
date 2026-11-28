@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -78,8 +75,9 @@ void PushStubZeroes(IPC::ResponseBuilder& rb) {
 } // namespace
 
 bool ServiceFrameworkBase::StubAllowed(HLERequestContext& ctx) {
+    static const bool env_auto_stub = std::getenv("EDEN_NX2_AUTO_STUB") != nullptr;
     const auto* const caller = ctx.GetThread().GetOwnerProcess();
-    if (Settings::values.use_auto_stub ||
+    if (Settings::values.use_auto_stub || env_auto_stub ||
         std::string_view{service_name}.starts_with(Nx2StubPrefix) ||
         (caller != nullptr && caller->IsSwitch2())) {
         // Logged once per command: these are still unimplemented.
@@ -141,13 +139,13 @@ void ServiceFrameworkBase::RegisterHandlersBaseTipc(const FunctionInfoBase* func
         handlers_tipc.emplace_hint(handlers_tipc.cend(), functions[i].expected_header, functions[i]);
 }
 
-/// Records and logs a call to an unknown command, replying with a zeroed stub when auto-stubbed.
 void ServiceFrameworkBase::ReportUnimplementedFunction(HLERequestContext& ctx,
                                                        const FunctionInfoBase* info) {
-    // Switch 2 programs are always auto-stubbed: they still call many commands nobody has
-    // implemented.
+    // EDEN_NX2_AUTO_STUB=1 auto-stubs every unknown command without touching the config. Switch 2
+    // programs are always auto-stubbed: they still call many commands nobody has implemented.
+    static const bool env_auto_stub = std::getenv("EDEN_NX2_AUTO_STUB") != nullptr;
     const auto* const caller = ctx.GetThread().GetOwnerProcess();
-    const bool auto_stub = Settings::values.use_auto_stub ||
+    const bool auto_stub = Settings::values.use_auto_stub || env_auto_stub ||
                            std::string_view{service_name}.starts_with(Nx2StubPrefix) ||
                            (caller != nullptr && caller->IsSwitch2());
     // Auto-stubbed commands are reported once each: title 1 polls nx2:camera 29 every frame
@@ -267,7 +265,6 @@ void CountRequest(const std::string& service, u32 command, u32 type, u32 result)
 }
 } // Anonymous namespace
 
-/// Handles one IPC request by command type, counting it and reporting it to the trace hook.
 Result ServiceFrameworkBase::HandleSyncRequest(Kernel::KServerSession& session,
                                                HLERequestContext& ctx) {
     const auto guard = LockService();

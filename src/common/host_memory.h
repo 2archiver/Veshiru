@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -14,7 +11,6 @@
 #include <utility>
 #include "common/common_funcs.h"
 #include "common/common_types.h"
-#include "common/settings_enums.h"
 
 namespace Common {
 
@@ -30,19 +26,6 @@ DECLARE_ENUM_FLAG_OPERATORS(MemoryPermission)
  * A low level linear memory buffer, which supports multiple mappings
  * Its purpose is to rebuild a given sparse memory layout, including mirrors.
  */
-/// Whether HostMemory::HintCold pages memory out. Its passes stall the GPU threads for as long as
-/// they run (Mario Kart World: 60-700 ms every 600 frames, the longer the session the longer).
-/// The cold hint mode in effect: the cold_hint_mode setting (off by default), unless
-/// EDEN_NX2_COLD_HINT (off, low, always) overrides it.
-[[nodiscard]] Settings::ColdHintMode ColdHintModeInEffect();
-
-/// Whether the system is short of memory: memory pressure stalls over 5% of the last 10 s (Linux
-/// PSI, this process's cgroup or the whole system), or less than a tenth of RAM (at least 1 GiB)
-/// available. Re-read at most once a second.
-[[nodiscard]] bool MemoryIsLow();
-
-enum class ColdHintAction { None, MarkedCold, PagedOut };
-
 class HostMemory {
 public:
     /// Windows maps the backing as views of this size placed back to back (one contiguous
@@ -85,8 +68,8 @@ public:
     /// Memory written once and read again rarely: its pages leave the working set (backing and,
     /// when given, its view at virtual_offset), so the OS compresses or pages them out first when
     /// it needs RAM. The contents stay; using the pages brings them back.
-    ColdHintAction HintCold(size_t physical_offset, size_t length,
-                            std::optional<size_t> virtual_offset) const;
+    void HintCold(size_t physical_offset, size_t length,
+                  std::optional<size_t> virtual_offset) const;
     /// What one TrimZeroPages pass looked at and achieved.
     struct ZeroTrimResult {
         /// Resident bytes of guest memory the pass looked at.

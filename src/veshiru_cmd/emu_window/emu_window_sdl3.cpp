@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 #pragma GCC diagnostic ignored "-Wmissing-declarations"
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -26,7 +23,6 @@
 #include "hid_core/hid_core.h"
 #include "input_common/drivers/keyboard.h"
 #include "input_common/drivers/mouse.h"
-#include "input_common/drivers/tas_input.h"
 #include "input_common/drivers/touch_screen.h"
 #include "input_common/main.h"
 #include "veshiru_cmd/emu_window/emu_window_sdl3.h"
@@ -126,6 +122,12 @@ void EmuWindow_SDL3::OnFingerUp() {
     input_subsystem->GetTouchScreen()->ReleaseAllTouch();
 }
 
+// Seconds since the first frame; shared by the key script (veshiru.cpp) and key recording.
+double Nx2KeyClockSeconds() {
+    static const auto begin = std::chrono::steady_clock::now();
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+}
+
 void EmuWindow_SDL3::OnKeyEvent(int key, u8 state) {
     // EDEN_NX2_KEY_RECORD=<file>: append each press/release ("seconds:code", "seconds:-code").
     static std::FILE* const record = [] {
@@ -176,12 +178,6 @@ void EmuWindow_SDL3::ApplyPendingTitle() {
 
 bool EmuWindow_SDL3::IsShown() const {
     return window_state.IsShown();
-}
-
-/// Called by the renderer on its thread after each presented frame: steps the TAS engine.
-void EmuWindow_SDL3::OnFrameDisplayed() {
-    // Without this TAS scripts never advanced in eden-cli (only the Qt frontend called it).
-    input_subsystem->GetTas()->UpdateThread();
 }
 
 void EmuWindow_SDL3::OnResize() {

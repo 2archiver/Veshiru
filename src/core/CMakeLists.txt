@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-# SPDX-License-Identifier: GPL-3.0-or-later
-
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -48,6 +45,11 @@ add_library(core STATIC
     debugger/gdbstub.h
     debugger/gdbstub_arch.cpp
     debugger/gdbstub_arch.h
+    debugger/mapped_range_hook.h
+    debugger/nx2_debug_server.cpp
+    debugger/nx2_debug_server.h
+    debugger/nx2_debug_tools.cpp
+    debugger/nx2_debug_tools.h
     device_memory.cpp
     device_memory.h
     device_memory_manager.h
@@ -506,8 +508,7 @@ add_library(core STATIC
     hle/service/am/service/application_functions.cpp
     hle/service/am/service/application_functions.h
     hle/service/am/service/application_proxy.cpp
-    hle/service/am/service/graphics_scaling_parameters_functions.h
-    hle/service/am/service/performance_functions.h
+    hle/service/am/service/graphics_scale_controller.h
     hle/service/am/service/application_proxy.h
     hle/service/am/service/application_proxy_service.cpp
     hle/service/am/service/application_proxy_service.h

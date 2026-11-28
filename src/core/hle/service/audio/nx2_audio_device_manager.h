@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -10,7 +7,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -21,7 +17,6 @@
 
 #include <fmt/ranges.h>
 
-#include "audio_core/audio_core.h"
 #include "common/string_util.h"
 #include "audio_core/audio_core.h"
 #include "core/core.h"
@@ -35,7 +30,6 @@
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/service.h"
-#include "core/memory.h"
 
 namespace Service::Audio {
 
@@ -93,12 +87,9 @@ struct Nx2SysmixStreams {
     std::shared_ptr<Core::Timing::EventType> timer;
 };
 
-namespace Devmgr {
-
-// nn::audio::devmgr::IUserSession: Switch 2 virtual output devices
-// (nn::audio::ListVirtualOutputDevices and friends), reached through the object auddmg:u command 0
-// returns. Eden plays everything through one stereo 48 kHz output, so there is one virtual device.
-// The nx2: name keeps the other commands auto-stubbed and logged.
+// Switch 2 virtual output devices (nn::audio::ListVirtualOutputDevices and friends), reached through
+// the object auddmg:u command 0 returns. Eden plays everything through one stereo 48 kHz output, so
+// there is one virtual device. The nx2: name keeps the other commands auto-stubbed and logged.
 // - 0(u32): u32 count, the device names in the out buffer (0x100 bytes each).
 // - 100(u32): the default device's name in the out buffer.
 // - 300(16-byte stream format, name buffer): whether the format is supported (result only).
@@ -109,7 +100,7 @@ namespace Devmgr {
 // - 700(u32 stream id, u32 device functionality, name buffer): attach a sysmix stream to the
 //   device, which starts it (nn::audio::devmgr::AttachStream, behind OutputStream Start).
 // - 800(u32 stream id): detach it again (Stop).
-class IUserSession final : public ServiceFramework<IUserSession> {
+class INx2AudioVirtualDeviceManager final : public ServiceFramework<INx2AudioVirtualDeviceManager> {
 public:
     explicit INx2AudioVirtualDeviceManager(Core::System& system_,
                                           std::shared_ptr<Nx2SysmixStreams> streams_)
@@ -119,19 +110,19 @@ public:
           streams{std::move(streams_)} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, &IUserSession::ListVirtualOutputDevices, "ListVirtualOutputDevices"},
-            {100, &IUserSession::GetDefaultVirtualOutputDevice, "GetDefaultVirtualOutputDevice"},
-            {300, &IUserSession::IsStreamFormatSupported, "IsVirtualOutputDeviceStreamFormatSupported"},
-            {401, &IUserSession::GetVirtualOutputDeviceProperties, "GetVirtualOutputDeviceProperties"},
-            {500, &IUserSession::AcquireStateChangeEvent, "AcquireVirtualOutputDeviceStateEvent (guessed)"},
-            {700, &IUserSession::AttachStream, "AttachStream"},
-            {800, &IUserSession::DetachStream, "DetachStream"},
+            {0, &INx2AudioVirtualDeviceManager::ListVirtualOutputDevices, "ListVirtualOutputDevices"},
+            {100, &INx2AudioVirtualDeviceManager::GetDefaultVirtualOutputDevice, "GetDefaultVirtualOutputDevice"},
+            {300, &INx2AudioVirtualDeviceManager::IsStreamFormatSupported, "IsVirtualOutputDeviceStreamFormatSupported"},
+            {401, &INx2AudioVirtualDeviceManager::GetVirtualOutputDeviceProperties, "GetVirtualOutputDeviceProperties"},
+            {500, &INx2AudioVirtualDeviceManager::AcquireStateChangeEvent, "AcquireVirtualOutputDeviceStateEvent (guessed)"},
+            {700, &INx2AudioVirtualDeviceManager::AttachStream, "AttachStream"},
+            {800, &INx2AudioVirtualDeviceManager::DetachStream, "DetachStream"},
         };
         // clang-format on
         RegisterHandlers(functions);
     }
 
-    ~IUserSession() override {
+    ~INx2AudioVirtualDeviceManager() override {
         service_context.CloseEvent(state_event);
     }
 
@@ -259,23 +250,22 @@ private:
     std::shared_ptr<Nx2SysmixStreams> streams;
 };
 
-// Switch 2 "auddmg:u" (nn::audio::devmgr::IUserSessionManager): command 0 (16 bytes and the pid)
-// returns the user session.
-class IUserSessionManager final : public ServiceFramework<IUserSessionManager> {
+// Switch 2 "auddmg:u": command 0 (16 bytes and the pid) returns the virtual device manager.
+class INx2AudioDeviceManagerService final : public ServiceFramework<INx2AudioDeviceManagerService> {
 public:
     explicit INx2AudioDeviceManagerService(Core::System& system_,
                                           std::shared_ptr<Nx2SysmixStreams> streams_)
         : ServiceFramework{system_, "nx2:auddmg:u"}, streams{std::move(streams_)} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, &IUserSessionManager::OpenUserSession, "OpenUserSession"},
+            {0, &INx2AudioDeviceManagerService::OpenVirtualDeviceManager, "OpenVirtualDeviceManager (guessed)"},
         };
         // clang-format on
         RegisterHandlers(functions);
     }
 
 private:
-    void OpenUserSession(HLERequestContext& ctx) {
+    void OpenVirtualDeviceManager(HLERequestContext& ctx) {
         LOG_DEBUG(Service_Audio, "called");
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(ResultSuccess);
@@ -285,19 +275,14 @@ private:
     std::shared_ptr<Nx2SysmixStreams> streams;
 };
 
-} // namespace Devmgr
-
-namespace Sysmix {
-
-// nn::audio::sysmix::IExternalStreamSession, the stream object IUserSession command 1 returns.
-// Commands (ids, request -> reply):
+// The stream object IUserSession command 1 returns. Commands (ids, request -> reply):
 // - 0(u32 sample type, u32 channels, u32 sample rate, u32 frames, u32 prefill, u32 flags): open.
 // - 1: close. 2: u32 state. 3: f32 gain. 4(f32 gain, s64 ramp ns): set the gain.
 // - 5 / 6: acquire (copy handle) / release the state-change event.
 // - 7(u32 mode, s32 threshold) / 8: acquire (copy handle) / release the data event.
 // - 9(s64 ns): clock the stream. 10(s32 frames) -> u32: prime. 11(s32 frames) -> u32: purge.
 // - 12(name buffer): rename.
-class IExternalStreamSession final : public ServiceFramework<IExternalStreamSession> {
+class INx2SysmixStreamSession final : public ServiceFramework<INx2SysmixStreamSession> {
 public:
     INx2SysmixStreamSession(Core::System& system_, std::shared_ptr<Nx2SysmixStreams> streams_,
                            std::shared_ptr<SysmixOutput> stream_, u32 id_)
@@ -358,7 +343,6 @@ private:
     }
 
     void GetStreamGain(HLERequestContext& ctx) {
-        std::scoped_lock lk{streams->mutex};
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
         rb.Push(stream->GetGain());
@@ -434,9 +418,9 @@ public:
         : ServiceFramework{system_, "nx2:audsmx:u:session"}, streams{std::move(streams_)},
           process{system.Kernel(), process_} {
         static const FunctionInfo functions[] = {
-            {1, &IUserSession::CreateStream, "CreateStream"},
-            {2, &IUserSession::EngageStreams, "EngageStreams"},
-            {3, &IUserSession::DisengageStreams, "DisengageStreams"},
+            {1, &INx2SysmixUserSession::CreateStream, "CreateStream"},
+            {2, &INx2SysmixUserSession::EngageStreams, "EngageStreams"},
+            {3, &INx2SysmixUserSession::DisengageStreams, "DisengageStreams"},
         };
         RegisterHandlers(functions);
     }
@@ -515,7 +499,7 @@ public:
     INx2AudioSoundMixerService(Core::System& system_, std::shared_ptr<Nx2SysmixStreams> streams_)
         : ServiceFramework{system_, "nx2:audsmx:u"}, streams{std::move(streams_)} {
         static const FunctionInfo functions[] = {
-            {0, &IUserSessionManager::OpenUserSession, "OpenUserSession"},
+            {0, &INx2AudioSoundMixerService::OpenUserSession, "OpenUserSession"},
         };
         RegisterHandlers(functions);
     }
@@ -535,7 +519,5 @@ private:
 
     std::shared_ptr<Nx2SysmixStreams> streams;
 };
-
-} // namespace Sysmix
 
 } // namespace Service::Audio

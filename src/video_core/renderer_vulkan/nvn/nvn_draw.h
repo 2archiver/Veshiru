@@ -44,6 +44,10 @@
 #include "video_core/upscaler.h"
 #include "video_core/renderer_vulkan/nvn/nvn_pipeline_cache.h"
 
+namespace VideoCommon::NvnDrawProbe {
+struct DumpTicket;
+}
+
 namespace Vulkan::Nvn {
 
 inline constexpr u32 BIND_STAGES = 8;
@@ -1187,6 +1191,20 @@ private:
     DrawPlan draw_plan; ///< the plan of the draw being prepared (capacity kept between draws)
     std::array<u32, 2> fallback_logged{}; ///< DescReason bits logged once, per bind point
 
+    /// nvn_draw_dump: read-backs of the textures a dumped draw or dispatch bound, recorded once no
+    /// pass is open (a draw's at the end of its pass, a dispatch's right after it). Each writes a
+    /// TGA next to the dump and a "[nvn] dump" statistics line.
+    struct ProbeImage {
+        std::shared_ptr<Storage> storage;
+        u32 level;
+        u32 layer;
+        std::string path;
+    };
+    std::vector<ProbeImage> probe_images;
+    /// Notes the bindings of `draw_plan` with at most `max_texels` texels (path `prefix`-b<n>-...).
+    void ProbeNoteImages(const std::string& prefix, u64 max_texels);
+    void ProbeFlushImages();
+
     // ---- diagnostics (nvn_draw_debug.cpp; used only when Debug::Tracing()) ----
     struct DebugTargetStat {
         u64 draws{};
@@ -1229,6 +1247,21 @@ private:
                                const BufferRef* count);
     /// EDEN_NX2_NVN_ONLY_DRAWS: false for a draw of the selected frame that is not listed.
     [[nodiscard]] bool DebugDrawAllowed() const;
+    /// Census / skip / dump of the draw for the debug server draw methods
+    /// (video_core/nvn_draw_probe.h, nvn_draw_probe.cpp). True: the draw is skipped.
+    [[nodiscard]] bool ProbeDraw(const PipelineBase& pipe, u32 mode, u32 element_count,
+                                 const IndexRange* index,
+                                 const std::array<BufferRef, MAX_VERTEX_STREAMS>& vertex,
+                                 u32 used_streams, bool mesh);
+    /// nvn_draw_dump of a dispatch whose descriptors are bound (BindDescriptors done):
+    /// `arguments` is the resolved indirect argument range (null: direct).
+    void ProbeDispatchDump(const VideoCommon::NvnDrawProbe::DumpTicket& ticket,
+                           const PipelineBase& pipe, const VC::NvnControl& control,
+                           const VC::DispatchPayload& p, const BufferRef* arguments, u64 hash,
+                           bool skipped);
+    /// The dump section both share: every descriptor binding of `pipe` with what backs it (where
+    /// the GPU reads a buffer from and the bytes it reads, as far as the CPU can see them).
+    void AppendBindingDump(std::string& text, const PipelineBase& pipe);
     /// `textures` diag request (nvn_draw_debug.cpp): the textures of the draw being prepared are
     /// noted (`DiagNoteTextures`, after BuildDescriptors) and read back when the pass has ended
     /// (`DiagFlushTextures`, from EndPass).

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -110,8 +107,6 @@ private:
     Settings::NvidiaDlssPreset model_preset{};
     Settings::NvidiaDlssQuality evaluated_mode{}; ///< Recorded on the scheduler's worker
     u32 frame_index{};
-    u32 current_mode{};
-    bool hdr{true}; ///< The colour kind the options were last set for.
     vk::Image output_image;
     vk::ImageView output_view;
     vk::Sampler point_sampler;

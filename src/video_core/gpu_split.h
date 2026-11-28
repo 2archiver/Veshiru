@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -10,7 +7,6 @@
 #include <array>
 #include <atomic>
 #include <cstring>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -18,11 +14,9 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
-#include <vector>
 
 #include "common/common_types.h"
 #include "common/container/unordered_map.h"
-#include "video_core/split_write_tracker.h"
 
 namespace Core {
 class System;
@@ -43,7 +37,6 @@ enum class DrainSite : u32 {
     Other,
     FetchDrain,     ///< EDEN_NX2_FETCH_DRAIN: before every entry
     Acquire,        ///< A semaphore acquire reads the value the back may release
-    AcquirePoll,    ///< A suspended acquire polls a value the back may have released
     SemaphoreFlush, ///< The acquired semaphore is in the buffer cache
     FenceRelease,   ///< The puller's acquires release the pending fences
     ListWriters,    ///< GPU-written command lists: the dispatches and copies sent before them
@@ -113,8 +106,7 @@ inline void Count(std::atomic<u64>& counter, u64 amount = 1) {
 }
 
 inline constexpr std::array<const char*, static_cast<size_t>(DrainSite::Count)> drain_site_names{
-    "other",           "fetch drain",   "acquire",    "acquire poll",    "semaphore flush",
-    "fence release",
+    "other",           "fetch drain",   "acquire",    "semaphore flush", "fence release",
     "list writers",    "list sync",     "list flush", "macro dma read",  "macro dma writes",
     "macro dma flush", "gp sync fence", "map",        "front start",     "front verify",
     "ring full",       "back register", "back code",
@@ -174,16 +166,11 @@ public:
     [[nodiscard]] bool BackRunning() const {
         return back_running.load(std::memory_order_acquire);
     }
-    /// Any thread: has the back call the idle hook soon, between entries or before it sleeps.
+    /// Any thread: has the back call the idle hook soon, between entries or at once if it sleeps.
     void RequestIdleHook() {
         hook_requested.store(true, std::memory_order_seq_cst);
-    }
-    /// Any thread, a hint (relaxed loads): whether the front waits for the back now, for a ring
-    /// position (WaitFor), a drain or a submission (hook_requested), or asleep in Backoff.
-    [[nodiscard]] bool FrontWaitsForBack() const {
-        return wait_target.load(std::memory_order_relaxed) != ~u64{0} ||
-               hook_requested.load(std::memory_order_relaxed) ||
-               front_waiting.load(std::memory_order_relaxed);
+        wake.fetch_add(1, std::memory_order_seq_cst);
+        wake.notify_one();
     }
 
     /// Starts the back thread once the split is wanted (EDEN_NX2_SPLIT=1, a Switch 2 title,
@@ -200,20 +187,8 @@ public:
 
     /// An engine method write, executed as DmaPusher would (method sink, ConsumeSink, call).
     /// `segment`: the engine's current_dma_segment for the call, when the engine reads it.
-    /// `effect`: what the entry may write (SplitWriteTracker; unknown unless the caller knows).
-    using Effect = SplitWriteTracker::Effect;
-    using WriteKind = SplitWriteTracker::WriteKind;
     void Method(Tegra::Engines::EngineInterface* engine, u32 method, u32 argument, bool is_last,
                 const GPUVAddr* segment, Writes writes = Writes::Anywhere) {
-        Method(engine, method, argument, is_last, segment, writes,
-               writes == Writes::Anywhere ? Effect::Unknown : Effect::None);
-    }
-    void Method(Tegra::Engines::EngineInterface* engine, u32 method, u32 argument, bool is_last,
-                const GPUVAddr* segment, Effect effect) {
-        Method(engine, method, argument, is_last, segment, Writes::Noted, effect);
-    }
-    void Method(Tegra::Engines::EngineInterface* engine, u32 method, u32 argument, bool is_last,
-                const GPUVAddr* segment, Writes writes, Effect effect) {
         SelectEngine(engine);
         const size_t words = segment != nullptr ? 2 : 1;
         u64* const entry = Reserve(words);
@@ -223,75 +198,25 @@ public:
         if (segment != nullptr) {
             entry[1] = *segment;
         }
-        Commit(words, effect);
-        if (writes == Writes::Anywhere || EffectMayWriteAnywhere(effect)) {
+        Commit(words);
+        if (writes == Writes::Anywhere) {
             NoteAnyWrite();
         }
     }
     void MultiMethod(Tegra::Engines::EngineInterface* engine, u32 method, const u32* words,
                      u32 amount, u32 methods_pending, const GPUVAddr* segment,
                      Writes writes = Writes::Anywhere);
-    void MultiMethod(Tegra::Engines::EngineInterface* engine, u32 method, const u32* words,
-                     u32 amount, u32 methods_pending, const GPUVAddr* segment, Effect effect);
-    void MultiMethod(Tegra::Engines::EngineInterface* engine, u32 method, const u32* words,
-                     u32 amount, u32 methods_pending, const GPUVAddr* segment, Writes writes,
-                     Effect effect);
     /// A write made by a macro: CallMethod without the method sink, as the engines' macros do.
     void MacroWrite(Tegra::Engines::EngineInterface* engine, u32 method, u32 argument,
                     Writes writes = Writes::Anywhere) {
-        MacroWrite(engine, method, argument, writes,
-                   writes == Writes::Anywhere ? Effect::Unknown : Effect::None);
-    }
-    void MacroWrite(Tegra::Engines::EngineInterface* engine, u32 method, u32 argument,
-                    Effect effect) {
-        MacroWrite(engine, method, argument, Writes::Noted, effect);
-    }
-    void MacroWrite(Tegra::Engines::EngineInterface* engine, u32 method, u32 argument,
-                    Writes writes, Effect effect) {
         SelectEngine(engine);
         u64* const entry = Reserve(1);
         entry[0] = static_cast<u64>(Kind::Method) | IsLast | Direct | (u64{method & 0xffff} << 8) |
                    (u64{argument} << 32);
-        Commit(1, effect);
-        if (writes == Writes::Anywhere || EffectMayWriteAnywhere(effect)) {
+        Commit(1);
+        if (writes == Writes::Anywhere) {
             NoteAnyWrite();
         }
-    }
-
-    /// Nx2Perf draw_begin_coalesce: fold adjacent identical draw-begin calls into an instance
-    /// count; verification mode sends the entry and marks it for checking on the back.
-    bool RepeatableMethod(Tegra::Engines::EngineInterface* engine, u32 method, u32 argument,
-                          bool is_last, bool direct, Effect effect, bool verify) {
-        FlushState();
-        const u64 word = static_cast<u64>(Kind::Method) |
-                         (direct ? IsLast | Direct : (is_last ? IsLast : 0)) |
-                         (u64{method & 0xffff} << 8) | (u64{argument} << 32);
-        const bool repeat =
-            repeat_end == write_position && engine == front_engine &&
-            published_local < write_position &&
-            (ring[(write_position - 1) & RingMask] & ~(Repeatable | RepeatMask)) == word &&
-            (ring[(write_position - 1) & RingMask] & RepeatMask) != RepeatMask;
-        if (repeat && !verify) {
-            ring[(write_position - 1) & RingMask] += RepeatOne;
-            writes.Entry(effect, write_position);
-            if (EffectMayWriteAnywhere(effect)) {
-                NoteAnyWrite();
-            }
-            if (eager_publish && back_idle.load(std::memory_order_relaxed)) {
-                Publish();
-            }
-            return true;
-        }
-        SelectEngine(engine);
-        u64* const entry = Reserve(1);
-        const bool flagged = repeat && write_position == repeat_end;
-        entry[0] = word | (flagged ? Repeatable : 0);
-        Commit(1, effect);
-        repeat_end = write_position;
-        if (EffectMayWriteAnywhere(effect)) {
-            NoteAnyWrite();
-        }
-        return flagged;
     }
 
     /// A Maxwell3D state register write (not in execution_mask) from the front, shadow RAM
@@ -325,35 +250,37 @@ public:
     /// `flags`: FastDrawNeutral when `func` can't change what a draw resolves to.
     template <typename Func>
     void Defer(const Func& func, u64 flags = 0, Writes writes = Writes::Anywhere) {
-        DeferEntry(func, flags, writes,
-                   writes == Writes::Anywhere ? Effect::Unknown : Effect::None);
-    }
-    template <typename Func>
-    void Defer(const Func& func, Effect effect) {
-        DeferEntry(func, 0, Writes::Noted, effect);
-    }
-    template <typename Func>
-    void Defer(const Func& func, u64 flags, Effect effect) {
-        DeferEntry(func, flags, Writes::Noted, effect);
-    }
-    template <typename Func>
-    void Defer(const Func& func, u64 flags, Writes writes, Effect effect) {
-        DeferEntry(func, flags, writes, effect);
+        static_assert(std::is_trivially_copyable_v<Func> && alignof(Func) <= alignof(u64));
+        constexpr size_t payload = (sizeof(Func) + sizeof(u64) - 1) / sizeof(u64);
+        u64* const entry = Reserve(2 + payload);
+        entry[0] = static_cast<u64>(Kind::Call) | flags | (u64{payload} << 8);
+        entry[1] = reinterpret_cast<u64>(&CallThunk<Func>);
+        std::memcpy(entry + 2, &func, sizeof(Func));
+        Commit(2 + payload);
+        if (writes == Writes::Anywhere) {
+            NoteAnyWrite();
+        }
     }
     /// Defer, calling `func` with a copy of `words` (a std::span<const u32>).
     template <typename Func>
     void DeferWords(const Func& func, std::span<const u32> words,
                     Writes writes = Writes::Anywhere) {
-        DeferWordsEntry(func, words, writes,
-                        writes == Writes::Anywhere ? Effect::Unknown : Effect::None);
-    }
-    template <typename Func>
-    void DeferWords(const Func& func, std::span<const u32> words, Effect effect) {
-        DeferWordsEntry(func, words, Writes::Noted, effect);
-    }
-    template <typename Func>
-    void DeferWords(const Func& func, std::span<const u32> words, Writes writes, Effect effect) {
-        DeferWordsEntry(func, words, writes, effect);
+        static_assert(std::is_trivially_copyable_v<Func> && alignof(Func) <= alignof(u64));
+        constexpr size_t function_words = (sizeof(Func) + sizeof(u64) - 1) / sizeof(u64);
+        const size_t payload = function_words + 1 + (words.size() + 1) / 2;
+        u64* const entry = Reserve(2 + payload);
+        entry[0] = static_cast<u64>(Kind::Call) | (u64{payload} << 8);
+        entry[1] = reinterpret_cast<u64>(&CallWordsThunk<Func>);
+        std::memcpy(entry + 2, &func, sizeof(Func));
+        entry[2 + function_words] = words.size();
+        if (!words.empty()) {
+            entry[1 + payload] = 0; // Padding after an odd count
+            std::memcpy(entry + 3 + function_words, words.data(), words.size_bytes());
+        }
+        Commit(2 + payload);
+        if (writes == Writes::Anywhere) {
+            NoteAnyWrite();
+        }
     }
     void DeferFunction(std::function<void()>&& func);
     /// Runs `func` on the back and waits for it: for work on back-owned state, such as a buffer
@@ -409,9 +336,6 @@ public:
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
         last_writer_position = write_position;
-        if (eager_publish) {
-            Publish(); // the fetch that waits for this entry usually follows within microseconds
-        }
     }
     /// Waits until the back executed the compute and copy work sent so far (not what came after).
     /// Returns whether any of it was still queued.
@@ -443,48 +367,10 @@ public:
     bool WaitForSyncedWriters();
 
     /// The entry just sent (Writes::Noted) writes [address, address + size) of `memory`.
-    bool NoteWrite(const Tegra::MemoryManager& memory, GPUVAddr address, u64 size,
-                   WriteKind kind = WriteKind::Other);
-    /// The entry just sent writes constant-buffer words, retaining them for a possible early read.
-    void NoteConstBufferWrite(const Tegra::MemoryManager& memory, GPUVAddr address,
-                              const u32* words, u32 count, u32 stored);
-    /// The entry just sent may write guest memory anywhere (legacy range-wait path).
+    void NoteWrite(const Tegra::MemoryManager& memory, GPUVAddr address, u64 size);
+    /// The entry just sent may write guest memory anywhere.
     void NoteAnyWrite() {
         last_any_write = write_position;
-    }
-    /// The next entry's Effect::Draw was classified with this program epoch.
-    void DrawEpoch(u64 epoch) {
-        writes.DrawEpoch(epoch);
-    }
-    /// The entry just sent invalidates the device range [begin, begin + size).
-    void NoteDeviceRange(u64 begin, u64 size) {
-        if (size != 0 && begin + size >= begin) {
-            writes.Write(begin, begin + size, write_position);
-        }
-    }
-    /// Waits for queued functions (including GPU maps) before translating, then retires writes.
-    u64 SettleWrites();
-    /// Drops pending writes the back has already run. Returns its consumed position.
-    u64 RetireWrites();
-    /// A report or delayed release lands after its entry is consumed.
-    void NoteAsyncWrite(u64 begin, u64 size);
-    /// Newest asynchronous write to [begin, begin + size), or zero.
-    [[nodiscard]] u64 HasAsyncWrite(u64 begin, u64 size) const;
-    [[nodiscard]] bool ConstBufferWordsKept(u64 consumed_position) const {
-        return cb_words_lost <= consumed_position;
-    }
-    void OverlayConstBufferWords(u64 consumed_position, u64 begin, u64 size, u8* out) const;
-    [[nodiscard]] u64 WritePosition() const {
-        return write_position;
-    }
-    [[nodiscard]] u64 ConsumedNow() const {
-        return consumed.load(std::memory_order_acquire);
-    }
-    [[nodiscard]] u64 ReadTarget(u64 begin, u64 end) const {
-        return writes.ReadTarget(begin, end);
-    }
-    [[nodiscard]] const SplitWriteTracker& WriteTracker() const {
-        return writes;
     }
     /// Waits until the back executed every entry sent so far that can write guest memory in
     /// [address, address + size) of `memory`, not the others. Returns whether one was queued.
@@ -507,14 +393,9 @@ private:
     static constexpr u64 IsLast = 1 << 4;
     static constexpr u64 HasSegment = 1 << 5;
     static constexpr u64 Direct = 1 << 6; ///< Method: call it even if not executable (macros)
-    static constexpr u64 Repeatable = 1 << 7; ///< Verify a draw-begin repeat was adjacent
-    static constexpr u64 RepeatOne = u64{1} << 24;
-    static constexpr u64 RepeatMask = u64{0xff} << 24;
     static constexpr u64 HasBreak = 1 << 4; ///< State: a write ends fast draw reuse
     static constexpr size_t StateFlagWords = 4;
     static constexpr u32 MaxStateWrites = 128;
-    static_assert(((u64{0xf} | IsLast | HasSegment | Direct) & Repeatable) == 0 &&
-                  ((u64{0xffff} << 8) & RepeatMask) == 0);
 
     static constexpr size_t RingWords = size_t{1} << 20; // 8 MiB
     static constexpr size_t RingMask = RingWords - 1;
@@ -539,15 +420,6 @@ private:
                                    u64 size) const;
     [[nodiscard]] u64 DeviceWritesTarget(DAddr address, u64 size) const;
 
-    static constexpr size_t MaxConstBufferWords = 4096;
-    static constexpr size_t AsyncWriteBuckets = size_t{1} << 16;
-    [[nodiscard]] static size_t AsyncWriteBucket(u64 slot) {
-        return static_cast<size_t>((slot ^ (slot >> 16) ^ (slot >> 32)) & (AsyncWriteBuckets - 1));
-    }
-    [[nodiscard]] static constexpr bool EffectMayWriteAnywhere(Effect effect) {
-        return effect == Effect::Unknown || effect == Effect::Gpu;
-    }
-
     template <typename Func>
     static void CallThunk(const u64* payload) {
         (*reinterpret_cast<const Func*>(payload))();
@@ -558,39 +430,6 @@ private:
         (*reinterpret_cast<const Func*>(payload))(
             std::span<const u32>{reinterpret_cast<const u32*>(payload + function_words + 1),
                                  static_cast<size_t>(payload[function_words])});
-    }
-    template <typename Func>
-    void DeferEntry(const Func& func, u64 flags, Writes writes, Effect effect) {
-        static_assert(std::is_trivially_copyable_v<Func> && alignof(Func) <= alignof(u64));
-        constexpr size_t payload = (sizeof(Func) + sizeof(u64) - 1) / sizeof(u64);
-        u64* const entry = Reserve(2 + payload);
-        entry[0] = static_cast<u64>(Kind::Call) | flags | (u64{payload} << 8);
-        entry[1] = reinterpret_cast<u64>(&CallThunk<Func>);
-        std::memcpy(entry + 2, &func, sizeof(Func));
-        Commit(2 + payload, effect);
-        if (writes == Writes::Anywhere || EffectMayWriteAnywhere(effect)) {
-            NoteAnyWrite();
-        }
-    }
-    template <typename Func>
-    void DeferWordsEntry(const Func& func, std::span<const u32> words, Writes writes,
-                         Effect effect) {
-        static_assert(std::is_trivially_copyable_v<Func> && alignof(Func) <= alignof(u64));
-        constexpr size_t function_words = (sizeof(Func) + sizeof(u64) - 1) / sizeof(u64);
-        const size_t payload = function_words + 1 + (words.size() + 1) / 2;
-        u64* const entry = Reserve(2 + payload);
-        entry[0] = static_cast<u64>(Kind::Call) | (u64{payload} << 8);
-        entry[1] = reinterpret_cast<u64>(&CallWordsThunk<Func>);
-        std::memcpy(entry + 2, &func, sizeof(Func));
-        entry[2 + function_words] = words.size();
-        if (!words.empty()) {
-            entry[1 + payload] = 0; // Padding after an odd count
-            std::memcpy(entry + 3 + function_words, words.data(), words.size_bytes());
-        }
-        Commit(2 + payload, effect);
-        if (writes == Writes::Anywhere || EffectMayWriteAnywhere(effect)) {
-            NoteAnyWrite();
-        }
     }
 
     /// Sends the state writes gathered so far (before any other entry, publish or wait).
@@ -612,12 +451,10 @@ private:
         return ReserveSlow(words);
     }
     u64* ReserveSlow(size_t words);
-    void Commit(size_t words, Effect effect) {
+    void Commit(size_t words) {
         write_position += words;
-        writes.Entry(effect, write_position);
         const u64 unpublished = write_position - published_local;
-        if (unpublished >= publish_every ||
-            (eager_publish && back_idle.load(std::memory_order_relaxed))) {
+        if (unpublished >= publish_every) {
             Publish();
             return;
         }
@@ -650,18 +487,12 @@ private:
     }
 
     void BackLoop(std::stop_token stop_token);
-    /// Calls the optional idle hook on the back under its profiler zone.
-    void RunIdleHook();
     /// Runs the entry at `entry` (of the `words` published before the ring's end), returns its size.
     size_t Execute(const u64* entry, size_t words);
-    void ExecuteRepeated(u64 head);
-    void VerifyRepeat(u64 head);
 
     Core::System* system{};
     bool active{};
     u32 starts{};
-    bool eager_publish{};
-    bool verify_repeats{};
     bool front_macros{};
     std::unique_ptr<u64[]> ring;
 
@@ -671,18 +502,7 @@ private:
     alignas(128) u64 write_position{};
     u64 last_writer_position{};
     u64 last_sync_position{};
-    u64 last_function_position{};
     u64 synced_writer_position{};
-    SplitWriteTracker writes;
-    struct ConstBufferWord {
-        u64 device;
-        u64 position;
-        u32 value;
-    };
-    std::deque<ConstBufferWord> cb_words;
-    u64 cb_words_lost{};
-    std::vector<u64> async_writes = std::vector<u64>(AsyncWriteBuckets);
-    bool any_async_write{};
     struct SemaphoreWrite {
         u64 position; ///< write_position once it was sent
         u32 payload;
@@ -698,8 +518,6 @@ private:
     std::array<u64, size_t{1} << WriteSlotBits> write_positions{};
     u64 published_local{};
     u64 consumed_cache{};
-    /// RepeatableMethod: the ring position after the last entry it sent
-    u64 repeat_end{~u64{0}};
     /// Words between publishes: small right after a drain, while the back has nothing to do.
     size_t publish_every{PublishEvery};
     Tegra::Engines::EngineInterface* front_engine{};
@@ -714,10 +532,6 @@ private:
 
     // Back side, in its own block.
     alignas(128) Tegra::Engines::EngineInterface* back_engine{};
-    u64 verify_previous{};
-    u64 verify_mergeable{};
-    u64 verify_mismatches{};
-    u64 verify_report_ns{};
 
     /// Whether the back is done with the Vulkan scheduler until it gets more work: set after its
     /// idle hook ran, cleared before it executes entries.
@@ -743,7 +557,6 @@ private:
     /// A position the front waits for (WaitFor): the back stores `consumed` once past it.
     alignas(128) std::atomic<u64> wait_target{~u64{0}};
     alignas(128) std::atomic<bool> back_waiting{};
-    std::atomic<bool> back_idle{}; ///< The back is spinning or sleeping for work (EagerPublish)
     std::atomic<u32> wake{};
     /// The front sleeps in Backoff (#161: instead of yielding).
     alignas(128) std::atomic<bool> front_waiting{};

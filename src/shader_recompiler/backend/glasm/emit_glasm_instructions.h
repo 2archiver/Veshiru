@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eglantine Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -65,8 +62,6 @@ void EmitIsbeReadOutput(EmitContext& ctx);
 void EmitIsbeWriteAttribute(EmitContext& ctx);
 void EmitIsbeWriteMapU8(EmitContext& ctx);
 void EmitIsbeWriteMapU32(EmitContext& ctx);
-void EmitTensorMulAdd(EmitContext& ctx, IR::Inst& inst, const IR::Value& a, const IR::Value& b,
-                      const IR::Value& c);
 void EmitSetFragColor(EmitContext& ctx, u32 index, u32 component, ScalarF32 value);
 void EmitSetSampleMask(EmitContext& ctx, ScalarS32 value);
 void EmitSetFragDepth(EmitContext& ctx, ScalarF32 value);
