@@ -22,6 +22,7 @@
 
 #include "common/bit_util.h"
 #include "common/common_types.h"
+#include "common/container/unordered_map.h"
 #include "common/thread.h"
 #include "video_core/nx2_perf.h"
 
