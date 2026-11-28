@@ -8,6 +8,122 @@ go under `## [Unreleased]`; `tools/ci/bump-version.sh` turns them into a version
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-11-28
+
+### Added
+
+- **A Performance page collects the Nx2 launch switches and the cache and memory options.** The
+  GPU tab lists the switches as checkboxes for NVIDIA, AMD, Intel and macOS hardware, each with the
+  status the primary graphics device and the OS give it (Recommended, Optional, Unsupported, Set by
+  environment) and a note that says when the device is not the one the flags were chosen for.
+  *Select Recommended* ticks every flag that works with the configuration. Ticked lines are written
+  into a marked block of `nx2_switches.txt` (`%APPDATA%\veshiru`, a portable `user\` folder, or the
+  copy next to `veshiru.exe`), which the frontend reads at startup and applies as environment
+  variables (`src/veshiru/configuration/configure_performance.cpp`, `src/veshiru/nx2_switches.h`);
+  a variable already in the real environment wins, later files override earlier ones, and lines
+  outside the block are left alone. Shaders and RAM have their own tabs in the same area
+  (`Performance::State::Apply`).
+- **Per-game Tweaks tab.** A game's Configure window gains a Tweaks page that lists its preset's
+  recommended settings with the value the profile has now and the value the preset asks for;
+  *Select All*, *Select None* and *Apply Selected* put the ticks into the normal tabs, so they are
+  saved with OK like any other per-game change
+  (`src/veshiru/configuration/configure_per_game_tweaks.cpp`). The Recommended Settings dialog shows
+  the same current/recommended pair instead of only the preset's values
+  (`src/veshiru/recommended_settings_dialog.cpp`).
+- **`prefer_3d_vcache` (CPU page, on).** On Windows a processor whose cores fall into two L3 cache
+  domains of different sizes (a Ryzen X3D part) is laid out from the cache sizes:
+  `Common::MakeCpuThreadLayout` gives the guest threads and the GPU back thread the larger domain
+  and background work the other one, instead of pinning from the core list alone
+  (`src/common/cpu_layout.h`, `src/common/windows/cpu_layout.cpp`). A machine without two domains
+  keeps the existing plan. `EDEN_NX2_CPU_LAYOUT=2` also gives the split GPU front a core of its
+  own.
+- **Cold-page hinting is a setting.** `cold_hint_mode` (Off by default, *When RAM is low*, *Always*)
+  controls the working-set hint the emulator gives guest pages it keeps but is not using, and
+  *When RAM is low* uses the same host-memory floor as the zero-page trim
+  (`src/common/host_memory.cpp`, `src/core/device_memory_manager.h`). `EDEN_NX2_COLD_HINT=0|low|1`
+  overrides it for one session.
+
+### Changed
+
+- **The Nx2 renderer runs behind a named switch set.** `VideoCommon::Nx2Perf` enumerates the 45
+  optimisations the renderer and the split GPU thread now have, with a name and a comment each:
+  the front's method classes, macro JIT batching, early MME reads, native submission, bind
+  memoisation, GPU dirty gathering, handle translation, shader-build budget and the rest. They are
+  on by default except the experimental ones; `EDEN_NX2_PERF=0` turns every one off,
+  `EDEN_NX2_PERF_SAFE=1` keeps the experimental ones off, `EDEN_NX2_PERF_ON`/`_OFF=<name>,...` set
+  individual ones, and `EDEN_NX2_PERF_VERIFY=1` computes the old answer alongside each optimised
+  one, logs any difference and uses the old one (`src/video_core/nx2_perf.h`).
+  `src/tests/video_core/nx2_perf.cpp` and `nx2_perf_switches.cpp` cover the set and its parser.
+- **The split GPU thread waits only for the queued work a read depends on.** The split itself is
+  unchanged: `EDEN_NX2_SPLIT=2` in the shipped `nx2_switches.txt` keeps parsing and macro work on
+  the front and runs the method stream on the back. The front's MME DMA reads now ask
+  `SplitWriteTracker` what the queued entries may write and drain only up to the ones they depend
+  on
+  (`MacroReadEarly`, `MacroReadCbOverlay`, `MacroReadWriterSet`). `DmaForward` runs a native macro
+  call on the front when its DMA words feed only its last writes, and the back rewrites those from
+  the real words (`src/video_core/macro_dma_forward.h`); `SubmitWhileWaited` submits recorded draws
+  while the front waits for the back or the host GPU has run dry; `PendingWake` ends a suspended
+  channel's 1 ms sleep on a new submit. `EDEN_NX2_SPLIT=1` keeps the macros on the back and
+  `EDEN_NX2_SPLIT=0` runs everything on one thread. `src/tests/video_core/split_write_tracker.cpp`
+  and `macro_dma_forward.cpp` cover the tracker and the forwarding decision.
+- **Native uniform banks keep a shadow, diffed by 4 KiB page.** The 64 KiB banks the first page's
+  indirect uniforms are read from are mirrored on the host and compared against the guest bytes, so
+  a draw binds the words the guest changed instead of re-reading the bank, and unchanged pages stay
+  clean. `BankOncePerFrame` (on) compares on the frame's first bind rather than on every draw, so a
+  later CPU rewrite in the same frame can show one frame late; `EDEN_NX2_PERF_OFF=bank_once_per_frame`
+  restores the per-draw comparison.
+- **Texture and image memory.** `ImageAllocationPool` reuses completed native 2D allocations of the
+  same format and size instead of freeing and re-creating them, and `PlainUnswizzle` turns a
+  single-level native 2D image into linear guest data with a compute shader instead of on the CPU
+  (`src/video_core/texture_cache/image_allocation_pool.h`, `plain_unswizzle.h`).
+  `EDEN_NX2_TC_BUDGET=1` lets the texture cache use its budget-derived critical threshold on cards
+  with more than 8 GiB of heap budget: Ocarina of Time at 1x keeps about 12 GiB of render targets
+  and textures in use while the camera moves, and a quarter of the budget held back had the
+  collector evicting live images for good, 8-9k images re-created per 600 frames against about 30
+  with the room. Smaller cards keep the old limit, which stays the default
+  (`src/video_core/texture_cache/memory_budget.h`).
+- **Pipelines and shaders.** Each title's pipeline cache gets its own directory under the shader
+  directory (`src/video_core/renderer_vulkan/pipeline_cache_dir.h`); boot-built pipelines this
+  session has not drawn with are kept instead of evicted, a direct-mapped graphics pipeline cache
+  sits in front of the slow path, and graphics pipelines skipped at boot have their disk recordings
+  replayed on background workers on first use (`PipelineKeepPreloaded`, `PipelineFastCache`,
+  `ReplayDiskRecordings`). Misaligned 64/128-bit storage accesses are split instead of viewed as
+  vectors (`EGLANTINE_SSBO_ALIGN_FIX=0` restores the old views; clear the shader cache when
+  switching), stale-slot compute rebuilds keep dispatching the previous pipeline while the
+  replacement compiles, and the Ampere depth-compare lowering has a regression test
+  (`src/shader_recompiler/backend/spirv/ssbo_align_gate.h`,
+  `src/tests/video_core/ampere_depth_compare.cpp`).
+
+### Fixed
+
+- **A Nunchuk and another extension are told apart.** The Wii Remote driver read the six extension
+  bytes of every report as Nunchuk data whenever the report carried them, so a Classic Controller's
+  or Motion Plus's bytes could land on the Nunchuk stick and C/Z. `Wii::HasNunchukData` now requires
+  an identified Nunchuk, and a connected Nunchuk keeps its last stick and button state in reports
+  that do not carry extension data (`src/input_common/helpers/wii_remote_protocol.h`,
+  `drivers/wii_remote.cpp`, `src/tests/input_common/wii_remote_protocol.cpp`).
+- **A released remote stops moving.** Releasing a remote now clears its published motion and its
+  pointer state and restarts the freshness clock, so a disconnect no longer leaves the emulated
+  controller with the last accelerometer or pointer sample (`WiiRemote::ReleaseController`).
+- **Joy-Con 2 mouse motion reaches every consumer once.** `Mouse::RelativeMove` returns the scaled
+  delta and the HID report, the right-stick fallback and the gyro mapping use that same value,
+  instead of the HID path scaling the host motion a second time against the fallbacks
+  (`src/input_common/drivers/mouse.cpp`, `mouse.h`).
+- **The application icon is the Veshiru icon everywhere.** `dist/veshiru.ico` is generated from
+  `dist/branding/veshiru_icon.png` at every size Windows asks for, including the 20 px and 40 px
+  steps of 125 % and 150 % scaling, and the About dialog looks the theme icon up under the Veshiru
+  name instead of the inherited Eden one before it falls back to the embedded file
+  (`src/veshiru/about_dialog.cpp`, `src/veshiru/veshiru.qrc`).
+
+### Removed
+
+- **Debug-only instrumentation leaves the shipping build.** The frame dump, the live debug server
+  and its MCP bridge, the NVN draw probe and the mapped-range hook are gone with their tests, so
+  the shipped binary no longer carries their code or their environment switches
+  (`src/video_core/renderer_vulkan/vk_frame_dump.*`, `src/core/debugger/nx2_debug_server.*`,
+  `src/core/debugger/nx2_debug_tools.*`, `src/video_core/nvn_draw_probe.*`). The diagnostics that
+  remain are the profile, trace and hazard counters, off unless their variable is set.
+
 ## [3.3.0] - 2026-11-26
 
 ### Added

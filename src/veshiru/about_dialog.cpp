@@ -24,9 +24,10 @@ AboutDialog::AboutDialog(QWidget* parent)
     const auto veshiru_build_version = override_build.empty() ? veshiru_build : override_build;
 
     ui->setupUi(this);
-    // Try and request the icon from Qt theme (Linux?)
-    const QIcon veshiru_logo = QIcon::fromTheme(QStringLiteral("dev.eden_emu.eden"),
-                                           QIcon(QStringLiteral(":/img/veshiru.ico")));
+    // Try and request the icon from Qt theme (Linux?); the embedded file is the Veshiru icon on
+    // Windows and on any theme that does not carry one.
+    const QIcon veshiru_logo = QIcon::fromTheme(QStringLiteral("dev.veshiru.emulator"),
+                                                QIcon(QStringLiteral(":/img/veshiru.ico")));
     if (!veshiru_logo.isNull()) {
         ui->labelLogo->setPixmap(veshiru_logo.pixmap(112));
     }
