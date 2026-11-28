@@ -2194,7 +2194,8 @@ bool MainWindow::ConfirmLowRamBoot(const QString& filename,
 }
 
 void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletParameters params,
-                          StartGameType type) {
+                          StartGameType type, bool allow_recommended_settings_prompt) {
+    (void)allow_recommended_settings_prompt;
     // The performance summary window the player chose; VESHIRU_PERF_SUMMARY overrides it in
     // VideoCore::CreateGPU when the environment sets one.
     VideoCore::PerfSummary::SetWindow(UISettings::values.perf_summary_seconds.GetValue());
@@ -4236,7 +4237,9 @@ void MainWindow::OpenConfigureDialog(bool select_profiles) {
     const auto update_channel = UISettings::values.update_channel.GetValue();
     if (update_channel != old_update_channel && update_channel != Settings::UpdateChannel::Unset &&
         !UpdateChecker::BuildChannel().empty()) {
-        CheckForUpdates(true);
+        // A different channel offers different releases, so a skip from the old one no longer
+        // applies; the next start checks.
+        UISettings::values.skipped_update_tag.SetValue({});
     }
 #endif
 

@@ -484,6 +484,7 @@ private slots:
 #ifdef ENABLE_UPDATE_CHECKER
     void OnEmulatorUpdateAvailable();
     void OnCheckForUpdates();
+    void OpenConfigureDialog(bool select_profiles);
 #endif
     void KeepNextendoSessionAlive();
 
