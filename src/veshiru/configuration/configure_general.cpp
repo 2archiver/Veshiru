@@ -17,6 +17,7 @@
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "frontend_common/update_checker.h"
 #include "qt_common/config/uisettings.h"
 #include "ui_configure_general.h"
 #include "veshiru/configuration/configuration_shared.h"

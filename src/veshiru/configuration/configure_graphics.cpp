@@ -495,47 +495,6 @@ void ConfigureGraphics::Setup(const ConfigurationShared::Builder& builder) {
         graphics_layout.addWidget(widget);
     }
 
-    if (dlss_checkbox != nullptr) {
-        const auto apply_dlss_lock = [this, scaling_filter_widget, anti_aliasing_widget,
-                                      dlss_quality_widget](bool checked) {
-            if (dlss_quality_widget != nullptr && dlss_quality_widget->combobox != nullptr) {
-                dlss_quality_widget->combobox->setEnabled(checked);
-            }
-            if (scaling_filter_widget != nullptr && scaling_filter_widget->combobox != nullptr) {
-                if (checked) {
-                    const int bilinear_idx =
-                        FindIndex(Settings::EnumMetadata<Settings::ScalingFilter>::Index(),
-                                  static_cast<int>(Settings::ScalingFilter::Bilinear));
-                    if (bilinear_idx >= 0) {
-                        scaling_filter_widget->combobox->setCurrentIndex(bilinear_idx);
-                    }
-                    if (scaling_filter_widget->restore_button != nullptr) {
-                        scaling_filter_widget->restore_button->setEnabled(true);
-                        scaling_filter_widget->restore_button->setVisible(false);
-                    }
-                }
-                scaling_filter_widget->combobox->setEnabled(!checked);
-            }
-            if (anti_aliasing_widget != nullptr && anti_aliasing_widget->combobox != nullptr) {
-                if (checked) {
-                    const int none_idx =
-                        FindIndex(Settings::EnumMetadata<Settings::AntiAliasing>::Index(),
-                                  static_cast<int>(Settings::AntiAliasing::None));
-                    if (none_idx >= 0) {
-                        anti_aliasing_widget->combobox->setCurrentIndex(none_idx);
-                    }
-                    if (anti_aliasing_widget->restore_button != nullptr) {
-                        anti_aliasing_widget->restore_button->setEnabled(true);
-                        anti_aliasing_widget->restore_button->setVisible(false);
-                    }
-                }
-                anti_aliasing_widget->combobox->setEnabled(!checked);
-            }
-        };
-        apply_dlss_lock(dlss_checkbox->isChecked());
-        connect(dlss_checkbox, &QCheckBox::toggled, this, apply_dlss_lock);
-    }
-
 #ifdef EGLANTINE_STREAMLINE
     // The panel lists DLSS Frame Generation's files too while that frame generation type is
     // chosen, and shows for it even before "Use NVIDIA DLSS" is ticked.
