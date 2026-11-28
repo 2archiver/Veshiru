@@ -57,6 +57,7 @@ enum class Zone : u32 {
     BindStageBuffers,
     BindUniformBank,
     BindUniformStream,
+    BindUniformCached, ///< A bind that hits the bind memo (buffer_cache_base.h)
     BindStorage,
     PushDescriptors,
     RenderTargets,
@@ -93,6 +94,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
     "clear",         "compute",       "flush work",     "pipeline lookup", "configure",
     "sync descriptors", "read handles", "fill image views", "texture buffers", "update buffers",
     "descriptor acquire", "bind stage buffers", "bind uniform bank", "bind uniform stream",
+    "bind uniform cached",
     "bind storage", "push descriptors", "render targets",
     "configure draw", "dynamic state", "draw record", "texture upload", "fence",
     "fence skipped", "method", "split drain", "split wait", "back idle hook",
@@ -230,6 +232,8 @@ enum class Counter : u32 {
     DownloadAge600,
     DownloadAge3600,
     DownloadAgeOlder,
+    BindMemoHits,
+    BindMemoMisses,
     Count,
 };
 
@@ -248,6 +252,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(Counter::Count)> co
     "download bytes age under 60 frames",
     "download bytes age under 120 frames", "download bytes age under 600 frames",
     "download bytes age under 3600 frames", "download bytes age over 3600 frames",
+    "bind memo hits", "bind memo misses",
 };
 
 struct ThreadData {

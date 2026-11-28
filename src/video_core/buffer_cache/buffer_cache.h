@@ -3274,7 +3274,14 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
                   "Uniform keep verify: stage {} slot {} at {:#x}+{:#x} is no longer streamed",
                   stage, index, device_addr, size);
     }
-    if (SynchronizeBuffer(buffer, device_addr, size)) {
+    Nx2Profile::Scope cached_scope{Nx2Profile::Zone::BindUniformCached};
+    BindMemo* const memo =
+        BindMemoEnabled() && has_host_buffer ? &uniform_bind_memo[stage][index] : nullptr;
+    const bool memo_hit = memo != nullptr && BindMemoHit(*memo, buffer, binding.buffer_id,
+                                                         device_addr, size, offset, "uniform",
+                                                         stage, index);
+    if (memo_hit) {
+        // The sync would have found nothing to upload and returned true.
         ++channel_state->uniform_cache_hits[0];
     } else {
         const u64 cpu_epoch = memory_tracker.CpuEpoch();
@@ -4886,6 +4893,86 @@ void BufferCache<P>::TouchBufferOnce(TouchMemo& memo, Buffer& buffer, BufferId b
         memo.deletions != buffer_deletions) {
         memo = {frame_tick, buffer_id, buffer_deletions};
         TouchBuffer(buffer, buffer_id);
+    }
+}
+
+template <class P>
+bool BufferCache<P>::BindMemoEnabled() {
+    static const bool enabled = !IS_OPENGL && Nx2Perf::On(Nx2Perf::Opt::BindMemo);
+    return enabled;
+}
+
+template <class P>
+bool BufferCache<P>::BindMemoHit(const BindMemo& memo, Buffer& buffer, BufferId buffer_id,
+                                 DAddr device_addr, u32 size, u32 offset, const char* kind,
+                                 size_t stage, u32 index) {
+    if constexpr (IS_OPENGL) {
+        return false;
+    } else {
+        if (!memo.valid || memo.channel != channel_state || memo.buffer_id != buffer_id ||
+            memo.device_addr != device_addr || memo.size != size ||
+            memo.cpu_epoch != memory_tracker.CpuEpoch() ||
+            memo.gpu_epoch != memory_tracker.GpuEpoch() || memo.frame != frame_tick ||
+            memo.tick != runtime.CurrentTick()) {
+            Nx2Profile::Add(Nx2Profile::Counter::BindMemoMisses, 1);
+            return false;
+        }
+        Nx2Profile::Add(Nx2Profile::Counter::BindMemoHits, 1);
+        if (!Nx2Perf::Verify()) {
+            return true;
+        }
+        // Verify: the skipped sync must find nothing to upload, and the skipped usage mark must
+        // already be in place. The full path runs either way.
+        const auto mismatch = [&](std::string_view what) {
+            if (bind_memo_mismatches++ < 64) {
+                LOG_ERROR(HW_GPU,
+                          "Nx2Perf bind_memo: {} {} stage {} index {} at {:#x}+{:#x} "
+                          "(mismatches {})",
+                          kind, what, stage, index, device_addr, size, bind_memo_mismatches);
+            }
+        };
+        if (memory_tracker.IsRegionCpuModified(device_addr, size)) {
+            mismatch("sync would upload");
+        }
+        if (memo.usage_marked && size != 0 && !buffer.IsRegionUsed(offset, size)) {
+            mismatch("usage not marked");
+        }
+        return false;
+    }
+}
+
+template <class P>
+void BufferCache<P>::BindMemoNote(BindMemo& memo, BufferId buffer_id, DAddr device_addr, u32 size,
+                                  u64 cpu_epoch_before) {
+    if constexpr (!IS_OPENGL) {
+        // A walk of the range leaves it clean unless something marked it meanwhile; a deduped
+        // sync did not walk it, so check.
+        if (memory_tracker.CpuEpoch() != cpu_epoch_before ||
+            (last_sync_deduped && memory_tracker.IsRegionCpuModified(device_addr, size))) {
+            memo.valid = false;
+            return;
+        }
+        memo = BindMemo{
+            .channel = channel_state,
+            .buffer_id = buffer_id,
+            .device_addr = device_addr,
+            .size = size,
+            .valid = true,
+            .usage_marked = false,
+            .cpu_epoch = cpu_epoch_before,
+            .gpu_epoch = memory_tracker.GpuEpoch(),
+            .tick = runtime.CurrentTick(),
+            .frame = frame_tick,
+        };
+    }
+}
+
+template <class P>
+void BufferCache<P>::BindMemoNoteUsage(BindMemo& memo) {
+    if constexpr (!IS_OPENGL) {
+        if (memo.valid && memo.tick == runtime.CurrentTick() && memo.frame == frame_tick) {
+            memo.usage_marked = true;
+        }
     }
 }
 
