@@ -33,7 +33,6 @@
 
 #include <fmt/format.h>
 
-#include "common/httplib.h"
 #include "common/logging.h"
 #include "core/core.h"
 #include "core/file_sys/control_metadata.h"
@@ -474,28 +473,6 @@ std::string CleanTitle(std::string title) {
     }
     title.resize(end);
     return title;
-}
-
-} // namespace
-
-namespace {
-
-// Community-maintained names and covers, keyed by title ID: <TITLEID>.txt and <TITLEID>.png
-constexpr char COVERS_HOST[] = "raw.githubusercontent.com";
-constexpr char COVERS_PATH[] = "/mushymeow/eglantine-covers/main/";
-
-std::optional<std::string> FetchFromCovers(const std::string& file_name, bool want_body) {
-    httplib::SSLClient client(COVERS_HOST);
-    client.set_connection_timeout(3);
-    client.set_read_timeout(3);
-    client.set_follow_location(true);
-
-    const std::string path = std::string{COVERS_PATH} + file_name;
-    const auto res = want_body ? client.Get(path) : client.Head(path);
-    if (!res || res->status != 200) {
-        return std::nullopt;
-    }
-    return res->body;
 }
 
 } // namespace
