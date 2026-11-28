@@ -134,6 +134,11 @@ private:
     Shader::Info info;
     u64 shader_hash{};
     u32 num_descriptor_entries{};
+    /// The shader has textures or images, whose descriptors carry the per-image rescaling
+    /// constants in the push constants (RescalingPushConstant).
+    bool has_rescaling_push_constants{};
+    /// The dispatch has to synchronize the texture cache's (image) descriptors.
+    bool has_image_resources{};
     boost::container::small_vector<VideoCommon::ImageViewId, 8> written_images;
     bool wait_logged{};
 

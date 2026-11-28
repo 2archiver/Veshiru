@@ -521,15 +521,9 @@ void PresentManager::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadToPerformanceCores();
 
     using Clock = std::chrono::steady_clock;
-    Clock::time_point last_real_arrival{};
-    Clock::time_point last_generated_present{};
     Clock::time_point last_present_done{};
     Clock::time_point cadence_window_start = Clock::now();
-    bool has_last_real_arrival = false;
-    bool has_pending_generated = false;
     bool has_last_present_done = false;
-    u32 pending_generation_count = 1;
-    double smoothed_base_period_us = 25000.0;
 
     std::vector<double> present_intervals_ms;
     present_intervals_ms.reserve(256);
@@ -546,58 +540,6 @@ void PresentManager::PresentThread(std::stop_token token) {
             present_queue.pop_front();
             presenting_frame = true;
             frame_cv.notify_one();
-
-            const auto now = Clock::now();
-            if (!frame->is_generated) {
-                if (has_last_real_arrival) {
-                    const double dt_us = static_cast<double>(
-                        std::chrono::duration_cast<std::chrono::microseconds>(now - last_real_arrival)
-                            .count());
-                    if (dt_us >= 4000.0 && dt_us <= 100000.0) {
-                        smoothed_base_period_us = smoothed_base_period_us * 0.8 + dt_us * 0.2;
-                    }
-                }
-                last_real_arrival = now;
-                has_last_real_arrival = true;
-            }
-
-            // VRR half-period pacing: generated frame 0 presents immediately; subsequent generated
-            // frames in the same batch and the real frame that follows are spaced evenly across
-            // the smoothed base period outside both queue_mutex and swapchain_mutex.
-            Clock::time_point hold_until = now;
-            if (frame->is_generated) {
-                if (frame->generation_index > 0 && has_pending_generated) {
-                    const u32 total_steps = std::max<u32>(1u, frame->generation_count) + 1u;
-                    const s64 offset_us = static_cast<s64>(
-                        smoothed_base_period_us * static_cast<double>(frame->generation_index) /
-                        static_cast<double>(total_steps));
-                    hold_until = last_generated_present + std::chrono::microseconds(offset_us);
-                }
-            } else if (has_pending_generated) {
-                const u32 total_steps = std::max<u32>(1u, pending_generation_count) + 1u;
-                const s64 offset_us = static_cast<s64>(
-                    smoothed_base_period_us * static_cast<double>(pending_generation_count) /
-                    static_cast<double>(total_steps));
-                hold_until = last_generated_present + std::chrono::microseconds(offset_us);
-                has_pending_generated = false;
-            }
-
-            if (now < hold_until && present_queue.empty() && !wake_present_hold) {
-                const auto coarse_deadline = hold_until - std::chrono::microseconds(1000);
-                if (now < coarse_deadline) {
-                    frame_cv.wait_until(lock, token, coarse_deadline, [this] {
-                        return !present_queue.empty() || wake_present_hold;
-                    });
-                }
-                if (!token.stop_requested() && present_queue.empty() && !wake_present_hold &&
-                    Clock::now() < hold_until) {
-                    lock.unlock();
-                    while (Clock::now() < hold_until && !token.stop_requested()) {
-                        std::this_thread::yield();
-                    }
-                    lock.lock();
-                }
-            }
 
             presenting_frame = false;
             frame_cv.notify_all();
@@ -622,12 +564,8 @@ void PresentManager::PresentThread(std::stop_token token) {
             }
 
             const auto done_now = Clock::now();
-            if (frame->is_generated && frame->generation_index == 0) {
-                last_generated_present = done_now;
-                pending_generation_count = std::max<u32>(1u, frame->generation_count);
-                has_pending_generated = true;
-            }
-            if (frame->is_generated) {
+            // Frame generation sets a spacing on the frames it adds (Frame::present_spacing).
+            if (frame->present_spacing.count() != 0) {
                 ++cadence_gen_count;
             } else {
                 ++cadence_real_count;
@@ -653,10 +591,9 @@ void PresentManager::PresentThread(std::stop_token token) {
                 const double dt_max = present_intervals_ms.back();
                 LOG_INFO(Render_Vulkan,
                          "PresentCadence: n={} real={} gen={} dt_p50={:.2f} dt_p10={:.2f} "
-                         "dt_p90={:.2f} dt_max={:.2f} base_ms={:.2f}",
+                         "dt_p90={:.2f} dt_max={:.2f}",
                          cadence_real_count + cadence_gen_count, cadence_real_count,
-                         cadence_gen_count, p50, p10, p90, dt_max,
-                         smoothed_base_period_us / 1000.0);
+                         cadence_gen_count, p50, p10, p90, dt_max);
                 present_intervals_ms.clear();
                 cadence_real_count = 0;
                 cadence_gen_count = 0;
