@@ -16,8 +16,9 @@
 
 /// Runtime diagnostic requests for the Switch 2 paths (legacy GPU emulation and NVN HLE).
 ///
-/// A user or automation writes one command per line into `<user dir>/nx2-request.txt`. `Poll` is
-/// called from the guest present path; at most every 250 ms it
+/// A tool (eden-mcp `request`, ab_runner `requests`, or a human) writes one command per line into
+/// `<user dir>/nx2-request.txt`. `Poll` is called only from the NVN present path (the legacy GPU
+/// present path does not poll); at most every 250 ms it
 /// looks for that file, takes it (rename to `nx2-request.txt.taken`, then delete), logs
 /// `[diag] request: <command>` for each line and runs the registered handler. Handlers run on the
 /// polling (present) thread and must only arm a bounded one-shot capture or do a small dump; the
@@ -53,6 +54,17 @@ void Register(std::string command, Handler handler);
 /// Registers `command` as a known-but-unavailable command with a reason, logged when requested.
 /// A real `Register` replaces it.
 void RegisterUnavailable(std::string command, std::string reason);
+
+/// Whether a runtime-overridable EDEN_NX2_<name> TRY switch is enabled. Runtime override wins
+/// over the process environment, which wins over a per-game recommendation when supplied; unset
+/// switches without a recommendation retain their existing environment default.
+[[nodiscard]] bool TrySwitchEnabled(std::string_view name);
+[[nodiscard]] bool TrySwitchEnabled(std::string_view name, bool recommended_value);
+[[nodiscard]] bool SetTrySwitch(std::string_view name, bool enabled);
+/// Generation increments whenever a runtime TRY switch actually changes.
+[[nodiscard]] u64 TrySwitchGeneration();
+/// Whether a runtime override differs from the configured environment/default value.
+[[nodiscard]] bool TrySwitchDiffersFromDefault(std::string_view name);
 
 namespace Detail {
 extern std::atomic<s64> g_next_poll_ns;

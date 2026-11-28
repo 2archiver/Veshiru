@@ -172,8 +172,6 @@ add_library(
     diag_request.h
     diag_image.cpp
     diag_image.h
-    nx2_try_switch.cpp
-    nx2_try_switch.h
     hdr.cpp
     hdr.h
     frame_capture_list.cpp
