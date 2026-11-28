@@ -46,7 +46,7 @@ public:
     }
 
     [[nodiscard]] size_t GetContinuousSizeFrom(KeyTBase address, bool use_cache = false,
-                                              bool* cache_hit = nullptr) {
+                                              bool* cache_hit = nullptr) const {
         if (cache_hit) {
             *cache_hit = false;
         }
@@ -84,7 +84,7 @@ private:
     using IteratorType = typename MapType::iterator;
     using ConstIteratorType = typename MapType::const_iterator;
 
-    size_t ContinuousSizeInternal(KeyT address, bool use_cache) {
+    size_t ContinuousSizeInternal(KeyT address, bool use_cache) const {
         const auto it = GetFirstElementBeforeOrOn(address);
         if (it == container.end() || it->second == null_value) {
             return 0;
@@ -148,8 +148,9 @@ private:
 
     ValueT null_value;
     MapType container;
-    KeyT cached_begin{};
-    KeyT cached_end{};
+    /// Filled by a cached lookup; mutable so a const lookup can memoise its answer.
+    mutable KeyT cached_begin{};
+    mutable KeyT cached_end{};
 };
 
 } // namespace Common
