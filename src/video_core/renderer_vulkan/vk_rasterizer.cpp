@@ -2973,34 +2973,6 @@ void RasterizerVulkan::OnCacheInvalidation(DAddr addr, u64 size) {
     pipeline_cache.InvalidateRegion(addr, size);
 }
 
-void RasterizerVulkan::OnCacheInvalidations(std::span<const std::pair<DAddr, u64>> ranges) {
-    if (ranges.empty()) {
-        return;
-    }
-    {
-        std::scoped_lock lock{buffer_cache.mutex};
-        buffer_cache.ClaimCpuWrites(ranges);
-        for (const auto& [addr, size] : ranges) {
-            if (addr != 0 && size != 0) {
-                buffer_cache.WriteMemory(addr, size);
-            }
-        }
-    }
-    {
-        std::scoped_lock lock{texture_cache.mutex};
-        for (const auto& [addr, size] : ranges) {
-            if (addr != 0 && size != 0) {
-                texture_cache.WriteMemory(addr, size);
-            }
-        }
-    }
-    for (const auto& [addr, size] : ranges) {
-        if (addr != 0 && size != 0) {
-            pipeline_cache.InvalidateRegion(addr, size);
-        }
-    }
-}
-
 bool RasterizerVulkan::TryCacheInvalidation(DAddr addr, u64 size) {
     if (addr == 0 || size == 0) return true;
     {
@@ -3041,9 +3013,9 @@ void RasterizerVulkan::ModifyGPUMemory(size_t as_id, GPUVAddr addr, u64 size) {
     buffer_cache.UnmapGPUMemory(as_id, addr, size);
 }
 
-void RasterizerVulkan::SignalFence(std::function<void()>&& func) {
+void RasterizerVulkan::SignalFence(std::function<void()>&& func, bool force_completion) {
     VideoCommon::Nx2FastDraw::NoteSync();
-    fence_manager.SignalFence(std::move(func));
+    fence_manager.SignalFence(std::move(func), force_completion);
 }
 
 void RasterizerVulkan::SyncOperation(std::function<void()>&& func) {

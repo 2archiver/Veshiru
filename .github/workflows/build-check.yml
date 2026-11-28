@@ -53,6 +53,12 @@ jobs:
     if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 120
+    # Publishes the error digest on the job's own check run, where the checks API returns it whole
+    # (annotations stop at 10 per step).
+    permissions:
+      contents: read
+      checks: write
+      actions: read
     # ccache rather than sccache: sccache has no direct mode for clang-cl, so every hit still ran the
     # preprocessor and a 99% hit build took 8.5 minutes.
     env:
@@ -236,6 +242,27 @@ jobs:
           sed -n '46,54p' build-errors.txt | while IFS= read -r line; do
             echo "::error::${line}"
           done
+      - name: Publish the error digest on the check run
+        if: failure() && steps.build.outcome == 'failure'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The checks API returns a check run's output.summary whole, unlike the ten annotations a
+          # step may add: the whole distinct-error list goes there for scripts to read.
+          {
+            echo "distinct errors: $(wc -l < build-errors.txt), total: $(grep -cE ' error: ' build-output.txt)"
+            echo
+            cat build-errors.txt
+          } > digest.txt
+          head -c 60000 digest.txt > digest-cut.txt
+          job_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" \
+                     --jq '.jobs[] | select(.name | startswith("Windows clang-cl")) | .databaseId' |
+                     head -1)
+          echo "check run ${job_id}"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/check-runs/${job_id}" \
+            -f 'output[title]=Build errors' \
+            -F "output[summary]=@digest-cut.txt" > /dev/null
       - name: Upload build output
         if: failure() && steps.build.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

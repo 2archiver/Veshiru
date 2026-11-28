@@ -295,6 +295,8 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
         return;
     }
     const size_t new_query_id = streamer->WriteCounter(cpu_addr, has_timestamp, payload, subreport);
+    // `pointer` is the one the fast path above took: each of the bodies below re-derives its own.
+    u8* const pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
     auto* query = streamer->GetQuery(new_query_id);
     if (is_fence) {
         query->flags |= QueryFlagBits::IsFence;

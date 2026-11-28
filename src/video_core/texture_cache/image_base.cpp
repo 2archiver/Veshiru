@@ -90,7 +90,6 @@ std::optional<SubresourceBase> ImageBase::TryFindBase(GPUVAddr other_addr) const
         // This can happen when two CPU addresses are used for different GPU addresses
         return std::nullopt;
     }
-    const u64 diff = diff64;
     if (info.type != ImageType::e3D) {
         const auto [layer, mip_offset] = LayerMipOffset(diff, info.layer_stride);
         const auto end = mip_level_offsets.begin() + info.resources.levels;
