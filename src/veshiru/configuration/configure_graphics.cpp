@@ -40,6 +40,7 @@
 #include "ui_configure_graphics.h"
 #include "veshiru/configuration/configuration_shared.h"
 #include "veshiru/configuration/configure_graphics.h"
+#include "veshiru/configuration/configure_frame_generation.h"
 #include "veshiru/configuration/amd_fsr4_panel.h"
 #include "veshiru/configuration/nvidia_dlss_panel.h"
 #include "veshiru/configuration/shared_widget.h"

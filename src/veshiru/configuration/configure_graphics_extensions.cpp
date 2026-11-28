@@ -17,6 +17,7 @@
 #include "ui_configure_graphics_extensions.h"
 #include "veshiru/configuration/configuration_shared.h"
 #include "veshiru/configuration/configure_graphics_extensions.h"
+#include "veshiru/configuration/configure_performance.h"
 #include "veshiru/configuration/shared_widget.h"
 
 ConfigureGraphicsExtensions::ConfigureGraphicsExtensions(
