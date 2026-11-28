@@ -12,7 +12,13 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QString>
+#include <QWidget>
+#include "common/settings.h"
+#include "common/string_util.h"
+#include "core/core.h"
+#include "core/hle/service/acc/profile_manager.h"
 #include "veshiru/multiplayer/message.h"
+#include "veshiru/multiplayer/validation.h"
 
 namespace NetworkMessage {
 const ConnectionError ErrorManager::USERNAME_NOT_VALID(

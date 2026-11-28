@@ -7,6 +7,8 @@
 
 #include <array>
 #include <optional>
+#include <string>
+#include <string_view>
 
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -105,6 +107,8 @@ public:
     bool RemoveProfileAtIndex(std::size_t index);
 
     bool SetProfileBase(Common::UUID uuid, const ProfileBase& profile_new);
+    /// Renames a profile, zero-padding the rest of the name; writes the save file on success.
+    bool SetProfileUsername(Common::UUID uuid, std::string_view username);
     bool SetProfileBaseAndData(Common::UUID uuid, const ProfileBase& profile_new,
                                const UserData& data_new);
 
