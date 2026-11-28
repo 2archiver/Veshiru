@@ -13,7 +13,6 @@
 
 #include <QSysInfo>
 #include <boost/algorithm/string/split.hpp>
-#include "common/driver_shader_cache.h"
 #include "common/fs/path_util.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -411,7 +410,6 @@ MainWindow::MainWindow(const QStringList& launch_arguments)
     QtCommon::Init(this);
 
     Common::FS::CreateEdenPaths();
-    Common::CreateDriverShaderCacheFolder();
     this->config = std::make_unique<QtConfig>();
 
     Common::Log::Filter filter;

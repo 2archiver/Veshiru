@@ -234,7 +234,9 @@ set_source_files_properties(zbic_compression.cpp PROPERTIES
     COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-unused-function;-Wno-missing-declarations;-Wno-shadow>;$<$<CXX_COMPILER_ID:MSVC>:/wd4505;/wd5245>;$<$<CXX_COMPILER_ID:AppleClang,Clang>:-fno-profile-instr-use>")
 
 if(WIN32)
-    target_sources(common PRIVATE windows/crash_handler.cpp
+    target_sources(common PRIVATE windows/cpu_layout.cpp
+        windows/cpu_layout.h
+        windows/crash_handler.cpp
         windows/crash_handler.h
         windows/timer_resolution.cpp
         windows/timer_resolution.h)

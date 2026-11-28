@@ -133,8 +133,6 @@ add_executable(veshiru
     configuration/configure_per_game.cpp
     configuration/configure_per_game.h
     configuration/configure_per_game.ui
-    configuration/configure_per_game_tweaks.cpp
-    configuration/configure_per_game_tweaks.h
     configuration/configure_per_game_addons.cpp
     configuration/configure_per_game_addons.h
     configuration/configure_per_game_addons.ui

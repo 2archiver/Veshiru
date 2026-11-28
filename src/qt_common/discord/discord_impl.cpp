@@ -489,8 +489,6 @@ std::optional<std::string> FetchFromCovers(const std::string& file_name, bool wa
     client.set_read_timeout(3);
     client.set_follow_location(true);
 
-    Common::Net::ConfigureCaStore(client);
-
     const std::string path = std::string{COVERS_PATH} + file_name;
     const auto res = want_body ? client.Get(path) : client.Head(path);
     if (!res || res->status != 200) {

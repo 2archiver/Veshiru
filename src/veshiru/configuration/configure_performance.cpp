@@ -570,11 +570,7 @@ ConfigureShaders::ConfigureShaders(const Core::System& system_,
         auto* const group = new QGroupBox(title);
         auto* const group_layout = new QVBoxLayout(group);
         for (Settings::BasicSetting* const setting : settings) {
-            ConfigurationShared::Widget* const widget =
-                setting == &values.driver_shader_cache_size
-                    ? builder.BuildWidget(setting, apply_funcs, nullptr,
-                                          ConfigurationShared::RequestType::SpinBox, tr(" GiB"))
-                    : builder.BuildWidget(setting, apply_funcs);
+            ConfigurationShared::Widget* const widget = builder.BuildWidget(setting, apply_funcs);
             if (widget == nullptr) {
                 continue;
             }
@@ -591,9 +587,8 @@ ConfigureShaders::ConfigureShaders(const Core::System& system_,
         layout->addWidget(group);
     };
 
-    add_group(tr("Compilation"), {&values.use_asynchronous_shaders, &values.use_mesh_shaders});
-    add_group(tr("Caches"), {&values.use_disk_shader_cache, &values.use_vulkan_driver_pipeline_cache,
-                             &values.driver_shader_cache_size});
+    add_group(tr("Compilation"), {&values.use_asynchronous_shaders});
+    add_group(tr("Caches"), {&values.use_disk_shader_cache, &values.use_vulkan_driver_pipeline_cache});
     layout->addStretch(1);
 }
 
@@ -601,9 +596,8 @@ ConfigureShaders::~ConfigureShaders() = default;
 
 bool ConfigureShaders::IsShaderSetting(u32 id) {
     const auto& v = Settings::values;
-    return id == v.use_asynchronous_shaders.Id() || id == v.use_mesh_shaders.Id() ||
-           id == v.use_disk_shader_cache.Id() || id == v.use_vulkan_driver_pipeline_cache.Id() ||
-           id == v.private_driver_shader_cache.Id() || id == v.driver_shader_cache_size.Id();
+    return id == v.use_asynchronous_shaders.Id() || id == v.use_disk_shader_cache.Id() ||
+           id == v.use_vulkan_driver_pipeline_cache.Id();
 }
 
 void ConfigureShaders::ApplyConfiguration() {
