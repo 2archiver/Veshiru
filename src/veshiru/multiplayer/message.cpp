@@ -8,6 +8,10 @@
 #include <functional>
 #include <string>
 
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QString>
 #include "veshiru/multiplayer/message.h"
 
 namespace NetworkMessage {
