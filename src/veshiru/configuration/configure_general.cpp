@@ -77,7 +77,7 @@ void ConfigureGeneral::Setup(const ConfigurationShared::Builder& builder) {
         const bool is_update_setting =
             is_update_channel || setting->Id() == UISettings::values.check_for_updates.Id();
 #ifdef ENABLE_UPDATE_CHECKER
-        if (is_update_channel && !UpdateChecker::BuildChannel()) {
+        if (is_update_channel && UpdateChecker::BuildChannel().empty()) {
             continue;
         }
 #else

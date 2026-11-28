@@ -4235,7 +4235,7 @@ void MainWindow::OpenConfigureDialog(bool select_profiles) {
     // asked for.
     const auto update_channel = UISettings::values.update_channel.GetValue();
     if (update_channel != old_update_channel && update_channel != Settings::UpdateChannel::Unset &&
-        UpdateChecker::BuildChannel()) {
+        !UpdateChecker::BuildChannel().empty()) {
         CheckForUpdates(true);
     }
 #endif
